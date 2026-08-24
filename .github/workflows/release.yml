@@ -137,10 +137,9 @@ jobs:
       # 版本号写入 Android 工程（与 tag 同步）
       - name: 构建通用 APK（含 arm64/armv7/x86/x86_64）
         working-directory: desktop
-        env:
-          NDK_HOME: ${{ ANDROID_HOME }}/ndk-bundle
         run: |
           sudo apt-get update && sudo apt-get install -y gradle
+          export NDK_HOME="$ANDROID_HOME/ndk-bundle"
           cargo tauri android build --apk --output ./apk-out
 
       - name: 重命名产物
