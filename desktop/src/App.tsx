@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
 import { MainView } from './ui/MainView';
+import { MobileView } from './ui/MobileView';
 import { ApiError, SyncClient } from './lib/api';
 import { syncVault, pushOnly, pullOnly, type FileIO, type SyncReport } from './lib/sync';
 import { tauriIO, opfsIO } from './lib/fs-adapters';
@@ -15,6 +16,18 @@ import {
 } from './lib/store';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
+/** 移动端判定：窄屏或触屏设备（UA 粗判），命中即用 MobileView 单栏布局 */
+function useIsMobile(): boolean {
+  const [m, setM] = useState(() => window.matchMedia('(max-width: 768px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const fn = () => setM(mq.matches);
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
+  return m;
+}
 
 function errText(e: unknown): string {
   if (e instanceof ApiError) return `${e.code}: ${e.message}`;
@@ -209,6 +222,16 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('ivnote.theme', theme);
   }, [theme]);
+
+  // 移动端：App 回到前台时强制拉取一次（iOS/Android 后台收不到 WS 推送）
+  useEffect(() => {
+    if (!client) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void doSync();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [client, doSync]);
 
   // ---------- 文件操作 ----------
 
@@ -427,6 +450,52 @@ export default function App() {
   }
 
   const vaultList = Object.values(state.vaults);
+  const isMobile = useIsMobile();
+
+  const vaultSelectorEl = (value: number | '', onChange: (id: number) => void) => (
+    <select
+      value={value}
+      onChange={(e) => {
+        if (e.target.value) onChange(Number(e.target.value));
+      }}
+    >
+      {value === '' && <option value="">选择一个笔记库…</option>}
+      {vaultList.map((v) => (
+        <option key={v.id} value={v.id}>
+          {v.name}
+        </option>
+      ))}
+    </select>
+  );
+
+  if (isMobile && vault) {
+    return (
+      <div className="app">
+        <MobileView
+          vault={vault}
+          files={files}
+          currentPath={currentPath}
+          doc={doc}
+          syncing={syncing}
+          lastReport={lastReport}
+          vaultSelector={vaultSelectorEl(vaultId ?? '', (id) => {
+            setVaultId(id);
+            setCurrentPath(null);
+            setDoc(null);
+          })}
+          onSelect={(p) => void openFile(p)}
+          onEdit={onEdit}
+          onCreateNote={() => void onCreateNote('')}
+          onDeleteFile={(p) => void onDeleteFile(p)}
+          onSync={() => void doSync()}
+          onCreateVault={createVault}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          onLogout={onLogout}
+        />
+      </div>
+    );
+  }
 
   if (!vault) {
     return (

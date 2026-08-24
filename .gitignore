@@ -19,3 +19,6 @@ data/
 .DS_Store
 Thumbs.db
 desktop/tsconfig.tsbuildinfo
+desktop/src-tauri/gen/android/
+desktop/src-tauri/gen/apple/
+desktop/apk-out/

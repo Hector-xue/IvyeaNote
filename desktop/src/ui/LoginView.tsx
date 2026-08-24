@@ -32,6 +32,10 @@ export function LoginView({ onLogin, onShowGuide }: Props) {
   const [notice, setNotice] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
+  /** 移动端：无法访问电脑桌面的 txt → 支持直接粘贴账号文件内容 */
+  const [pasteMode, setPasteMode] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -83,6 +87,41 @@ export function LoginView({ onLogin, onShowGuide }: Props) {
         <button type="button" className="btn ghost import-btn" onClick={() => fileRef.current?.click()}>
           📄 导入账号文件（桌面上的 IvyeaNote-账号.txt）
         </button>
+        <button type="button" className="link paste-toggle" onClick={() => setPasteMode((v) => !v)}>
+          手机上？点此粘贴账号内容
+        </button>
+        {pasteMode && (
+          <>
+            <textarea
+              className="paste-box"
+              rows={5}
+              placeholder={'把电脑桌面「IvyeaNote-账号.txt」的内容整段粘贴到这里\n（微信/QQ 发给自己即可传输）'}
+              value={pasteText}
+              onChange={(e) => setPasteText(e.target.value)}
+            />
+            <button
+              type="button"
+              className="btn ghost import-btn"
+              onClick={() => {
+                const acc = parseAccountText(pasteText);
+                if (!acc.serverUrl && !acc.email && !acc.password) {
+                  setError('没认出粘贴的内容，请粘贴完整的账号文件文本');
+                  return;
+                }
+                if (acc.serverUrl) {
+                  setServerUrl(acc.serverUrl);
+                  localStorage.setItem('ivnote.server', acc.serverUrl);
+                }
+                if (acc.email) setEmail(acc.email);
+                if (acc.password) setPassword(acc.password);
+                setError('');
+                setNotice('已从粘贴内容填好，检查无误后点「登录」');
+              }}
+            >
+              解析并填充
+            </button>
+          </>
+        )}
         <input
           ref={fileRef}
           type="file"

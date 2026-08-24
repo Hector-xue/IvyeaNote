@@ -5,6 +5,10 @@ description = "Ivyea Note 桌面端：本地 Markdown · 多端同步"
 authors = ["ivyea"]
 edition = "2021"
 
+[lib]
+name = "ivyea_note_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

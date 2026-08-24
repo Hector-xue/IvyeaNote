@@ -560,3 +560,166 @@ button {
 .guide-faq b {
   color: var(--text);
 }
+
+/* ---------- 移动端（MobileView）：触屏单栏布局 ---------- */
+.m-app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+}
+.m-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 8;
+}
+.m-drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(78vw, 300px);
+  background: var(--panel, #fff);
+  border-right: 1px solid var(--border, #e5e5e5);
+  transform: translateX(-100%);
+  transition: transform 0.22s ease;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  gap: 8px;
+}
+.drawer-open .m-drawer { transform: translateX(0); }
+.drawer-open .m-mask { opacity: 1; pointer-events: auto; }
+
+.m-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  font-size: 15px;
+  background: transparent;
+  color: inherit;
+}
+.m-file-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.m-file-list .file {
+  padding: 10px 8px;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 6px;
+}
+.m-file-list .file.active { background: color-mix(in srgb, var(--accent, #4a7dff) 14%, transparent); }
+.file-del {
+  border: none;
+  background: none;
+  color: #c33;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+
+/* 主区 */
+.m-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.m-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(6px + env(safe-area-inset-top)) 10px 6px;
+  border-bottom: 1px solid var(--border, #e5e5e5);
+}
+.m-topbar .icon-btn { font-size: 20px; }
+.m-title {
+  flex: 1;
+  font-size: 14.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+}
+.icon-btn.m-sync { font-size: 18px; }
+.icon-btn.spin { animation: m-spin 1s linear infinite; }
+@keyframes m-spin { to { transform: rotate(360deg); } }
+
+.m-editor {
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 14px;
+  font: 16px/1.65 ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  background: transparent;
+  color: inherit;
+}
+.m-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted, #888);
+}
+.m-error {
+  padding: 6px 12px;
+  background: color-mix(in srgb, #d33 12%, transparent);
+  color: #c22;
+  font-size: 13px;
+}
+.m-toast {
+  position: absolute;
+  bottom: calc(18px + env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 30, 30, 0.85);
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+}
+
+/* 深浅色变量兜底（移动 WebView 可能没有桌面定义） */
+:root {
+  --panel: #fff;
+  --border: #e8e8e8;
+  --muted: #888;
+}
+[data-theme='dark'] {
+  --panel: #1e1f22;
+  --border: #34363b;
+  --muted: #999;
+}
+.paste-toggle { display: block; margin: 0 auto 10px; font-size: 13px; }
+.paste-box {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  font-size: 13.5px;
+  margin-bottom: 10px;
+  background: transparent;
+  color: inherit;
+  resize: vertical;
+}

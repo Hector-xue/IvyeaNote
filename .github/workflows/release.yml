@@ -99,3 +99,61 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: IvyeaNote-deploy.zip
+
+  # Android APK：Tauri 2 Mobile 构建（aarch64 真机为主 + 模拟器包），挂到同一 Release
+  android-apk:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 稳定工具链（Android 目标）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: 安装 Java 17 + Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 固定 Node 20 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 前端构建
+        working-directory: desktop
+        run: npm install --no-audit --no-fund && npm run build
+
+      - name: 安装 tauri-cli 并初始化 Android 工程
+        working-directory: desktop
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri android init
+
+      # 版本号写入 Android 工程（与 tag 同步）
+      - name: 构建通用 APK（含 arm64/armv7/x86/x86_64）
+        working-directory: desktop
+        env:
+          NDK_HOME: ${{ ANDROID_HOME }}/ndk-bundle
+        run: |
+          sudo apt-get update && sudo apt-get install -y gradle
+          cargo tauri android build --apk --output ./apk-out
+
+      - name: 重命名产物
+        working-directory: desktop/apk-out
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          for f in *.apk; do
+            abi=$(echo "$f" | grep -oE 'arm64|armv7|x86_64|i686|universal' || echo universal)
+            mv "$f" "Ivyea.Note_${VERSION}_${abi}.apk"
+          done
+          ls -la
+
+      - name: 上传 APK 到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/apk-out/*.apk
