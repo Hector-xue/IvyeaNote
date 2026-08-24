@@ -1,0 +1,64 @@
+# Ivyea Note 桌面端自动打包：push 标签 v* 时，三平台并行构建并挂到 GitHub Release
+# 前提：本目录推送到 GitHub 仓库（Actions 默认开启）。产物：dmg / msi / deb / AppImage
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+# 允许 GITHUB_TOKEN 创建 Release 并上传安装包（新仓库默认只读）
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --target aarch64-apple-darwin
+          - os: macos-latest
+            args: --target x86_64-apple-darwin
+          - os: ubuntu-22.04
+            args: ''
+          - os: windows-latest
+            args: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 稳定工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Linux 编译依赖（webkit2gtk 等）
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: 固定 Node 20 LTS（避免 runner 默认 Node 24 触发 npm bug）
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 前端构建（桌面模式）
+        working-directory: desktop
+        # 用 npm install 而非 npm ci：lockfile 在 Linux 上生成，缺少 mac/win 的
+        # rolldown 原生绑定(optional deps)，各平台需自行补齐
+        run: npm install --no-audit --no-fund && npm run build
+
+      - name: Tauri 打包并发布 Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Ivyea Note ${{ github.ref_name }}'
+          releaseBody: '桌面安装包：Windows 用 .msi/.exe，macOS 用 .dmg（Apple Silicon 选 aarch64），Linux 用 .deb/.AppImage'
+          releaseDraft: false
+          prerelease: false

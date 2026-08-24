@@ -1,0 +1,10 @@
+# 缩小 docker 构建上下文：依赖目录与无关产物不进上下文
+desktop/node_modules
+desktop/dist
+mobile/
+docs/
+scripts/
+shared/
+reports/
+*.md
+.git

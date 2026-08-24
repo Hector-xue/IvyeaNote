@@ -1,0 +1,39 @@
+# Ivyea Note 自托管部署编排
+# 架构：宿主 nginx 终结 TLS(443) → 反代 127.0.0.1:8080 → app 容器 → postgres 容器
+# 管理员账号在 .env 中配置：IVNOTE_ADMIN_EMAIL / IVNOTE_ADMIN_PASSWORD
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # 只暴露给宿主 nginx，不直接对公网
+    environment:
+      IVNOTE_DATABASE_URL: postgres://ivnote:${POSTGRES_PASSWORD:?请在 .env 配置}@postgres:5432/ivnote?sslmode=disable
+      IVNOTE_SECRET: ${IVNOTE_SECRET:?请在 .env 配置}
+      IVNOTE_ADMIN_EMAIL: ${IVNOTE_ADMIN_EMAIL:-admin@example.com}
+      IVNOTE_ADMIN_PASSWORD: ${IVNOTE_ADMIN_PASSWORD:-}
+      IVNOTE_OPEN_REGISTRATION: ${IVNOTE_OPEN_REGISTRATION:-false}
+      IVNOTE_LISTEN: ":8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ivnote
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 配置}
+      POSTGRES_DB: ivnote
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ivnote"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

@@ -1,0 +1,471 @@
+/* ============ 主题变量：浅色（默认） / 深色 ============ */
+:root {
+  color-scheme: light;
+  --bg: #f6f8f4;
+  --panel: #ffffff;
+  --panel-2: #fbfcfa;
+  --border: #e4ebe3;
+  --text: #24312a;
+  --muted: #7d8a80;
+  --accent: #5ba832;
+  --accent-weak: #eef6e8;
+  --accent-text: #ffffff;
+  --ok: #46b04a;
+  --danger: #d4574e;
+  --shadow: 0 6px 24px rgba(36, 49, 42, 0.06);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #14181a;
+  --panel: #1c2124;
+  --panel-2: #22282b;
+  --border: #2c3438;
+  --text: #e2e8e4;
+  --muted: #8a978f;
+  --accent: #7cc95a;
+  --accent-weak: #26331f;
+  --accent-text: #10230a;
+  --ok: #58c05c;
+  --danger: #e06c62;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+  font-size: 14px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ============ 整体布局：侧栏与编辑区一体，无独立顶栏 ============ */
+.app {
+  display: flex;
+  height: 100%;
+}
+
+/* ============ 侧栏 ============ */
+.sidebar {
+  width: 264px;
+  min-width: 264px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 8px;
+}
+
+.brand-logo {
+  width: 22px;
+  height: 22px;
+}
+
+.brand-name {
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.3px;
+  flex: 1;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 14px;
+}
+.icon-btn:hover {
+  background: var(--accent-weak);
+  color: var(--text);
+}
+
+.vault-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.vault-row select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.sync-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.btn {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 9px;
+  padding: 7px 14px;
+  font-size: 13px;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.action-row {
+  display: flex;
+}
+
+.syncing-hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bind {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 9px;
+  padding: 8px;
+  font-size: 13px;
+}
+.bind:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.bound-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 6px 8px;
+}
+.bound-path span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.bound-path button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+.bound-path button:hover {
+  color: var(--danger);
+}
+
+/* 文件列表 */
+.file-list {
+  flex: 1;
+  overflow-y: auto;
+  margin: 2px -4px;
+  padding: 0 4px;
+}
+
+.dir-group {
+  margin-bottom: 4px;
+}
+
+.dir-label {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 5px 6px;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 7px;
+}
+.dir-label:hover {
+  background: var(--panel-2);
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.file:hover {
+  background: var(--panel-2);
+}
+.file.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-actions {
+  display: none;
+  gap: 2px;
+}
+.file:hover .file-actions {
+  display: inline-flex;
+}
+.file-actions button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.file-actions button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+  padding: 14px 8px;
+  text-align: center;
+}
+
+.sidebar-foot {
+  display: flex;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.sidebar-foot button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 0;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.sidebar-foot button:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* ============ 编辑区 ============ */
+.editor-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px 10px;
+}
+
+.crumb {
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.report.has-error {
+  color: var(--danger);
+}
+
+.editor-host {
+  flex: 1;
+  overflow: auto;
+  padding: 0 8px 16px;
+}
+
+.editor-host .cm-editor {
+  min-height: 100%;
+  background: transparent;
+}
+.editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+.editor-host .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+  line-height: 1.65;
+}
+
+/* 浅色主题下编辑器文字颜色跟随全局变量 */
+[data-theme='light'] .editor-host .cm-content {
+  color: var(--text);
+  caret-color: var(--accent);
+}
+[data-theme='light'] .editor-host .cm-gutters {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+}
+[data-theme='light'] .editor-host .cm-activeLineGutter,
+[data-theme='light'] .editor-host .cm-activeLine {
+  background: var(--accent-weak);
+}
+
+/* ============ 登录页 ============ */
+.login-wrap {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 36px 36px 28px;
+  text-align: center;
+}
+
+.login-logo {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 10px;
+}
+
+.login-card h1 {
+  font-size: 22px;
+  font-weight: 600;
+}
+.login-card h1 span {
+  color: var(--accent);
+}
+
+.login-card .sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0 24px;
+}
+
+.login-card label {
+  display: block;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.login-card input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 14px;
+}
+.login-card input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.login-card .error {
+  color: var(--danger);
+  font-size: 12.5px;
+  text-align: left;
+  margin: -4px 0 10px;
+}
+
+.login-card button[type='submit'] {
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 14.5px;
+  font-weight: 500;
+  margin-top: 4px;
+}
+.login-card button[type='submit']:disabled {
+  opacity: 0.6;
+}
+
+.login-card .hint {
+  margin-top: 18px;
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.7;
+}
