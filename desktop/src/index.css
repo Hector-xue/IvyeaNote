@@ -469,3 +469,94 @@ button {
   color: var(--muted);
   line-height: 1.7;
 }
+
+/* ---------- 登录页：导入账号文件 / 提示条 / 文字按钮 ---------- */
+.import-btn {
+  width: 100%;
+  margin-bottom: 14px;
+}
+.login-card .notice {
+  color: var(--ok);
+  font-size: 12.5px;
+  text-align: left;
+  margin: -4px 0 10px;
+}
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+/* ---------- 部署引导页 ---------- */
+.login-card.guide {
+  max-width: 560px;
+  text-align: left;
+}
+.login-card.guide h1 {
+  font-size: 20px;
+  text-align: center;
+}
+.login-card.guide h1 i {
+  font-style: normal;
+  color: var(--accent);
+}
+.tab-row {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+.tab-row .tab {
+  flex: 1;
+  padding: 8px 6px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.tab-row .tab.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-weak);
+  font-weight: 600;
+}
+.steps {
+  margin: 12px 0 6px;
+  padding-left: 20px;
+  display: grid;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.75;
+}
+.steps b {
+  color: var(--text);
+}
+.steps code,
+.guide-faq code {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.guide-faq {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.guide-faq p + p {
+  margin-top: 8px;
+}
+.guide-faq b {
+  color: var(--text);
+}

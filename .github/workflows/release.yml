@@ -62,3 +62,40 @@ jobs:
           releaseBody: '桌面安装包：Windows 用 .msi/.exe，macOS 用 .dmg（Apple Silicon 选 aarch64），Linux 用 .deb/.AppImage'
           releaseDraft: false
           prerelease: false
+
+  # 服务端 Docker 镜像：推 ghcr.io，供用户「拉官方镜像」部署（无需本地构建源码）
+  docker-image:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送服务端镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/hector-xue/ivyeanote/ivnote-server:latest
+            ghcr.io/hector-xue/ivyeanote/ivnote-server:${{ github.ref_name }}
+
+      # 部署包：只含 deploy 目录（不含源码），给「装在自己电脑」的用户用
+      - name: 打包部署包
+        run: |
+          cd deploy
+          zip -r ../IvyeaNote-deploy.zip . -x "./.env" -x "./IvyeaNote-账号.txt"
+
+      - name: 上传部署包到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: IvyeaNote-deploy.zip

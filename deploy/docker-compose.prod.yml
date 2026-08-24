@@ -1,0 +1,37 @@
+# Ivyea Note 自托管部署编排（使用官方预构建镜像，无需本地构建源码）
+# 适合场景：用户手里只有安装包/本目录文件，没有完整源码仓库。
+# 管理员账号在 .env 中配置：IVNOTE_ADMIN_EMAIL / IVNOTE_ADMIN_PASSWORD
+services:
+  app:
+    image: ghcr.io/hector-xue/ivyeanote/ivnote-server:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # 本机部署直接访问 http://127.0.0.1:8080；VPS 部署由宿主 nginx 反代
+    environment:
+      IVNOTE_DATABASE_URL: postgres://ivnote:${POSTGRES_PASSWORD:?请在 .env 配置}@postgres:5432/ivnote?sslmode=disable
+      IVNOTE_SECRET: ${IVNOTE_SECRET:?请在 .env 配置}
+      IVNOTE_ADMIN_EMAIL: ${IVNOTE_ADMIN_EMAIL:-admin@example.com}
+      IVNOTE_ADMIN_PASSWORD: ${IVNOTE_ADMIN_PASSWORD:-}
+      IVNOTE_OPEN_REGISTRATION: ${IVNOTE_OPEN_REGISTRATION:-false}
+      IVNOTE_LISTEN: ":8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ivnote
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 配置}
+      POSTGRES_DB: ivnote
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ivnote"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

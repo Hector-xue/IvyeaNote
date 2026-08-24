@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
+import { SetupGuide } from './ui/SetupGuide';
 import { MainView } from './ui/MainView';
 import { ApiError, SyncClient } from './lib/api';
 import { syncVault, pushOnly, pullOnly, type FileIO, type SyncReport } from './lib/sync';
@@ -29,6 +30,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [lastReport, setLastReport] = useState<SyncReport | null>(null);
   const [importing, setImporting] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(
     () => (localStorage.getItem('ivnote.theme') as 'light' | 'dark') || 'light'
   );
@@ -417,7 +419,11 @@ export default function App() {
   // ---------- 渲染 ----------
 
   if (!state.account || !client) {
-    return <LoginView onLogin={onLogin} />;
+    return showGuide ? (
+      <SetupGuide onBack={() => setShowGuide(false)} />
+    ) : (
+      <LoginView onLogin={onLogin} onShowGuide={() => setShowGuide(true)} />
+    );
   }
 
   const vaultList = Object.values(state.vaults);
