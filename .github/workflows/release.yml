@@ -139,7 +139,7 @@ jobs:
         working-directory: desktop
         run: |
           sudo apt-get update && sudo apt-get install -y gradle
-          export NDK_HOME="$ANDROID_HOME/ndk-bundle"
+          unset NDK_HOME
           cargo tauri android build --apk --split-per-abi
           mkdir -p apk-out
           find src-tauri/gen/android -name "*.apk" -exec cp {} apk-out/ \;
