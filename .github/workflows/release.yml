@@ -140,7 +140,10 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y gradle
           export NDK_HOME="$ANDROID_HOME/ndk-bundle"
-          cargo tauri android build --apk --output ./apk-out
+          cargo tauri android build --apk --split-per-abi
+          mkdir -p apk-out
+          find src-tauri/gen/android -name "*.apk" -exec cp {} apk-out/ \;
+          ls -la apk-out
 
       - name: 重命名产物
         working-directory: desktop/apk-out
