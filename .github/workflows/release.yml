@@ -149,20 +149,41 @@ jobs:
       - name: 签名 APK（自签 keystore）
         working-directory: desktop/apk-out
         run: |
+          set -euo pipefail
           KS="/tmp/ivnote-release.keystore"
+          KP="ivnote-android"
           if [ ! -f "$KS" ]; then
             keytool -genkeypair -v -keystore "$KS" -alias ivnote \
               -keyalg RSA -keysize 2048 -validity 10950 \
-              -storepass ivnote-android -keypass ivnote-android \
+              -storepass "$KP" -keypass "$KP" \
               -dname "CN=Ivyea Note, OU=Ivyea, O=Ivyea, C=CN"
           fi
-          ZIPS="$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort | tail -1)"
-          APKS="$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort | tail -1)"
+          # 定位 build-tools：按 ANDROID_HOME → ANDROID_SDK_ROOT → 默认 SDK 路径解析，
+          # 取 zipalign 所在目录的最新版本；全落空则 sdkmanager 兜底安装 34.0.0。
+          # （旧写法 `ZIPS=$(ls ...*/zipalign)` 在 glob 未命中时 ls 返回 exit 2，
+          #   直接把整个步骤打挂且无任何可读报错——v0.3.1 run#18 的失败即此。）
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          BT=""
+          hit="$(ls -d "$SDK_ROOT"/build-tools/*/zipalign 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$hit" ]; then BT="$(dirname "$hit")"; fi
+          if [ -z "$BT" ]; then
+            echo "::warning::未找到已装 build-tools，尝试 sdkmanager 安装 34.0.0"
+            # yes|sdkmanager 在 pipefail 下可能因 yes 收到 SIGPIPE(141) 误判失败，
+            # 这里只告警不中止，真正放行与否由下面的可执行位硬校验决定
+            (yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "build-tools;34.0.0" > /dev/null) \
+              || echo "::warning::sdkmanager 非零退出，继续校验工具是否已可用"
+            BT="$SDK_ROOT/build-tools/34.0.0"
+          fi
+          if [ ! -x "$BT/zipalign" ] || [ ! -x "$BT/apksigner" ]; then
+            echo "::error::build-tools 缺少 zipalign/apksigner：$BT"
+            exit 1
+          fi
+          echo "使用 build-tools: $BT"
           for f in *.apk; do
             [ -e "$f" ] || continue
-            "$ZIPS" -f -p "$f" "$f.aligned"
-            "$APKS" sign --ks "$KS" --ks-key-alias ivnote \
-              --ks-pass pass:ivnote-android --key-pass pass:ivnote-android \
+            "$BT/zipalign" -f -p "$f" "$f.aligned"
+            "$BT/apksigner" sign --ks "$KS" --ks-key-alias ivnote \
+              --ks-pass "pass:$KP" --key-pass "pass:$KP" \
               --out "$f.signed" "$f.aligned"
             mv "$f.signed" "$f"
             rm -f "$f.aligned"
