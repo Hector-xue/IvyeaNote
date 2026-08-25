@@ -50,6 +50,11 @@ jobs:
         # rolldown 原生绑定(optional deps)，各平台需自行补齐
         run: npm install --no-audit --no-fund && npm run build
 
+      # v0.3.3 质量门禁：任一不过不出包（与 ci.yml 同一套检查，防止坏代码流进安装包）
+      - name: 质量门禁（lint + 类型 + 单元测试）
+        working-directory: desktop
+        run: npx oxlint src && npx tsc -b && npx vitest run
+
       - name: Tauri 打包并发布 Release
         uses: tauri-apps/tauri-action@v0
         env:

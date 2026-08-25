@@ -30,6 +30,8 @@ interface Props {
   /** 是否已登录（未登录=本地模式，显示「登录同步」而非「退出登录」） */
   hasAccount: boolean;
   onOpenLogin(): void;
+  /** 云同步不可用（未登录）：同步按钮显式禁用并提示（v0.3.3 本地模式解门控） */
+  syncDisabled?: boolean;
 }
 
 export function MobileView(props: Props) {
@@ -68,6 +70,13 @@ export function MobileView(props: Props) {
         </div>
 
         <div className="vault-row">{props.vaultSelector}</div>
+        {props.syncDisabled && (
+          <div className="login-hint">
+            本地模式：笔记只存在这台设备上，
+            <button onClick={props.onOpenLogin}>登录同步</button>
+            后可多端同步。
+          </div>
+        )}
 
         <input
           className="m-search"
@@ -127,7 +136,8 @@ export function MobileView(props: Props) {
           <button
             className={`icon-btn m-sync ${props.syncing ? 'spin' : ''}`}
             onClick={props.onSync}
-            disabled={props.syncing}
+            disabled={props.syncing || props.syncDisabled}
+            title={props.syncDisabled ? '云同步需要登录后可用' : '同步'}
             aria-label="同步"
           >
             ↻

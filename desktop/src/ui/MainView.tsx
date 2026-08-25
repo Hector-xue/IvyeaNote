@@ -64,6 +64,11 @@ interface Props {
   /** 笔记库选择器（由外层注入，保持受控状态） */
   vaultSelector: React.ReactNode;
   onCreateVault(): void;
+  /**
+   * 云同步不可用（未登录）：上传/拉取按钮显式禁用并提示，
+   * 替代旧的静默 no-op（v0.3.3：本地模式解门控）。
+   */
+  syncDisabled?: boolean;
 }
 
 function cmExtensions(onEdit: (text: string) => void, dark: boolean) {
@@ -142,14 +147,31 @@ export function MainView(props: Props) {
         </div>
 
         <div className="sync-row">
-          <button className="btn primary" onClick={props.onUpload} disabled={props.syncing}>
+          <button
+            className="btn primary"
+            onClick={props.onUpload}
+            disabled={props.syncing || props.syncDisabled}
+            title={props.syncDisabled ? '云同步需要登录后可用' : '把本地修改推到服务器'}
+          >
             ↑ 上传
           </button>
-          <button className="btn" onClick={props.onDownload} disabled={props.syncing}>
+          <button
+            className="btn"
+            onClick={props.onDownload}
+            disabled={props.syncing || props.syncDisabled}
+            title={props.syncDisabled ? '云同步需要登录后可用' : '把服务器上的变更拉到本机'}
+          >
             ↓ 拉取
           </button>
           {props.syncing && <span className="syncing-hint">同步中…</span>}
         </div>
+        {props.syncDisabled && (
+          <div className="login-hint">
+            本地模式：笔记只存在这台设备上。
+            <button onClick={props.onOpenLogin}>登录同步</button>
+            后可多端同步。
+          </div>
+        )}
 
         <div className="action-row">
           <button className="btn ghost" onClick={props.onImportObsidian}>

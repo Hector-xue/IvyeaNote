@@ -8,7 +8,8 @@
 ivyea note/
 ├── README.md            # 本文件
 ├── docs/
-│   └── IvyeaNote-技术方案.md   # 总体方案（需求/选型/架构/同步协议/API/部署/路线图）
+│   ├── IvyeaNote-技术方案.md   # 总体方案（需求/选型/架构/同步协议/API/部署/路线图）
+│   └── IvyeaNote-优化方案.md   # v0.3.3 起的分阶段优化计划（现状诊断/目标架构/里程碑）
 ├── server/              # 后端：Go 同步服务（Postgres + 对象存储）
 ├── desktop/             # 桌面端：Tauri 2 + React + CodeMirror 6
 ├── mobile/              # 移动端：Flutter（iOS / Android）
@@ -37,6 +38,7 @@ ivyea note/
 - [ ] M2 收尾：在有 GUI 的机器上 `npm run tauri dev/build` 出桌面安装包（本服务器无图形栈；Rust 编译可用上面的容器环境）
 - [x] M3 移动端 MVP（2026-08-25）：Tauri 2 Android 构建，Release v0.3.0 起 CI 自动打包 APK 并自签名（可直接安装）
 - [x] v0.3.1 免登录本地模式（2026-08-25）：启动直达主界面（移动+桌面统一），无需账号即可新建/编辑笔记；登录改为按需唤起，登录后本地笔记自动迁移/合并到云端；退出登录保留本地数据
+- [x] v0.3.3 P0 急救（2026-08-25，阶段 0）：修复 Windows exe「除文本输入外按钮全点不动」的五个根因——①window.prompt/confirm 全部换成应用内 Dialog（WebView2 不支持 prompt 静默返回 null）；②免登录本地模式文件列表/按钮不再被云端 client 门控，未登录时同步按钮显式禁用并提示；③Rules of Hooks 违例修复（登录页开关不再崩溃白屏）；④全局 ErrorBoundary（渲染崩溃显示友好错误页，不再白屏）；⑤编辑防抖改 useRef；新增 8 个回归测试（vitest 34/34），CI 新增质量门禁（oxlint + tsc + vitest + vite build，release 流水线同步接入，任一不过不出包）。完整计划见 `docs/IvyeaNote-优化方案.md`
 
 服务端本地运行：
 

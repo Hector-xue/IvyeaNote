@@ -1,0 +1,37 @@
+# Ivyea Note 质量门禁：push / PR 时跑 lint + 类型检查 + 单元测试，任一不过即红。
+# v0.3.3 起：阶段 0（P0 急救）防回归基建 —— hooks 违例、prompt 复活、门控复发都会被挡住。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 固定 Node 20 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      - name: Lint（oxlint：含 react-hooks 规则，rules-of-hooks 违例即 error）
+        run: npx oxlint src
+
+      - name: 类型检查（tsc -b）
+        run: npx tsc -b
+
+      - name: 单元测试（vitest）
+        run: npx vitest run
+
+      - name: 前端构建（vite build）
+        run: npx vite build

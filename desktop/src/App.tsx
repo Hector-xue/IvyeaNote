@@ -3,6 +3,8 @@ import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
 import { MainView } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
+import { useDialog } from './ui/Dialog';
+import { useToast } from './ui/Toast';
 import { ApiError, SyncClient } from './lib/api';
 import { syncVault, pushOnly, pullOnly, type FileIO, type SyncReport } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
@@ -61,6 +63,15 @@ export default function App() {
   const stateRef = useRef(state);
   stateRef.current = state;
   const syncingRef = useRef(false);
+
+  // ---- v0.3.3：全部 hooks 必须在任何条件 return 之前调用（修复 Rules of Hooks 违例）----
+  const isMobile = useIsMobile();
+  /** 应用内对话框：替代 window.prompt/confirm（WebView2 不支持 prompt，静默返回 null） */
+  const { prompt, confirm, dialogEl } = useDialog();
+  /** 轻提示：替代 window.alert（安卓 WebView 里 alert 阻塞且割裂） */
+  const { toast, toastEl } = useToast();
+  /** 编辑防抖计时器：替代旧的「函数对象挂属性」写法（重构即坏、类型不安全） */
+  const saveTimer = useRef<number | undefined>(undefined);
 
   const persist = useCallback((next: PersistState) => {
     stateRef.current = next;
@@ -267,10 +278,12 @@ export default function App() {
 
   // ---------- 登录后初始化 ----------
 
+  // v0.3.3：文件列表只依赖 vault，不再被 client 门控 ——
+  // 免登录本地模式下（client 为 null）也能立刻列出本地库文件。
   useEffect(() => {
-    if (!client || !vault) return;
+    if (!vault) return;
     void refreshFiles();
-  }, [client, vault?.id, refreshFiles]);
+  }, [vault, refreshFiles]);
 
   // 主题切换：html data-theme 属性驱动 CSS 变量
   useEffect(() => {
@@ -293,6 +306,9 @@ export default function App() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [client, doSync]);
 
+  // 卸载时清理编辑防抖计时器
+  useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+
   // ---------- 文件操作 ----------
 
   const openFile = useCallback(
@@ -303,10 +319,10 @@ export default function App() {
         setCurrentPath(path);
         setDoc(text);
       } catch (e) {
-        alert(`打开失败：${errText(e)}`);
+        toast(`打开失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io]
+    [vault, io, toast]
   );
 
   const onEdit = useCallback(
@@ -314,8 +330,8 @@ export default function App() {
       if (!vault || path !== currentPath) return;
       setDoc(text);
       // 防抖写盘；真正的推送发生在下一轮 syncVault 扫描（content !== base）
-      window.clearTimeout((onEdit as unknown as { t?: number }).t);
-      (onEdit as unknown as { t?: number }).t = window.setTimeout(async () => {
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(async () => {
         try {
           await io.write(vault.localPath ?? '', path, text);
           void doSync();
@@ -330,29 +346,43 @@ export default function App() {
   const onCreateNote = useCallback(
     async (folder = '') => {
       if (!vault) return;
-      const name = window.prompt('笔记文件名（可含子文件夹，如 日记/2026-08-24.md）');
+      const relOf = (name: string) =>
+        `${folder ? folder + '/' : ''}${name.trim().replace(/^\/+|\/+$/g, '')}`;
+      // v0.3.3：应用内对话框替代 window.prompt（WebView2 下 prompt 静默返回 null，按钮形同虚设）
+      const name = await prompt({
+        title: '新建笔记',
+        description: '文件名可含子文件夹，如 日记/2026-08-24.md',
+        placeholder: '例：日记/2026-08-24.md',
+        okText: '创建',
+        validate: (v) => {
+          if (!v.trim()) return '请输入文件名';
+          const rel = relOf(v);
+          if (!/\.md$/i.test(rel)) return '文件名必须以 .md 结尾';
+          if (files.includes(rel)) return '同名文件已存在';
+          return null;
+        },
+      });
       if (!name) return;
-      const rel = `${folder ? folder + '/' : ''}${name.trim().replace(/^\/+|\/+$/g, '')}`;
-      if (!/\.md$/i.test(rel)) {
-        alert('文件名必须以 .md 结尾');
-        return;
-      }
-      if (files.includes(rel)) {
-        alert('同名文件已存在');
-        return;
-      }
+      const rel = relOf(name);
       await io.write(vault.localPath ?? '', rel, `# ${rel.split('/').pop()!.replace(/\.md$/i, '')}\n\n`);
       await refreshFiles();
       void openFile(rel);
       void doSync();
     },
-    [vault, files, io, refreshFiles, openFile, doSync]
+    [vault, files, io, refreshFiles, openFile, doSync, prompt]
   );
 
   const onDeleteFile = useCallback(
     async (path: string) => {
       if (!vault) return;
-      if (!window.confirm(`删除 ${path}？（会同步删除到所有设备）`)) return;
+      // v0.3.3：应用内确认框替代 window.confirm（安卓 WebView 行为统一）
+      const ok = await confirm({
+        title: '删除笔记',
+        description: `删除 ${path}？（会同步删除到所有设备）`,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
       try {
         await io.remove(vault.localPath ?? '', path);
         if (currentPath === path) {
@@ -362,10 +392,10 @@ export default function App() {
         await refreshFiles();
         void doSync();
       } catch (e) {
-        alert(`删除失败：${errText(e)}`);
+        toast(`删除失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, refreshFiles, doSync]
+    [vault, io, currentPath, refreshFiles, doSync, confirm, toast]
   );
 
   // ---------- Obsidian 一键导入 ----------
@@ -395,7 +425,7 @@ export default function App() {
         for (const f of out) {
           await io.write(vault.localPath ?? '', f.rel, await readTextFile(f.abs));
         }
-        window.alert(`已从 Obsidian 导入 ${out.length} 个笔记到本地库。\n点「上传」即可同步到服务器。`);
+        toast(`已从 Obsidian 导入 ${out.length} 个笔记到本地库，点「上传」即可同步到服务器`, 'ok');
       } else {
         // 浏览器端：优先用目录选择句柄，保留子目录结构；否则退化为文件夹多选
         type DirHandleLike = {
@@ -443,24 +473,29 @@ export default function App() {
           await io.write(vault.localPath ?? '', e.rel, await e.getText());
           n++;
         }
-        window.alert(`已从 Obsidian 导入 ${n} 个笔记。\n点「上传」即可同步到服务器。`);
+        toast(`已从 Obsidian 导入 ${n} 个笔记，点「上传」即可同步到服务器`, 'ok');
       }
       await refreshFiles();
     } catch (e) {
-      alert(`导入失败：${errText(e)}`);
+      toast(`导入失败：${errText(e)}`, 'error');
     } finally {
       setImporting(false);
     }
-  }, [vault, importing, io, refreshFiles]);
+  }, [vault, importing, io, refreshFiles, toast]);
 
   // ---------- Vault / 文件夹绑定 ----------
 
   const createVault = useCallback(async () => {
     if (!client) {
-      alert('云同步需要登录：请先在侧栏点「登录同步」');
+      toast('云同步需要登录：请先在侧栏点「登录同步」');
       return;
     }
-    const name = window.prompt('新笔记库名称');
+    const name = await prompt({
+      title: '新建笔记库',
+      placeholder: '笔记库名称',
+      okText: '创建',
+      validate: (v) => (v.trim() ? null : '请输入名称'),
+    });
     if (!name) return;
     try {
       const v = await client.createVault(name.trim());
@@ -468,13 +503,13 @@ export default function App() {
       persist({ ...cur, vaults: { ...cur.vaults, [String(v.id)]: newVaultMeta(v.id, v.name) } });
       setVaultId(v.id);
     } catch (e) {
-      alert(`创建失败：${errText(e)}`);
+      toast(`创建失败：${errText(e)}`, 'error');
     }
-  }, [client, persist]);
+  }, [client, persist, prompt, toast]);
 
   const onBindFolder = useCallback(async () => {
     if (!isTauri) {
-      alert('浏览器开发模式下使用内置虚拟存储（OPFS）；绑定真实文件夹请在桌面 App 中进行。');
+      toast('浏览器开发模式下使用内置虚拟存储（OPFS）；绑定真实文件夹请在桌面 App 中进行。');
       return;
     }
     const { open } = await import('@tauri-apps/plugin-dialog');
@@ -484,7 +519,7 @@ export default function App() {
         m.localPath = sel;
       });
     }
-  }, [vault, patchVault]);
+  }, [vault, patchVault, toast]);
 
   const onUnbindFolder = useCallback(() => {
     if (!vault) return;
@@ -507,6 +542,7 @@ export default function App() {
   // ---------- 渲染 ----------
 
   // 登录页只在用户主动唤起且尚未登录时显示；平时无账号也直达主界面（本地模式）
+  // 注意：此处 early return 之前所有 hooks 均已调用完毕（v0.3.3 修复 Rules of Hooks 违例）
   if (!state.account && showLogin) {
     return showGuide ? (
       <SetupGuide onBack={() => setShowGuide(false)} />
@@ -521,7 +557,6 @@ export default function App() {
 
   // 未登录：列表里只展示本地库（云端库要登录后才能用）
   const vaultList = Object.values(state.vaults).filter((v) => state.account || v.id === LOCAL_VAULT_ID);
-  const isMobile = useIsMobile();
 
   const vaultSelectorEl = (value: number | '', onChange: (id: number) => void) => (
     <select
@@ -565,7 +600,10 @@ export default function App() {
           onLogout={onLogout}
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
+          syncDisabled={!state.account}
         />
+        {dialogEl}
+        {toastEl}
       </div>
     );
   }
@@ -595,6 +633,7 @@ export default function App() {
           onLogout={onLogout}
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
+          syncDisabled={!state.account}
           vaultSelector={
             <select
               value=""
@@ -612,6 +651,8 @@ export default function App() {
           }
           onCreateVault={createVault}
         />
+        {dialogEl}
+        {toastEl}
       </div>
     );
   }
@@ -640,6 +681,7 @@ export default function App() {
         onLogout={onLogout}
         hasAccount={!!state.account}
         onOpenLogin={() => setShowLogin(true)}
+        syncDisabled={!state.account}
         vaultSelector={
           <select
             value={activeVaultId ?? ''}
@@ -658,6 +700,8 @@ export default function App() {
         }
         onCreateVault={createVault}
       />
+      {dialogEl}
+      {toastEl}
     </div>
   );
 }
