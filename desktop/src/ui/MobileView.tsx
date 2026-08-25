@@ -1,18 +1,21 @@
 /**
- * 移动端视图：触屏优先的单栏布局。
+ * 移动端视图：触屏优先的单栏布局（v0.3.4 升级）。
  * - 顶栏：抽屉开关 + 当前笔记名 + 同步状态
- * - 抽屉：笔记库切换、搜索框、文件列表、新建/退出
- * - 主区：Markdown 轻编辑（textarea，移动端输入法友好；重度编辑回桌面）
+ * - 抽屉：笔记库切换、搜索、排序、文件列表、新建/退出
+ * - 主区：CodeMirror 编辑器 + 底部格式工具栏（替代裸 textarea）+ 阅读模式
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import logoUrl from '../assets/logo.svg';
 import { buildTree } from './MainView';
+import { MarkdownEditor } from './MarkdownEditor';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
+import type { SortMode } from './MainView';
 
 interface Props {
   vault: VaultMeta;
   files: string[];
+  pdfs: string[];
   currentPath: string | null;
   doc: string | null;
   syncing: boolean;
@@ -32,18 +35,28 @@ interface Props {
   onOpenLogin(): void;
   /** 云同步不可用（未登录）：同步按钮显式禁用并提示（v0.3.3 本地模式解门控） */
   syncDisabled?: boolean;
+  sortMode: SortMode;
+  onSortChange(m: SortMode): void;
+  onOpenPdf(path: string): void;
+  onInsertImage?: () => Promise<string | null>;
+  resolveImage?: (rel: string) => Promise<string | null>;
 }
 
 export function MobileView(props: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const taRef = useRef<HTMLTextAreaElement>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return props.files;
     return props.files.filter((p) => p.toLowerCase().includes(q));
   }, [props.files, query]);
+
+  const filteredPdfs = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return props.pdfs;
+    return props.pdfs.filter((p) => p.toLowerCase().includes(q));
+  }, [props.pdfs, query]);
 
   // 打开笔记后自动收起抽屉
   useEffect(() => {
@@ -86,6 +99,14 @@ export function MobileView(props: Props) {
           onChange={(e) => setQuery(e.target.value)}
         />
 
+        <div className="m-sort-row">
+          <span>排序</span>
+          <select value={props.sortMode} onChange={(e) => props.onSortChange(e.target.value as SortMode)}>
+            <option value="name">按名称</option>
+            <option value="mtime">按修改时间</option>
+          </select>
+        </div>
+
         <div className="m-file-list">
           {[...tree.entries()].map(([dir, nodes]) => (
             <div key={dir || '/'} className="dir-group">
@@ -110,7 +131,17 @@ export function MobileView(props: Props) {
               ))}
             </div>
           ))}
-          {filtered.length === 0 && (
+          {filteredPdfs.length > 0 && (
+            <div className="dir-group">
+              <div className="dir-label pdf-label">📄 PDF</div>
+              {filteredPdfs.map((p) => (
+                <div key={p} className="file pdf-file" onClick={() => props.onOpenPdf(p)}>
+                  <span className="file-name">{p.split('/').pop()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {filtered.length === 0 && filteredPdfs.length === 0 && (
             <div className="empty">{query ? '没有匹配的笔记' : '还没有笔记，点下方 ＋ 新建'}</div>
           )}
         </div>
@@ -155,13 +186,14 @@ export function MobileView(props: Props) {
             </button>
           </div>
         ) : (
-          <textarea
-            ref={taRef}
-            className="m-editor"
-            value={props.doc ?? ''}
-            onChange={(e) => props.onEdit(props.currentPath!, e.target.value)}
-            placeholder="开始书写…"
-            spellCheck={false}
+          <MarkdownEditor
+            mobile
+            doc={props.doc ?? ''}
+            onEdit={props.onEdit}
+            currentPath={props.currentPath}
+            theme={props.theme}
+            onInsertImage={props.onInsertImage}
+            resolveImage={props.resolveImage}
           />
         )}
 

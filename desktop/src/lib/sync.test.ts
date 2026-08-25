@@ -10,6 +10,9 @@ function memIO(files: Map<string, string>): FileIO {
     async list() {
       return [...files.keys()];
     },
+    async listMeta() {
+      return [...files.keys()].map((p) => ({ path: p, mtime: 0, size: files.get(p)!.length }));
+    },
     async read(_vp, rel) {
       const v = files.get(rel);
       if (v === undefined) throw new Error(`not found: ${rel}`);
@@ -17,6 +20,14 @@ function memIO(files: Map<string, string>): FileIO {
     },
     async write(_vp, rel, content) {
       files.set(rel, content);
+    },
+    async readBinary(_vp, rel) {
+      const v = files.get(rel);
+      if (v === undefined) throw new Error(`not found: ${rel}`);
+      return new TextEncoder().encode(v);
+    },
+    async writeBinary(_vp, rel, data) {
+      files.set(rel, new TextDecoder().decode(data));
     },
     async remove(_vp, rel) {
       files.delete(rel);

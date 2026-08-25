@@ -38,6 +38,13 @@ const { memFiles, memIO } = vi.hoisted(() => {
     async list() {
       return [...memFiles.keys()];
     },
+    async listMeta() {
+      return [...memFiles.keys()].map((p) => ({
+        path: p,
+        mtime: 0,
+        size: memFiles.get(p)!.length,
+      }));
+    },
     async read(_vp, rel) {
       const v = memFiles.get(rel);
       if (v === undefined) throw new Error(`not found: ${rel}`);
@@ -45,6 +52,14 @@ const { memFiles, memIO } = vi.hoisted(() => {
     },
     async write(_vp, rel, content) {
       memFiles.set(rel, content);
+    },
+    async readBinary(_vp, rel) {
+      const v = memFiles.get(rel);
+      if (v === undefined) throw new Error(`not found: ${rel}`);
+      return new TextEncoder().encode(v);
+    },
+    async writeBinary(_vp, rel, data) {
+      memFiles.set(rel, new TextDecoder().decode(data));
     },
     async remove(_vp, rel) {
       memFiles.delete(rel);

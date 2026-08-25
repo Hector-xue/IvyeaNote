@@ -1,8 +1,18 @@
 // 文件系统适配：Tauri 桌面端走真实磁盘（plugin-fs），纯浏览器开发时走 OPFS。
 // 同步引擎只依赖 FileIO 接口，不关心底层实现。
 
-import { readDir, readTextFile, writeTextFile, remove, exists, mkdir } from '@tauri-apps/plugin-fs';
-import type { FileIO } from './sync';
+import {
+  readDir,
+  readTextFile,
+  writeTextFile,
+  readFile,
+  writeFile,
+  remove,
+  exists,
+  mkdir,
+  stat,
+} from '@tauri-apps/plugin-fs';
+import type { FileIO, FileMeta } from './sync';
 import type { VaultMeta } from './store';
 
 function join(base: string, rel: string): string {
@@ -34,6 +44,24 @@ export const tauriIO: FileIO = {
     await walk(vaultPath, '', out);
     return out;
   },
+  async listMeta(vaultPath) {
+    const out: string[] = [];
+    await walk(vaultPath, '', out);
+    const metas: FileMeta[] = [];
+    for (const rel of out) {
+      try {
+        const info = await stat(join(vaultPath, rel));
+        metas.push({
+          path: rel,
+          mtime: info.mtime ? info.mtime.getTime() : 0,
+          size: info.size,
+        });
+      } catch {
+        metas.push({ path: rel, mtime: 0, size: 0 });
+      }
+    }
+    return metas;
+  },
   read(vaultPath, relPath) {
     return readTextFile(join(vaultPath, relPath));
   },
@@ -42,6 +70,15 @@ export const tauriIO: FileIO = {
     const dir = parentOf(abs);
     if (dir) await mkdir(dir, { recursive: true }).catch(() => undefined);
     await writeTextFile(abs, content);
+  },
+  readBinary(vaultPath, relPath) {
+    return readFile(join(vaultPath, relPath));
+  },
+  async writeBinary(vaultPath, relPath, data) {
+    const abs = join(vaultPath, relPath);
+    const dir = parentOf(abs);
+    if (dir) await mkdir(dir, { recursive: true }).catch(() => undefined);
+    await writeFile(abs, data);
   },
   remove(vaultPath, relPath) {
     return remove(join(vaultPath, relPath));
@@ -73,12 +110,33 @@ async function opfsWalk(dir: DirHandle, prefix: string, out: string[]): Promise<
   }
 }
 
+async function opfsWalkMeta(
+  dir: DirHandle,
+  prefix: string,
+  out: FileMeta[]
+): Promise<void> {
+  for await (const h of dir.values()) {
+    const rel = prefix ? `${prefix}/${h.name}` : h.name;
+    if (h.kind === 'directory') {
+      await opfsWalkMeta((await dir.getDirectoryHandle(h.name)) as DirHandle, rel, out);
+    } else {
+      const file = await (h as FileSystemFileHandle).getFile();
+      out.push({ path: rel, mtime: file.lastModified, size: file.size });
+    }
+  }
+}
+
 export function opfsIO(getMeta: () => VaultMeta): FileIO {
   const root = () => opfsVaultRoot(getMeta());
   return {
     async list() {
       const out: string[] = [];
       await opfsWalk(await root(), '', out);
+      return out;
+    },
+    async listMeta() {
+      const out: FileMeta[] = [];
+      await opfsWalkMeta(await root(), '', out);
       return out;
     },
     async read(_vp, relPath) {
@@ -94,6 +152,23 @@ export function opfsIO(getMeta: () => VaultMeta): FileIO {
       const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
       const writable = await fh.createWritable();
       await writable.write(content);
+      await writable.close();
+    },
+    async readBinary(_vp, relPath) {
+      const fh = await (await root()).getFileHandle(relPath, { create: false });
+      const buf = await fh.getFile().then((f) => f.arrayBuffer());
+      return new Uint8Array(buf);
+    },
+    async writeBinary(_vp, relPath, data) {
+      const parts = relPath.split('/');
+      let dir = await root();
+      for (const seg of parts.slice(0, -1)) {
+        dir = (await dir.getDirectoryHandle(seg, { create: true })) as DirHandle;
+      }
+      const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+      const writable = await fh.createWritable();
+      // 拷贝到 ArrayBuffer 视图，满足 FileSystemWriteChunkType 的严格泛型
+      await writable.write(new Uint8Array(data));
       await writable.close();
     },
     async remove(_vp, relPath) {

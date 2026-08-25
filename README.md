@@ -39,6 +39,7 @@ ivyea note/
 - [x] M3 移动端 MVP（2026-08-25）：Tauri 2 Android 构建，Release v0.3.0 起 CI 自动打包 APK 并自签名（可直接安装）
 - [x] v0.3.1 免登录本地模式（2026-08-25）：启动直达主界面（移动+桌面统一），无需账号即可新建/编辑笔记；登录改为按需唤起，登录后本地笔记自动迁移/合并到云端；退出登录保留本地数据
 - [x] v0.3.3 P0 急救（2026-08-25，阶段 0）：修复 Windows exe「除文本输入外按钮全点不动」的五个根因——①window.prompt/confirm 全部换成应用内 Dialog（WebView2 不支持 prompt 静默返回 null）；②免登录本地模式文件列表/按钮不再被云端 client 门控，未登录时同步按钮显式禁用并提示；③Rules of Hooks 违例修复（登录页开关不再崩溃白屏）；④全局 ErrorBoundary（渲染崩溃显示友好错误页，不再白屏）；⑤编辑防抖改 useRef；新增 8 个回归测试（vitest 34/34），CI 新增质量门禁（oxlint + tsc + vitest + vite build，release 流水线同步接入，任一不过不出包）。完整计划见 `docs/IvyeaNote-优化方案.md`
+- [x] v0.3.4 体验补课（2026-08-26，对标 Obsidian 第一轮）：①**品牌图标修复**——APK 启动图标曾是 Tauri 默认黄蓝双环（android init 生成默认图标），现用 `tauri icon` 从藤蔓 logo 生成全平台图标集（安卓 mipmap 已提交入库 + CI init 后注入覆盖）；②**编辑器统一升级**——手机端裸 textarea 换成 CodeMirror 6（与桌面同款），新增格式工具栏（加粗/斜体/标题循环/有序无序/任务列表/引用/行内代码/链接/插图，桌面顶部、移动底部，44px 触控目标），格式化逻辑为纯函数可单测（12 个用例）；③**阅读模式**——marked + DOMPurify 渲染，图片按相对路径解析成 blob URL 真实显示；④**排序**——名称/修改时间两种，持久化；⑤**图片一等公民**——插图按钮拷入 Attachments/ 并自动插入引用（桌面走文件选择、浏览器走 input）；⑥**PDF**——文件列表识别 .pdf，桌面/浏览器内嵌预览，安卓调系统应用打开（新增 tauri-plugin-opener）；测试 46/46
 
 服务端本地运行：
 

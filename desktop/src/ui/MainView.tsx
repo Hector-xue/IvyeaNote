@@ -1,19 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { EditorState } from '@codemirror/state';
-import {
-  EditorView,
-  keymap,
-  highlightActiveLine,
-  highlightActiveLineGutter,
-  lineNumbers,
-  drawSelection,
-} from '@codemirror/view';
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language';
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { markdown } from '@codemirror/lang-markdown';
-import { oneDark } from '@codemirror/theme-one-dark';
+import { useState } from 'react';
 import logoUrl from '../assets/logo.svg';
+import { MarkdownEditor } from './MarkdownEditor';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
 
@@ -36,9 +23,13 @@ export function buildTree(paths: string[]): Map<string, FileNode[]> {
   return map;
 }
 
+export type SortMode = 'name' | 'mtime';
+
 interface Props {
   vault: VaultMeta;
   files: string[];
+  /** v0.3.4：PDF 文件列表 */
+  pdfs: string[];
   currentPath: string | null;
   doc: string | null;
   syncing: boolean;
@@ -69,60 +60,22 @@ interface Props {
    * 替代旧的静默 no-op（v0.3.3：本地模式解门控）。
    */
   syncDisabled?: boolean;
-}
-
-function cmExtensions(onEdit: (text: string) => void, dark: boolean) {
-  return [
-    lineNumbers(),
-    highlightActiveLineGutter(),
-    highlightActiveLine(),
-    drawSelection(),
-    history(),
-    indentUnit.of('    '),
-    markdown(),
-    ...(dark ? [oneDark] : [syntaxHighlighting(defaultHighlightStyle, { fallback: true })]),
-    highlightSelectionMatches(),
-    keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
-    EditorView.updateListener.of((u) => {
-      if (u.docChanged) onEdit(u.state.doc.toString());
-    }),
-  ];
+  /** v0.3.4：排序 */
+  sortMode: SortMode;
+  onSortChange(m: SortMode): void;
+  /** v0.3.4：打开 PDF */
+  onOpenPdf(path: string): void;
+  pdfView: string | null;
+  onClosePdf(): void;
+  /** v0.3.4：插图与图片解析（透传给编辑器） */
+  onInsertImage?: () => Promise<string | null>;
+  resolveImage?: (rel: string) => Promise<string | null>;
 }
 
 export function MainView(props: Props) {
-  const editorHost = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const tree = buildTree(props.files);
-
-  // 创建 CodeMirror 实例（一次）
-  useEffect(() => {
-    const host = editorHost.current;
-    if (!host) return;
-    const view = new EditorView({
-      parent: host,
-      state: EditorState.create({ doc: '', extensions: cmExtensions(() => undefined, props.theme === 'dark') }),
-    });
-    viewRef.current = view;
-    return () => {
-      view.destroy();
-      viewRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 切换文件或主题时重建编辑器状态
-  useEffect(() => {
-    const view = viewRef.current;
-    if (!view) return;
-    view.setState(
-      EditorState.create({
-        doc: props.doc ?? '',
-        extensions: cmExtensions(props.onEdit.bind(null, props.currentPath ?? ''), props.theme === 'dark'),
-      })
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.currentPath, props.theme]);
+  const pdfTree = buildTree(props.pdfs);
 
   return (
     <>
@@ -177,6 +130,15 @@ export function MainView(props: Props) {
           <button className="btn ghost" onClick={props.onImportObsidian}>
             导入 Obsidian
           </button>
+          <select
+            className="sort-select"
+            value={props.sortMode}
+            title="排序方式"
+            onChange={(e) => props.onSortChange(e.target.value as SortMode)}
+          >
+            <option value="name">按名称</option>
+            <option value="mtime">按修改时间</option>
+          </select>
         </div>
 
         {!props.vault.localPath ? (
@@ -240,7 +202,24 @@ export function MainView(props: Props) {
                 ))}
             </div>
           ))}
-          {props.files.length === 0 && (
+          {/* v0.3.4：PDF 列表 */}
+          {props.pdfs.length > 0 && (
+            <div className="dir-group">
+              <div className="dir-label pdf-label">📄 PDF</div>
+              {[...pdfTree.entries()].map(([, nodes]) =>
+                nodes.map((n) => (
+                  <div
+                    key={n.path}
+                    className={`file pdf-file ${props.pdfView === n.path ? 'active' : ''}`}
+                    onClick={() => props.onOpenPdf(n.path)}
+                  >
+                    <span className="file-name">{n.name}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+          {props.files.length === 0 && props.pdfs.length === 0 && (
             <div className="empty">还没有笔记。可「新建笔记」或从 Obsidian 一键导入。</div>
           )}
         </div>
@@ -257,7 +236,14 @@ export function MainView(props: Props) {
 
       <main className="editor-pane">
         <div className="editor-head">
-          <span className="crumb">{props.currentPath ?? '未选择笔记'}</span>
+          <span className="crumb">
+            {props.pdfView ? `📄 ${props.pdfView}` : (props.currentPath ?? '未选择笔记')}
+            {props.pdfView && (
+              <button className="link close-pdf" onClick={props.onClosePdf}>
+                关闭预览
+              </button>
+            )}
+          </span>
           {props.lastReport && (
             <span className={`report ${props.lastReport.errors.length > 0 ? 'has-error' : ''}`}>
               ↑{props.lastReport.pushed} ↓{props.lastReport.pulled}
@@ -267,7 +253,18 @@ export function MainView(props: Props) {
             </span>
           )}
         </div>
-        <div className="editor-host" ref={editorHost} />
+        {props.pdfView ? (
+          <iframe className="pdf-frame" title={props.pdfView} src={props.pdfView} />
+        ) : (
+          <MarkdownEditor
+            doc={props.doc ?? ''}
+            onEdit={props.onEdit}
+            currentPath={props.currentPath}
+            theme={props.theme}
+            onInsertImage={props.onInsertImage}
+            resolveImage={props.resolveImage}
+          />
+        )}
       </main>
     </>
   );

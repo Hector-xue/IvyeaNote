@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
-import { MainView } from './ui/MainView';
+import { MainView, type SortMode } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useToast } from './ui/Toast';
 import { ApiError, SyncClient } from './lib/api';
-import { syncVault, pushOnly, pullOnly, type FileIO, type SyncReport } from './lib/sync';
+import { syncVault, pushOnly, pullOnly, type FileIO, type FileMeta, type SyncReport } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import {
   loadState,
@@ -22,6 +22,7 @@ import {
 } from './lib/store';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 
 /** 移动端判定：窄屏或触屏设备（UA 粗判），命中即用 MobileView 单栏布局 */
 function useIsMobile(): boolean {
@@ -40,6 +41,11 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 排序偏好持久化 */
+function loadSortMode(): SortMode {
+  return (localStorage.getItem('ivnote.sort') as SortMode) || 'name';
+}
+
 export default function App() {
   // 免登录本地模式：无账号时初始化即带一个「我的笔记」本地库
   const [state, setState] = useState<PersistState>(() => {
@@ -48,6 +54,10 @@ export default function App() {
   });
   const [vaultId, setVaultId] = useState<number | null>(null);
   const [files, setFiles] = useState<string[]>([]);
+  /** v0.3.4：PDF 列表与元数据（排序） */
+  const [pdfs, setPdfs] = useState<string[]>([]);
+  const metasRef = useRef<Map<string, FileMeta>>(new Map());
+  const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -59,6 +69,11 @@ export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(
     () => (localStorage.getItem('ivnote.theme') as 'light' | 'dark') || 'light'
   );
+  /** v0.3.4：桌面端 PDF 内嵌预览（object URL） */
+  const [pdfView, setPdfView] = useState<string | null>(null);
+  const pdfUrlRef = useRef<string | null>(null);
+  /** v0.3.4：阅读模式图片 blob URL 缓存 */
+  const imgCache = useRef<Map<string, string>>(new Map());
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -114,15 +129,38 @@ export default function App() {
     });
   }, [vault?.localPath, vaultId]);
 
+  /** v0.3.4：按当前排序方式整理文件列表 */
+  const applySort = useCallback((list: string[]): string[] => {
+    const metas = metasRef.current;
+    if (sortMode === 'mtime') {
+      return [...list].sort((a, b) => (metas.get(b)?.mtime ?? 0) - (metas.get(a)?.mtime ?? 0));
+    }
+    return [...list].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  }, [sortMode]);
+
   const refreshFiles = useCallback(async () => {
     if (!vault) return;
     try {
-      const list = await io.list(vault.localPath ?? '');
-      setFiles(list.filter((p) => /\.md$/i.test(p)).sort());
+      // v0.3.4：listMeta 一次拿路径+修改时间+大小
+      const metas = await io.listMeta(vault.localPath ?? '');
+      metasRef.current = new Map(metas.map((m) => [m.path, m]));
+      const all = metas.map((m) => m.path);
+      setFiles(applySort(all.filter((p) => /\.md$/i.test(p))));
+      setPdfs(applySort(all.filter((p) => /\.pdf$/i.test(p))));
     } catch (e) {
       console.error('列出文件失败', e);
     }
-  }, [vault, io]);
+  }, [vault, io, applySort]);
+
+  const onSortChange = useCallback(
+    (m: SortMode) => {
+      setSortMode(m);
+      localStorage.setItem('ivnote.sort', m);
+      setFiles((cur) => applySort(cur));
+      setPdfs((cur) => applySort(cur));
+    },
+    [applySort]
+  );
 
   /** 执行一轮完整同步（推送本地增量 + 拉取远端变更） */
   const doSync = useCallback(async () => {
@@ -316,6 +354,7 @@ export default function App() {
       if (!vault) return;
       try {
         const text = await io.read(vault.localPath ?? '', path);
+        setPdfView(null);
         setCurrentPath(path);
         setDoc(text);
       } catch (e) {
@@ -397,6 +436,103 @@ export default function App() {
     },
     [vault, io, currentPath, refreshFiles, doSync, confirm, toast]
   );
+
+  // ---------- v0.3.4：插图 / 图片解析 / PDF ----------
+
+  /** 选一张图片 → 拷入 Attachments/ → 返回相对路径（null=取消） */
+  const onInsertImage = useCallback(async (): Promise<string | null> => {
+    if (!vault) return null;
+    let picked: { name: string; data: Uint8Array }[] = [];
+    if (isTauri) {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const { readFile } = await import('@tauri-apps/plugin-fs');
+      const sel = await open({ multiple: true, title: '选择图片' });
+      const paths = Array.isArray(sel) ? sel : sel ? [sel] : [];
+      for (const p of paths) {
+        if (typeof p !== 'string') continue;
+        const data = await readFile(p);
+        picked.push({ name: p.split(/[\\/]/).pop() ?? 'image.png', data });
+      }
+    } else {
+      const filesPicked = await new Promise<File[]>((resolve) => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = () => resolve(Array.from(input.files ?? []));
+        input.click();
+      });
+      for (const f of filesPicked) {
+        picked.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) });
+      }
+    }
+    if (picked.length === 0) return null;
+    const first = picked[0];
+    // 目标名：Attachments/时间戳-原名，重名加序号
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    let rel = `Attachments/${stamp}-${first.name.replace(/[\\/]/g, '_')}`;
+    let i = 1;
+    while (await io.exists(vault.localPath ?? '', rel).catch(() => false)) {
+      rel = rel.replace(/(\.[a-z0-9]+)$/i, `-${i}$1`);
+      i++;
+    }
+    await io.writeBinary(vault.localPath ?? '', rel, first.data);
+    await refreshFiles();
+    void doSync();
+    return rel;
+  }, [vault, io, refreshFiles, doSync]);
+
+  /** 阅读模式：把 Markdown 里的相对图片路径解析成可显示的 blob URL */
+  const resolveImage = useCallback(
+    async (rel: string): Promise<string | null> => {
+      if (!vault) return null;
+      const cached = imgCache.current.get(rel);
+      if (cached) return cached;
+      const bytes = await io.readBinary(vault.localPath ?? '', rel);
+      const ext = rel.split('.').pop()?.toLowerCase() ?? 'png';
+      const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : `image/${ext}`;
+      const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: mime }));
+      imgCache.current.set(rel, url);
+      return url;
+    },
+    [vault, io]
+  );
+
+  /** 打开 PDF：桌面/浏览器内嵌预览；安卓交给系统应用 */
+  const onOpenPdf = useCallback(
+    async (path: string) => {
+      if (!vault) return;
+      if (isAndroid && vault.localPath && !vault.localPath.startsWith('opfs://')) {
+        try {
+          const { openPath } = await import('@tauri-apps/plugin-opener');
+          await openPath(`${vault.localPath.replace(/\/$/, '')}/${path}`);
+          return;
+        } catch (e) {
+          toast(`无法打开 PDF：${errText(e)}`, 'error');
+          return;
+        }
+      }
+      try {
+        const bytes = await io.readBinary(vault.localPath ?? '', path);
+        if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+        const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }));
+        pdfUrlRef.current = url;
+        setCurrentPath(null);
+        setDoc(null);
+        setPdfView(url);
+      } catch (e) {
+        toast(`打开 PDF 失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, toast]
+  );
+
+  const onClosePdf = useCallback(() => {
+    if (pdfUrlRef.current) {
+      URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = null;
+    }
+    setPdfView(null);
+  }, []);
 
   // ---------- Obsidian 一键导入 ----------
 
@@ -536,6 +672,7 @@ export default function App() {
     setCurrentPath(null);
     setDoc(null);
     setFiles([]);
+    setPdfs([]);
     setLastReport(null);
   }, []);
 
@@ -580,6 +717,7 @@ export default function App() {
         <MobileView
           vault={vault}
           files={files}
+          pdfs={pdfs}
           currentPath={currentPath}
           doc={doc}
           syncing={syncing}
@@ -601,6 +739,11 @@ export default function App() {
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
           syncDisabled={!state.account}
+          sortMode={sortMode}
+          onSortChange={onSortChange}
+          onOpenPdf={(p) => void onOpenPdf(p)}
+          onInsertImage={onInsertImage}
+          resolveImage={resolveImage}
         />
         {dialogEl}
         {toastEl}
@@ -614,6 +757,7 @@ export default function App() {
         <MainView
           vault={{ id: -1, name: 'Ivyea Note', cursor: 0, versions: {}, bases: {} }}
           files={[]}
+          pdfs={[]}
           currentPath={null}
           doc={null}
           syncing={false}
@@ -634,6 +778,11 @@ export default function App() {
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
           syncDisabled={!state.account}
+          sortMode={sortMode}
+          onSortChange={onSortChange}
+          onOpenPdf={() => undefined}
+          pdfView={null}
+          onClosePdf={onClosePdf}
           vaultSelector={
             <select
               value=""
@@ -662,6 +811,7 @@ export default function App() {
       <MainView
         vault={vault}
         files={files}
+        pdfs={pdfs}
         currentPath={currentPath}
         doc={doc}
         syncing={syncing}
@@ -682,6 +832,13 @@ export default function App() {
         hasAccount={!!state.account}
         onOpenLogin={() => setShowLogin(true)}
         syncDisabled={!state.account}
+        sortMode={sortMode}
+        onSortChange={onSortChange}
+        onOpenPdf={(p) => void onOpenPdf(p)}
+        pdfView={pdfView}
+        onClosePdf={onClosePdf}
+        onInsertImage={onInsertImage}
+        resolveImage={resolveImage}
         vaultSelector={
           <select
             value={activeVaultId ?? ''}
@@ -689,6 +846,7 @@ export default function App() {
               setVaultId(Number(e.target.value));
               setCurrentPath(null);
               setDoc(null);
+              setPdfView(null);
             }}
           >
             {vaultList.map((v) => (

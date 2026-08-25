@@ -901,3 +901,190 @@ button {
   cursor: pointer;
   text-decoration: underline;
 }
+
+/* ============ v0.3.4：编辑器容器 + 格式工具栏 ============ */
+.md-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.md-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.md-body .editor-host {
+  flex: 1;
+}
+
+.md-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+}
+.md-toolbar-bottom {
+  border-bottom: none;
+  border-top: 1px solid var(--border);
+  padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+}
+
+.md-tool {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 13.5px;
+  min-width: 32px;
+  line-height: 1.2;
+}
+.md-tool:hover {
+  background: var(--accent-weak);
+  color: var(--text);
+}
+.md-tool:disabled {
+  opacity: 0.5;
+}
+.md-tool.t-bold {
+  font-weight: 700;
+}
+.md-tool.t-italic {
+  font-style: italic;
+}
+.md-tool.md-mode.active {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+.md-toolbar-spacer {
+  flex: 1;
+}
+
+/* 移动端：触控目标加大 */
+.md-editor-mobile .md-tool {
+  min-width: 44px;
+  min-height: 40px;
+  font-size: 15px;
+}
+
+/* ============ v0.3.4：阅读模式 ============ */
+.md-preview {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 26px 40px;
+  line-height: 1.75;
+  font-size: 14.5px;
+  max-width: 860px;
+}
+.md-preview h1,
+.md-preview h2,
+.md-preview h3 {
+  margin: 1.1em 0 0.5em;
+  line-height: 1.35;
+}
+.md-preview h1 {
+  font-size: 1.6em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.3em;
+}
+.md-preview h2 {
+  font-size: 1.35em;
+}
+.md-preview p {
+  margin: 0.6em 0;
+}
+.md-preview code {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 0.9em;
+}
+.md-preview pre code {
+  display: block;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.md-preview blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 0.8em 0;
+  padding: 2px 14px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-radius: 0 8px 8px 0;
+}
+.md-preview img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.md-preview ul,
+.md-preview ol {
+  padding-left: 1.6em;
+  margin: 0.5em 0;
+}
+.md-preview input[type='checkbox'] {
+  margin-right: 6px;
+}
+.md-preview table {
+  border-collapse: collapse;
+  margin: 0.8em 0;
+}
+.md-preview th,
+.md-preview td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+}
+
+/* ============ v0.3.4：排序选择器 ============ */
+.action-row {
+  align-items: center;
+  gap: 8px;
+}
+.sort-select {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+.m-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.m-sort-row select {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px;
+  font-size: 13px;
+}
+
+/* ============ v0.3.4：PDF ============ */
+.pdf-label {
+  color: var(--accent);
+}
+.pdf-file .file-name::before {
+  content: '📄 ';
+}
+.pdf-frame {
+  flex: 1;
+  border: none;
+  width: 100%;
+  background: #525659;
+}
+.close-pdf {
+  margin-left: 10px;
+}

@@ -1,6 +1,6 @@
 [package]
 name = "ivyea-note-desktop"
-version = "0.3.3"
+version = "0.3.4"
 description = "Ivyea Note 桌面端：本地 Markdown · 多端同步"
 authors = ["ivyea"]
 edition = "2021"
@@ -18,6 +18,7 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tauri-plugin-opener = "2.5.4"
 
 [profile.release]
 strip = true

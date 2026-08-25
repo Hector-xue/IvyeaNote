@@ -139,6 +139,12 @@ jobs:
           cargo install tauri-cli --version "^2" --locked
           cargo tauri android init
 
+      # v0.3.4：注入品牌图标。android init 生成的是 Tauri 默认黄蓝双环图标
+      # （v0.3.3 真机反馈：手机上不是 Ivyea 的藤蔓 logo），用仓库内图标集覆盖。
+      - name: 注入 Android 品牌图标
+        working-directory: desktop
+        run: cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
+
       # 版本号写入 Android 工程（与 tag 同步）
       - name: 构建通用 APK（含 arm64/armv7/x86/x86_64）
         working-directory: desktop

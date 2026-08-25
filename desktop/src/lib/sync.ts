@@ -8,10 +8,23 @@ import type { VaultMeta } from './store';
 export interface FileIO {
   /** 递归列出 vault 目录下全部相对路径（只列文本笔记） */
   list(vaultPath: string): Promise<string[]>;
+  /** v0.3.4：带元数据的列表（排序用：修改时间/大小） */
+  listMeta(vaultPath: string): Promise<FileMeta[]>;
   read(vaultPath: string, relPath: string): Promise<string>;
   write(vaultPath: string, relPath: string, content: string): Promise<void>;
+  /** v0.3.4：二进制读写（附件图片 / PDF 预览） */
+  readBinary(vaultPath: string, relPath: string): Promise<Uint8Array>;
+  writeBinary(vaultPath: string, relPath: string, data: Uint8Array): Promise<void>;
   remove(vaultPath: string, relPath: string): Promise<void>;
   exists(vaultPath: string, relPath: string): Promise<boolean>;
+}
+
+/** 文件元数据（v0.3.4：排序与列表展示） */
+export interface FileMeta {
+  path: string;
+  /** 修改时间（毫秒时间戳） */
+  mtime: number;
+  size: number;
 }
 
 export interface SyncReport {
