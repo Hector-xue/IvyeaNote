@@ -4,6 +4,8 @@ import logoUrl from '../assets/logo.svg';
 interface Props {
   onLogin: (serverUrl: string, email: string, password: string) => Promise<void>;
   onShowGuide: () => void;
+  /** 免登录模式下允许关闭登录页，直接回主界面 */
+  onCancel?: () => void;
 }
 
 /** 从「IvyeaNote-账号.txt」解析三个字段（install.sh / start.bat 生成的格式） */
@@ -23,7 +25,7 @@ export function parseAccountText(text: string): { serverUrl?: string; email?: st
   };
 }
 
-export function LoginView({ onLogin, onShowGuide }: Props) {
+export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
   const [serverUrl, setServerUrl] = useState(() => localStorage.getItem('ivnote.server') || '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -173,6 +175,12 @@ export function LoginView({ onLogin, onShowGuide }: Props) {
         <button type="submit" className="btn primary" disabled={busy}>
           {busy ? '请稍候…' : '登录'}
         </button>
+
+        {onCancel && (
+          <button type="button" className="btn ghost" onClick={onCancel}>
+            先不登录，直接记笔记 →
+          </button>
+        )}
 
         <p className="hint">
           账号密码在你部署后自动生成的「IvyeaNote-账号.txt」里；

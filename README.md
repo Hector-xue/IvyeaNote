@@ -35,7 +35,8 @@ ivyea note/
 - [x] M2 桌面端核心（2026-08-24）：React + CodeMirror 6 编辑器、登录/注册、vault 管理、同步引擎（增量 push/pull、3-way diff3 合并、删改复活、冲突副本、墓碑去重）、WS 实时触发 + 30s 兜底轮询；vitest 一致性场景测试 **17/17 通过**，前端构建通过；Tauri 2 壳工程就绪（见 `desktop/src-tauri/README.md`）
 - [x] 桌面端 Linux 构建环境（2026-08-24）：`deploy/desktop-buildenv.Dockerfile`（Debian bookworm + webkit2gtk-4.1 开发库 + Rust stable），容器内 `cargo check` 通过；宿主 CentOS Stream 9 仓库只有 webkit2gtk-4.0，无法原生编译 Tauri 2。用法见该文件头部注释
 - [ ] M2 收尾：在有 GUI 的机器上 `npm run tauri dev/build` 出桌面安装包（本服务器无图形栈；Rust 编译可用上面的容器环境）
-- [ ] M3 移动端（Flutter）
+- [x] M3 移动端 MVP（2026-08-25）：Tauri 2 Android 构建，Release v0.3.0 起 CI 自动打包 APK 并自签名（可直接安装）
+- [x] v0.3.1 免登录本地模式（2026-08-25）：启动直达主界面（移动+桌面统一），无需账号即可新建/编辑笔记；登录改为按需唤起，登录后本地笔记自动迁移/合并到云端；退出登录保留本地数据
 
 服务端本地运行：
 

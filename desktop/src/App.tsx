@@ -5,11 +5,15 @@ import { MainView } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { ApiError, SyncClient } from './lib/api';
 import { syncVault, pushOnly, pullOnly, type FileIO, type SyncReport } from './lib/sync';
-import { tauriIO, opfsIO } from './lib/fs-adapters';
+import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import {
   loadState,
   saveState,
-  clearState,
+  clearAccount,
+  ensureLocalVault,
+  mergeLocalIntoCloud,
+  LOCAL_VAULT_ID,
+  LOCAL_VAULT_NAME,
   newVaultMeta,
   type PersistState,
   type VaultMeta,
@@ -35,7 +39,11 @@ function errText(e: unknown): string {
 }
 
 export default function App() {
-  const [state, setState] = useState<PersistState>(() => loadState());
+  // 免登录本地模式：无账号时初始化即带一个「我的笔记」本地库
+  const [state, setState] = useState<PersistState>(() => {
+    const s = loadState();
+    return s.account ? s : ensureLocalVault(s);
+  });
   const [vaultId, setVaultId] = useState<number | null>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
@@ -44,6 +52,8 @@ export default function App() {
   const [lastReport, setLastReport] = useState<SyncReport | null>(null);
   const [importing, setImporting] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  /** 按需唤起的登录页（免登录模式下从侧栏打开） */
+  const [showLogin, setShowLogin] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(
     () => (localStorage.getItem('ivnote.theme') as 'light' | 'dark') || 'light'
   );
@@ -78,11 +88,15 @@ export default function App() {
     }, acc.deviceId);
   }, [state.account?.serverUrl, state.account === undefined]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const vault: VaultMeta | null = vaultId ? state.vaults[String(vaultId)] ?? null : null;
+  // 未登录时强制使用本地库（免登录模式的主界面）
+  const activeVaultId = state.account ? vaultId : LOCAL_VAULT_ID;
+  const vault: VaultMeta | null = activeVaultId ? state.vaults[String(activeVaultId)] ?? null : null;
 
   // 文件 IO：绑定了本地文件夹且在 Tauri 里 → 真实磁盘；否则 OPFS
   const io: FileIO = useMemo(() => {
-    if (vault?.localPath && isTauri) return tauriIO;
+    const vp = vault?.localPath;
+    // 'opfs://' 前缀是虚拟标记（本地库 / 移动端未绑定文件夹），统一走 OPFS
+    if (vp && isTauri && !vp.startsWith('opfs://')) return tauriIO;
     return opfsIO(() => {
       const m = stateRef.current.vaults[String(vaultId ?? '')];
       return m ?? newVaultMeta(-1, 'tmp');
@@ -183,21 +197,62 @@ export default function App() {
       }
       const acc = { serverUrl, email, userId, deviceId, tokens: tmpTokens };
       const cur = loadState();
+      const localV = cur.vaults[String(LOCAL_VAULT_ID)];
       // 拉取服务端 vault 列表并合并（保留本地已有元数据）
       const merged: Record<string, VaultMeta> = {};
+      let firstId: number | null = null;
+      // 免登录期本地库的数据源：绑定了真实文件夹用磁盘，否则 OPFS
+      const localReal = !!localV?.localPath && !localV.localPath.startsWith('opfs://');
+      const srcIo =
+        localV && localReal
+          ? tauriIO
+          : opfsIO(() => localV ?? newVaultMeta(LOCAL_VAULT_ID, LOCAL_VAULT_NAME));
+      const srcPath = localV && localReal ? localV.localPath! : '';
       try {
         const c = new SyncClient(serverUrl, acc.tokens, () => undefined, deviceId);
         const { vaults } = await c.listVaults();
         for (const v of vaults) {
           merged[String(v.id)] = cur.vaults[String(v.id)] ?? newVaultMeta(v.id, v.name);
         }
+        if (localV && vaults.length === 0) {
+          // 云端还是空的：把本地库直接升级为云端第一个库（笔记复制过去）
+          try {
+            const created = await c.createVault(LOCAL_VAULT_NAME);
+            merged[String(created.id)] = {
+              id: created.id,
+              name: LOCAL_VAULT_NAME,
+              cursor: 0,
+              versions: {},
+              bases: {},
+              tombstones: {},
+            };
+            await migrateFiles(srcIo, srcPath, opfsIO(() => merged[String(created.id)]!), '');
+            firstId = created.id;
+          } catch {
+            merged[String(LOCAL_VAULT_ID)] = localV; // 迁移失败：保留纯本地库，笔记不丢
+          }
+        } else if (localV && vaults.length > 0) {
+          // 云端已有库：把本地笔记并入最旧的云端库
+          const target = Object.values(merged).sort((a, b) => a.id - b.id)[0];
+          if (target) {
+            try {
+              const dstPath = target.localPath ?? '';
+              const dstIo =
+                dstPath && !dstPath.startsWith('opfs://') ? tauriIO : opfsIO(() => target);
+              await migrateFiles(srcIo, srcPath, dstIo, dstPath, localV.tombstones);
+              merged[String(target.id)] = mergeLocalIntoCloud(localV, target);
+              firstId = target.id;
+            } catch {
+              merged[String(LOCAL_VAULT_ID)] = localV; // 复制失败：保留本地库
+            }
+          }
+        }
       } catch {
-        // 网络异常时保留本地已知 vault
+        // 网络异常时保留本地已知 vault（含未迁移的本地库）
         Object.assign(merged, cur.vaults);
       }
       persist({ account: acc, vaults: merged });
-      const first = Object.values(merged)[0];
-      if (first) setVaultId(first.id);
+      setVaultId(firstId ?? Object.values(merged)[0]?.id ?? null);
     },
     [persist]
   );
@@ -222,6 +277,11 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('ivnote.theme', theme);
   }, [theme]);
+
+  // 免登录本地模式：确保本地库存在并落盘（老用户首次升级也生效）
+  useEffect(() => {
+    if (!stateRef.current.account) persist(ensureLocalVault());
+  }, [persist]);
 
   // 移动端：App 回到前台时强制拉取一次（iOS/Android 后台收不到 WS 推送）
   useEffect(() => {
@@ -396,7 +456,10 @@ export default function App() {
   // ---------- Vault / 文件夹绑定 ----------
 
   const createVault = useCallback(async () => {
-    if (!client) return;
+    if (!client) {
+      alert('云同步需要登录：请先在侧栏点「登录同步」');
+      return;
+    }
     const name = window.prompt('新笔记库名称');
     if (!name) return;
     try {
@@ -431,25 +494,33 @@ export default function App() {
   }, [vault, patchVault]);
 
   const onLogout = useCallback(() => {
-    clearState();
-    setState({ vaults: {} });
-    setVaultId(null);
+    // 只清登录态，保留全部本地笔记（含免登录本地库），下次登录可继续迁移
+    clearAccount();
+    setState((s) => ({ ...s, account: undefined }));
+    setShowLogin(false);
     setCurrentPath(null);
     setDoc(null);
     setFiles([]);
+    setLastReport(null);
   }, []);
 
   // ---------- 渲染 ----------
 
-  if (!state.account || !client) {
+  // 登录页只在用户主动唤起且尚未登录时显示；平时无账号也直达主界面（本地模式）
+  if (!state.account && showLogin) {
     return showGuide ? (
       <SetupGuide onBack={() => setShowGuide(false)} />
     ) : (
-      <LoginView onLogin={onLogin} onShowGuide={() => setShowGuide(true)} />
+      <LoginView
+        onLogin={onLogin}
+        onShowGuide={() => setShowGuide(true)}
+        onCancel={() => setShowLogin(false)}
+      />
     );
   }
 
-  const vaultList = Object.values(state.vaults);
+  // 未登录：列表里只展示本地库（云端库要登录后才能用）
+  const vaultList = Object.values(state.vaults).filter((v) => state.account || v.id === LOCAL_VAULT_ID);
   const isMobile = useIsMobile();
 
   const vaultSelectorEl = (value: number | '', onChange: (id: number) => void) => (
@@ -478,7 +549,7 @@ export default function App() {
           doc={doc}
           syncing={syncing}
           lastReport={lastReport}
-          vaultSelector={vaultSelectorEl(vaultId ?? '', (id) => {
+          vaultSelector={vaultSelectorEl(activeVaultId ?? '', (id) => {
             setVaultId(id);
             setCurrentPath(null);
             setDoc(null);
@@ -492,6 +563,8 @@ export default function App() {
           theme={theme}
           onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
           onLogout={onLogout}
+          hasAccount={!!state.account}
+          onOpenLogin={() => setShowLogin(true)}
         />
       </div>
     );
@@ -520,6 +593,8 @@ export default function App() {
           onBindFolder={() => undefined}
           onUnbindFolder={() => undefined}
           onLogout={onLogout}
+          hasAccount={!!state.account}
+          onOpenLogin={() => setShowLogin(true)}
           vaultSelector={
             <select
               value=""
@@ -563,9 +638,11 @@ export default function App() {
         onBindFolder={() => void onBindFolder()}
         onUnbindFolder={onUnbindFolder}
         onLogout={onLogout}
+        hasAccount={!!state.account}
+        onOpenLogin={() => setShowLogin(true)}
         vaultSelector={
           <select
-            value={vaultId ?? ''}
+            value={activeVaultId ?? ''}
             onChange={(e) => {
               setVaultId(Number(e.target.value));
               setCurrentPath(null);

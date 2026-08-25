@@ -145,6 +145,30 @@ jobs:
           find src-tauri/gen/android -name "*.apk" -exec cp {} apk-out/ \;
           ls -la apk-out
 
+      # 自签名：CI 临时生成 keystore 给 release APK 签名（未签名包安卓报「解析软件包失败」）
+      - name: 签名 APK（自签 keystore）
+        working-directory: desktop/apk-out
+        run: |
+          KS="/tmp/ivnote-release.keystore"
+          if [ ! -f "$KS" ]; then
+            keytool -genkeypair -v -keystore "$KS" -alias ivnote \
+              -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass ivnote-android -keypass ivnote-android \
+              -dname "CN=Ivyea Note, OU=Ivyea, O=Ivyea, C=CN"
+          fi
+          ZIPS="$(ls "$ANDROID_HOME"/build-tools/*/zipalign 2>/dev/null | sort | tail -1)"
+          APKS="$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort | tail -1)"
+          for f in *.apk; do
+            [ -e "$f" ] || continue
+            "$ZIPS" -f -p "$f" "$f.aligned"
+            "$APKS" sign --ks "$KS" --ks-key-alias ivnote \
+              --ks-pass pass:ivnote-android --key-pass pass:ivnote-android \
+              --out "$f.signed" "$f.aligned"
+            mv "$f.signed" "$f"
+            rm -f "$f.aligned"
+          done
+          ls -la
+
       - name: 重命名产物
         working-directory: desktop/apk-out
         run: |

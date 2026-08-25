@@ -27,6 +27,9 @@ interface Props {
   onToggleTheme(): void;
   theme: 'light' | 'dark';
   onLogout(): void;
+  /** 是否已登录（未登录=本地模式，显示「登录同步」而非「退出登录」） */
+  hasAccount: boolean;
+  onOpenLogin(): void;
 }
 
 export function MobileView(props: Props) {
@@ -106,7 +109,11 @@ export function MobileView(props: Props) {
         <div className="sidebar-foot">
           <button onClick={props.onCreateNote}>＋ 新建笔记</button>
           <button onClick={props.onCreateVault}>＋ 新建笔记库</button>
-          <button onClick={props.onLogout}>退出登录</button>
+          {props.hasAccount ? (
+            <button onClick={props.onLogout}>退出登录</button>
+          ) : (
+            <button onClick={props.onOpenLogin}>登录同步</button>
+          )}
         </div>
       </aside>
 

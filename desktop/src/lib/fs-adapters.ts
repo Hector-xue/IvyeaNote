@@ -109,3 +109,31 @@ export function opfsIO(getMeta: () => VaultMeta): FileIO {
     },
   };
 }
+
+/**
+ * 把一个存储里的全部 .md 笔记复制到另一个存储（登录迁移用）。
+ * 墓碑路径：源里已不存在而目标还在的，一并删除（离线期删除的笔记不复活）。
+ * 返回复制的文件数。
+ */
+export async function migrateFiles(
+  src: FileIO,
+  srcPath: string,
+  dst: FileIO,
+  dstPath: string,
+  tombstones?: Record<string, number>
+): Promise<number> {
+  let n = 0;
+  for (const rel of await src.list(srcPath)) {
+    if (!/\.(md|markdown)$/i.test(rel)) continue;
+    await dst.write(dstPath, rel, await src.read(srcPath, rel));
+    n++;
+  }
+  if (tombstones) {
+    for (const p of Object.keys(tombstones)) {
+      const stillLocal = await src.exists(srcPath, p).catch(() => false);
+      if (stillLocal) continue;
+      if (await dst.exists(dstPath, p).catch(() => false)) await dst.remove(dstPath, p);
+    }
+  }
+  return n;
+}

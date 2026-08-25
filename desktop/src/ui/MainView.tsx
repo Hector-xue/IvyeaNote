@@ -58,6 +58,9 @@ interface Props {
   onBindFolder(): void;
   onUnbindFolder(): void;
   onLogout(): void;
+  /** 是否已登录（未登录=本地模式，显示「登录同步」而非「退出登录」） */
+  hasAccount: boolean;
+  onOpenLogin(): void;
   /** 笔记库选择器（由外层注入，保持受控状态） */
   vaultSelector: React.ReactNode;
   onCreateVault(): void;
@@ -222,7 +225,11 @@ export function MainView(props: Props) {
 
         <div className="sidebar-foot">
           <button onClick={props.onCreateNote}>＋ 新建笔记</button>
-          <button onClick={props.onLogout}>退出登录</button>
+          {props.hasAccount ? (
+            <button onClick={props.onLogout}>退出登录</button>
+          ) : (
+            <button onClick={props.onOpenLogin}>登录同步</button>
+          )}
         </div>
       </aside>
 
