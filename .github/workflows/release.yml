@@ -39,10 +39,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: 固定 Node 20 LTS（避免 runner 默认 Node 24 触发 npm bug）
+      - name: 固定 Node 22 LTS（Node 20 缺 util.markAsUncloneable，jsdom/undici 会崩；Node 24 曾触发 npm bug）
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 前端构建（桌面模式）
         working-directory: desktop
@@ -124,10 +124,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: 固定 Node 20 LTS
+      - name: 固定 Node 22 LTS（Node 20 缺 util.markAsUncloneable，jsdom/undici 会崩；Node 24 曾触发 npm bug）
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: 前端构建
         working-directory: desktop
@@ -186,7 +186,8 @@ jobs:
           echo "使用 build-tools: $BT"
           for f in *.apk; do
             [ -e "$f" ] || continue
-            "$BT/zipalign" -f -p "$f" "$f.aligned"
+            # zipalign 必需 <align> 参数（4 = 32 位对齐）；漏写在 v0.3.3 run#20 打印 usage 后 exit 2
+            "$BT/zipalign" -f -p 4 "$f" "$f.aligned"
             "$BT/apksigner" sign --ks "$KS" --ks-key-alias ivnote \
               --ks-pass "pass:$KP" --key-pass "pass:$KP" \
               --out "$f.signed" "$f.aligned"
