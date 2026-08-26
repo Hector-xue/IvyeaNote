@@ -33,17 +33,18 @@ jobs:
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      # v0.7.2：Rust 编译门禁 —— 打包前先 cargo check，类型错误几分钟内暴露
-      # （v0.7.0/0.7.1 的 discover.rs E0308 就是漏到这里才炸的）
-      - name: Rust 编译门禁（cargo check）
-        working-directory: desktop/src-tauri
-        run: cargo check --locked 2>/dev/null || cargo check
-
+      # v0.7.2：Rust 门禁前先装好系统依赖（cargo check 需要 GTK/webkit 头文件）
       - name: Linux 编译依赖（webkit2gtk 等）
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # v0.7.2：Rust 编译门禁 —— 打包前先 cargo check，类型错误几分钟内暴露
+      # （v0.7.0/0.7.1 的 discover.rs E0308 就是漏到这里才炸的）
+      - name: Rust 编译门禁（cargo check）
+        working-directory: desktop/src-tauri
+        run: cargo check 2>/dev/null || cargo check
 
       - name: 固定 Node 22 LTS（Node 20 缺 util.markAsUncloneable，jsdom/undici 会崩；Node 24 曾触发 npm bug）
         uses: actions/setup-node@v4
