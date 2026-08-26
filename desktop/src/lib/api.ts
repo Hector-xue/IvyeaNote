@@ -75,6 +75,11 @@ export class SyncClient {
   }
 
   /** 带 401 自动 refresh 重试一次的 JSON 请求 */
+  /** v0.6.1 H6: generate one-time pairing code (60s) */
+  createPairCode(): Promise<{ code: string; expires_in: number }> {
+    return this.req<{ code: string; expires_in: number }>('/pairing/create', { method: 'POST' });
+  }
+
   private async req<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
     const res = await this.raw(path, init);
     if (res.status === 401 && !retried && this.tokens.refresh) {

@@ -179,8 +179,9 @@ describe('v0.4.0 T5：删除进回收站', () => {
 describe('R2：无账号时同步按钮显式禁用并提示（不再静默 no-op）', () => {
   it('上传/拉取按钮禁用且带「登录后可用」提示', async () => {
     await renderMain();
-    const gated = screen.getAllByTitle('云同步需要登录后可用');
-    expect(gated.length).toBe(2); // 上传 + 拉取
+    // v0.6.1 H7a：按钮收敛为一个「⟳ 同步」
+    const gated = screen.getAllByTitle('登录后自动多端同步');
+    expect(gated.length).toBe(1);
     for (const b of gated) expect((b as HTMLButtonElement).disabled).toBe(true);
     // 本地模式提示条 + 登录入口
     expect(screen.getAllByText('登录同步').length).toBeGreaterThanOrEqual(1);

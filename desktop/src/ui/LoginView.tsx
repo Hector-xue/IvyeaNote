@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { probeServer, normalizeServerUrl, isInsecurePublic } from '../lib/serverConn';
+import { claimPairCode } from '../lib/pairing';
 import logoUrl from '../assets/logo.svg';
 
 interface Props {
@@ -7,6 +8,8 @@ interface Props {
   onShowGuide: () => void;
   /** 免登录模式下允许关闭登录页，直接回主界面 */
   onCancel?: () => void;
+  /** v0.6.1 H6：配对码登录完成回调（注入 token） */
+  onPairLogin?: (serverUrl: string, userId: number, access: string, refresh: string) => Promise<void>;
 }
 
 /** 从「IvyeaNote-账号.txt」解析三个字段（install.sh / start.bat 生成的格式） */
@@ -26,7 +29,7 @@ export function parseAccountText(text: string): { serverUrl?: string; email?: st
   };
 }
 
-export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
+export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin }: Props) {
   const [serverUrl, setServerUrl] = useState(() => localStorage.getItem('ivnote.server') || '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -38,6 +41,9 @@ export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
   /** 移动端：无法访问电脑桌面的 txt → 支持直接粘贴账号文件内容 */
   const [pasteMode, setPasteMode] = useState(false);
   const [pasteText, setPasteText] = useState('');
+  // v0.6.1 H6: pairing quick-connect
+  const [pairMode, setPairMode] = useState(false);
+  const [pairCode, setPairCode] = useState('');
 
   // v0.6.0 H3/H4：连接探测与诊断
   const [probing, setProbing] = useState(false);
@@ -56,6 +62,25 @@ export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
       setProbeMsg({ ok: r.ok, text });
     } finally {
       setProbing(false);
+    }
+  };
+
+  /** H6: 凭服务器地址+配对码直接登录（免输账号密码） */
+  const submitPair = async () => {
+    setError('');
+    setNotice('');
+    if (!/\d{6}/.test(pairCode)) throw new Error('配对码是 6 位数字');
+    const url = normalizeServerUrl(serverUrl);
+    if (!url || url === 'http://' || url === 'https://') throw new Error('请先填服务器地址');
+    setBusy(true);
+    try {
+      const r = await claimPairCode(url, pairCode);
+      localStorage.setItem('ivnote.server', url);
+      // 复用登录完成链路：onLogin 只接收密码形态，这里直接走 token 注入回调
+      await onPairLogin?.(url, r.userId, r.accessToken, r.refreshToken);
+      setNotice('配对成功！');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -199,6 +224,33 @@ export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
             required
           />
         </label>
+
+        {onPairLogin && (
+          <>
+            <button type="button" className="link paste-toggle" onClick={() => setPairMode((v) => !v)}>
+              已有配对码？免密码快速登录
+            </button>
+            {pairMode && (
+              <div className="pair-row">
+                <input
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="6 位配对码"
+                  value={pairCode}
+                  onChange={(e) => setPairCode(e.target.value.replace(/\D/g, ''))}
+                />
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={busy || pairCode.length !== 6}
+                  onClick={() => void submitPair()}
+                >
+                  配对登录
+                </button>
+              </div>
+            )}
+          </>
+        )}
 
         {error && (
           <div className="error">

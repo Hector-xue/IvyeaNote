@@ -312,6 +312,14 @@ export default function App() {
     [persist]
   );
 
+  /** v0.6.1 H6：配对码登录（token 注入，免密码） */
+  const onPairLogin = useCallback(
+    async (serverUrl: string, userId: number, access: string, refresh: string) => {
+      await finishLogin(serverUrl, `paired-user-${userId}`, userId, access, refresh);
+    },
+    [finishLogin]
+  );
+
   const onLogin = useCallback(
     async (serverUrl: string, email: string, password: string) => {
       const r = await SyncClient.login(serverUrl, email, password);
@@ -340,14 +348,24 @@ export default function App() {
     if (!stateRef.current.account) persist(ensureLocalVault());
   }, [persist]);
 
-  // 移动端：App 回到前台时强制拉取一次（iOS/Android 后台收不到 WS 推送）
+  // v0.6.1 H7a：全自动同步——启动后 2s / 窗口聚焦 / 每 60s 兜底轮询。
+  // 编辑落盘后的推送已在 onEdit 防抖里触发，这里补齐其余时机；
+  // doSync 内部有 syncingRef 重入保护，多时机并发安全。
   useEffect(() => {
     if (!client) return;
+    const timer = window.setTimeout(() => void doSync(), 2000); // 启动拉取一次
     const onVisible = () => {
       if (document.visibilityState === 'visible') void doSync();
     };
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void doSync();
+    }, 60_000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(poll);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [client, doSync]);
 
   // 卸载时清理编辑防抖计时器
@@ -608,6 +626,65 @@ export default function App() {
       }
     },
     [vault, io, refreshFiles, doSync, toast]
+  );
+
+  /** v0.6.1 H7c：冲突待处理队列（conflict 副本路径列表，从最近同步报告收集） */
+  const [showConflict, setShowConflict] = useState(false);
+  /** v0.6.1 H6: add-device pairing code dialog */
+  const [pairInfo, setPairInfo] = useState<{ code: string; expiresIn: number } | null>(null);
+  const [pairBusy, setPairBusy] = useState(false);
+  const showPairCode = useCallback(async () => {
+    if (!client) return;
+    setPairBusy(true);
+    try {
+      const r = await client.createPairCode();
+      setPairInfo({ code: r.code, expiresIn: r.expires_in });
+    } catch (e) {
+      toast(`生成配对码失败：${errText(e)}`, 'error');
+    } finally {
+      setPairBusy(false);
+    }
+  }, [client, toast]);
+  const conflictFiles = lastReport?.conflicts ?? [];
+  /** 从副本名反解原路径：xxx.conflict-<ts>.md -> xxx.md */
+  const originalOf = (copy: string) => copy.replace(/\.conflict-\d{4}-\d{2}-\d{2}T[\d-]+\.md$/, '');
+
+  /** 裁决：保留我的（原文件内容胜出），删掉副本 */
+  const resolveKeepMine = useCallback(
+    async (copy: string) => {
+      if (!vault) return;
+      try {
+        await io.remove(vault.localPath ?? '', copy);
+        setLastReport((r) => (r ? { ...r, conflicts: r.conflicts.filter((c) => c !== copy) } : r));
+        await refreshFiles();
+        void doSync();
+        toast('已保留我的版本', 'ok');
+      } catch (e) {
+        toast(`操作失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, refreshFiles, doSync, toast]
+  );
+
+  /** 裁决：采用副本（冲突副本内容胜出），写回原路径并删副本 */
+  const resolveUseCopy = useCallback(
+    async (copy: string) => {
+      if (!vault) return;
+      const original = originalOf(copy);
+      try {
+        const content = await io.read(vault.localPath ?? '', copy);
+        await io.write(vault.localPath ?? '', original, content);
+        await io.remove(vault.localPath ?? '', copy);
+        if (currentPath === original) setDoc(content);
+        setLastReport((r) => (r ? { ...r, conflicts: r.conflicts.filter((c) => c !== copy) } : r));
+        await refreshFiles();
+        void doSync();
+        toast(`已采用冲突副本：${original}`, 'ok');
+      } catch (e) {
+        toast(`操作失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, currentPath, refreshFiles, doSync, toast]
   );
 
   const purgeFromTrash = useCallback(
@@ -937,6 +1014,7 @@ export default function App() {
     ) : (
       <LoginView
         onLogin={onLogin}
+        onPairLogin={onPairLogin}
         onShowGuide={() => setShowGuide(true)}
         onCancel={() => setShowLogin(false)}
       />
@@ -1075,6 +1153,7 @@ export default function App() {
         onCreateNote={() => void onCreateNote('')}
         onNewFolderNote={(folder) => void onCreateNote(folder)}
         onDeleteFile={(p) => void onDeleteFile(p)}
+        onSyncNow={() => void doSync()}
         onUpload={() => void doUpload()}
         onDownload={() => void doDownload()}
         onImportObsidian={() => void onImportObsidian()}
@@ -1103,6 +1182,10 @@ export default function App() {
         collapsedDirs={collapsedDirs}
         onToggleDir={toggleDir}
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
+        conflictCount={conflictFiles.length}
+        onOpenConflicts={() => setShowConflict(true)}
+        onAddDevice={() => void showPairCode()}
+        addDeviceBusy={pairBusy}
         vaultSelector={
           <select
             value={activeVaultId ?? ''}
@@ -1122,6 +1205,66 @@ export default function App() {
         }
         onCreateVault={createVault}
       />
+      {pairInfo && (
+        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}>
+          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="添加设备">
+            <h2 className="dlg-title">添加设备</h2>
+            <p className="dlg-desc">
+              在新设备（手机/另一台电脑）的登录页点「已有配对码？免密码快速登录」，
+              填入服务器地址和下面的配对码即可登录。
+            </p>
+            <div className="pair-code">{pairInfo.code}</div>
+            <p className="dlg-desc">⏱ {pairInfo.expiresIn} 秒内有效，仅可使用一次</p>
+            <div className="dlg-actions">
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  void navigator.clipboard?.writeText(pairInfo.code);
+                  toast('配对码已复制', 'ok');
+                }}
+              >
+                复制配对码
+              </button>
+              <button className="btn primary" onClick={() => setPairInfo(null)}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showConflict && conflictFiles.length > 0 && (
+        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowConflict(false)}>
+          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="同步冲突">
+            <h2 className="dlg-title">同步冲突（{conflictFiles.length}）</h2>
+            <p className="dlg-desc">
+              两台设备同时改了同一篇笔记。选择保留哪个版本；两个版本内容不同，建议先打开确认再选。
+            </p>
+            <ul className="trash-list">
+              {conflictFiles.map((copy) => (
+                <li key={copy} className="trash-item conflict-item">
+                  <span className="ti-name" title={copy}>
+                    {originalOf(copy)}
+                  </span>
+                  <button className="btn ghost" onClick={() => void openFile(copy)} title="先看看副本内容">
+                    查看副本
+                  </button>
+                  <button className="btn ghost" onClick={() => void resolveKeepMine(copy)}>
+                    保留我的
+                  </button>
+                  <button className="btn primary" onClick={() => void resolveUseCopy(copy)}>
+                    用副本内容
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="dlg-actions">
+              <button className="btn primary" onClick={() => setShowConflict(false)}>
+                稍后处理
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showTrash && (
         <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowTrash(false)}>
           <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="回收站">

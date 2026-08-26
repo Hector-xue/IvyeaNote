@@ -43,6 +43,8 @@ interface Props {
   onCreateNote(): void;
   onNewFolderNote(folder: string): void;
   onDeleteFile(path: string): void;
+  /** v0.6.1 H7a：立即同步一次（推+拉）；未传时退回 onUpload */
+  onSyncNow?(): void;
   /** 只上传：本地 → 服务器 */
   onUpload(): void;
   /** 只拉取：服务器 → 本机 */
@@ -90,6 +92,12 @@ interface Props {
   onCloseTab?(path: string): void;
   /** v0.5.0 U5：ribbon 动作（预留扩展；当前仅 files） */
   onRibbonAction?(action: 'files'): void;
+  /** v0.6.1 H6: add-device pairing */
+  onAddDevice?(): void;
+  addDeviceBusy?: boolean;
+  /** v0.6.1 H7c：同步冲突待处理 */
+  conflictCount?: number;
+  onOpenConflicts?(): void;
 }
 
 export function MainView(props: Props) {
@@ -147,23 +155,31 @@ export function MainView(props: Props) {
         </div>
 
         <div className="sync-row">
+          {/* v0.6.1 H7a：全自动同步——按钮收敛为一个（点一下=推+拉），平时自动触发 */}
           <button
-            className="btn primary"
-            onClick={props.onUpload}
+            className={`btn primary ${props.syncing ? '' : 'auto-synced'}`}
+            onClick={props.onSyncNow ?? props.onUpload}
             disabled={props.syncing || props.syncDisabled}
-            title={props.syncDisabled ? '云同步需要登录后可用' : '把本地修改推到服务器'}
+            title={
+              props.syncDisabled
+                ? '登录后自动多端同步'
+                : props.syncing
+                  ? '同步中…'
+                  : '已自动同步；点击立即同步一次'
+            }
           >
-            ↑ 上传
+            {props.syncing ? '⟳ 同步中…' : '⟳ 同步'}
           </button>
-          <button
-            className="btn"
-            onClick={props.onDownload}
-            disabled={props.syncing || props.syncDisabled}
-            title={props.syncDisabled ? '云同步需要登录后可用' : '把服务器上的变更拉到本机'}
-          >
-            ↓ 拉取
-          </button>
-          {props.syncing && <span className="syncing-hint">同步中…</span>}
+          {props.lastReport && !props.syncing && (props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (
+            <button className="conflict-entry" onClick={props.onOpenConflicts} title="点击处理冲突">
+              ⚠ {props.conflictCount} 个冲突待处理
+            </button>
+          )}
+          {props.lastReport && !props.syncing && (props.conflictCount ?? 0) === 0 && (
+            <span className="syncing-hint" title={`本次推送 ${props.lastReport.pushed} / 拉取 ${props.lastReport.pulled}`}>
+              已同步 · 刚刚
+            </span>
+          )}
         </div>
         {props.syncDisabled && (
           <div className="login-hint">
@@ -259,6 +275,11 @@ export function MainView(props: Props) {
           {props.onOpenTrash && (
             <button onClick={props.onOpenTrash} title="回收站">
               🗑 回收站{props.trashCount ? `（${props.trashCount}）` : ''}
+            </button>
+          )}
+          {props.hasAccount && props.onAddDevice && (
+            <button onClick={props.onAddDevice} disabled={props.addDeviceBusy} title="在新设备上免密码登录">
+              📱 添加设备
             </button>
           )}
           {props.hasAccount ? (

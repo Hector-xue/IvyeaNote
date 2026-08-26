@@ -55,6 +55,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/sync/changes", s.authed(s.handlePull))
 	mux.Handle("PUT /api/v1/blobs/{hash}", s.authed(s.handleBlobPut))
 	mux.Handle("GET /api/v1/blobs/{hash}", s.authed(s.handleBlobGet))
+	mux.Handle("POST /api/v1/pairing/create", s.authed(s.handlePairCreate))
+	mux.HandleFunc("POST /api/v1/pairing/claim", s.handlePairClaim)
 	mux.Handle("GET /ws", s.authedWS(s.hub.HandleWS))
 	return mux
 }
