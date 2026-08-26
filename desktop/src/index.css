@@ -1515,3 +1515,23 @@ button {
 }
 .tag-chip:hover { border-color: var(--accent); color: var(--accent); }
 .tag-count { color: var(--muted); font-size: 11px; }
+
+
+/* v0.7.1 F8: graph view */
+.graph-card {
+  width: min(720px, 94vw);
+  background: var(--panel, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+}
+.graph-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+.graph-head .dlg-title { margin: 0; flex: 1; }
+.graph-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.graph-svg { width: 100%; background: var(--bg, #fafafa); border: 1px solid var(--border); border-radius: 10px; }
+.graph-edge { stroke: var(--border, #ccc); stroke-width: 1.2; }
+.graph-node circle { fill: var(--accent, #4a8); opacity: 0.85; cursor: pointer; }
+.graph-node:hover circle { opacity: 1; }
+.graph-node text { font-size: 11px; fill: var(--muted, #666); pointer-events: none; }
+.graph-node.virtual circle { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
+.graph-node.current circle { fill: var(--danger, #c44); }

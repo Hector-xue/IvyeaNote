@@ -12,9 +12,11 @@ import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette, type PaletteMode, type CommandItem } from './ui/Palette';
+import { GraphView } from './ui/GraphView';
 import type { SearchDoc } from './lib/searchIndex';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import { buildTagIndex } from './lib/tags';
+import { todayPath, dailyContent, templateFiles, renderTemplate } from './lib/daily';
 import {
   loadState,
   saveState,
@@ -642,6 +644,8 @@ export default function App() {
   const [searchDocs, setSearchDocs] = useState<SearchDoc[]>([]);
   /** v0.7.0 F4: tags panel */
   const [showTagPanel, setShowTagPanel] = useState(false);
+  /** v0.7.1 F8: graph view */
+  const [showGraph, setShowGraph] = useState(false);
   /** hasAccount / onOpenTrash 的稳定布尔（供 commands 依赖） */
   const hasAccountFlag = !!state.account;
   const onOpenTrashFlag = !!vault;
@@ -1046,6 +1050,26 @@ export default function App() {
     setLastReport(null);
   }, []);
 
+  /** v0.7.1 F7: save pasted/dropped image into Attachments/ and return rel path */
+  const onPasteImage = useCallback(
+    async (file: File): Promise<string | null> => {
+      if (!vault) return null;
+      const data = new Uint8Array(await file.arrayBuffer());
+      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      let rel = `Attachments/${stamp}-${file.name.replace(/[\\/]/g, '_')}`;
+      let i = 1;
+      while (await io.exists(vault.localPath ?? '', rel).catch(() => false)) {
+        rel = rel.replace(/(\.[a-z0-9]+)$/i, `-${i}$1`);
+        i++;
+      }
+      await io.writeBinary(vault.localPath ?? '', rel, data);
+      await refreshFiles();
+      void doSync();
+      return rel;
+    },
+    [vault, io, refreshFiles, doSync]
+  );
+
   /** v0.7.0 F3: open or create a wiki link target */
   const onOpenWiki = useCallback(
     async (target: string) => {
@@ -1078,6 +1102,75 @@ export default function App() {
     return { out, back: [...inbound] };
   }, [currentPath, doc, searchDocs]);
 
+  /** v0.7.1 F5: open-or-create today's daily note */
+  const openDailyNote = useCallback(async () => {
+    if (!vault) return;
+    const path = todayPath();
+    try {
+      if (await io.exists(vault.localPath ?? '', path)) {
+        void openFileInTab(path);
+        return;
+      }
+      // 有模板则套用 Templates/日记.md，否则用默认骨架
+      let content = dailyContent();
+      if (templateFiles(files).some((f) => titleOfPath(f) === '日记')) {
+        try {
+          content = renderTemplateSafe(await io.read(vault.localPath ?? '', 'Templates/日记.md'), path);
+        } catch { /* 模板读取失败用默认 */ }
+      }
+      await io.write(vault.localPath ?? '', path, content);
+      await refreshFiles();
+      void openFileInTab(path);
+      void doSync();
+    } catch (e) {
+      toast(`打开日记失败：${errText(e)}`, 'error');
+    }
+  }, [vault, io, files, refreshFiles, openFileInTab, doSync, toast]);
+
+  /** v0.7.1 F5: new note from a template (prompt to pick) */
+  const newFromTemplate = useCallback(async () => {
+    if (!vault) return;
+    const tpls = templateFiles(files);
+    if (tpls.length === 0) {
+      // 首次使用：建模板目录 + 示例模板
+      await io.write(
+        vault.localPath ?? '',
+        'Templates/会议.md',
+        '# {{title}}\n\n- 时间：{{date}} {{time}}\n- 参会：\n\n## 议题\n\n## 结论\n'
+      );
+      await refreshFiles();
+      toast('已创建 Templates/会议.md 示例模板，编辑后即可使用', 'ok');
+      void doSync();
+      return;
+    }
+    const name = await prompt({
+      title: '从模板新建',
+      description: `可用模板：${tpls.map((t) => titleOfPath(t)).join('、')}。输入新笔记名（可含目录）`,
+      placeholder: '例：会议/产品周会',
+      okText: '创建',
+      validate: (v) => (v.trim() ? null : '请输入名称'),
+    });
+    if (!name) return;
+    const clean = name.trim().replace(/\/+$/, '');
+    const rel = clean.endsWith('.md') ? clean : `${clean}.md`;
+    try {
+      const tplPath = tpls.find((t) => titleOfPath(t) === titleOfPath(rel)) ?? tpls[0];
+      const content = renderTemplateSafe(await io.read(vault.localPath ?? '', tplPath), rel);
+      await io.write(vault.localPath ?? '', rel, content);
+      await refreshFiles();
+      void openFileInTab(rel);
+      void doSync();
+    } catch (e) {
+      toast(`创建失败：${errText(e)}`, 'error');
+    }
+  }, [vault, files, io, refreshFiles, openFileInTab, doSync, prompt, toast]);
+
+  /** renderTemplate 包装（title 去后缀） */
+  function renderTemplateSafe(tpl: string, title: string): string {
+    const base = title.replace(/\.md$/i, '').split('/').pop() ?? title;
+    return renderTemplate(tpl, base);
+  }
+
   /** v0.7.0 F2: command registry (Ctrl+P) */
   const commands: CommandItem[] = useMemo(
     () =>
@@ -1085,6 +1178,9 @@ export default function App() {
         { id: 'new-note', label: '新建笔记', run: () => void onCreateNote('') },
         { id: 'new-folder', label: '新建文件夹', run: () => void onCreateFolder('') },
         { id: 'import-obsidian', label: '从 Obsidian 导入', run: () => void onImportObsidian() },
+        { id: 'daily', label: '打开今日笔记', run: () => void openDailyNote() },
+        { id: 'graph', label: '打开图谱视图', run: () => { void openPalettePreload().then(() => setShowGraph(true)); } },
+        { id: 'from-template', label: '从模板新建笔记', run: () => void newFromTemplate() },
         {
           id: 'toggle-theme',
           label: theme === 'light' ? '切换到深色主题' : '切换到浅色主题',
@@ -1093,7 +1189,7 @@ export default function App() {
         hasAccountFlag ? { id: 'add-device', label: '添加设备（配对码）', run: () => void showPairCode() } : null,
         onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void openTrash() } : null,
       ].filter((c): c is CommandItem => c !== null),
-    [onCreateNote, onCreateFolder, onImportObsidian, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, openTrash]
+    [onCreateNote, onCreateFolder, onImportObsidian, openDailyNote, newFromTemplate, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, openTrash]
   );
 
   // ---------- 渲染 ----------
@@ -1300,6 +1396,10 @@ export default function App() {
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
         conflictCount={conflictFiles.length}
         onOpenTags={() => void openTagPanel()}
+        onPasteImage={onPasteImage}
+        onOpenGraph={() => {
+          void openPalettePreload().then(() => setShowGraph(true));
+        }}
         onOpenWiki={(t) => void onOpenWiki(t)}
         wikiOut={wikiLinks.out}
         wikiBack={wikiLinks.back}
@@ -1333,6 +1433,17 @@ export default function App() {
           commands={commands}
           onOpenNote={(p) => void openFileInTab(p)}
           onClose={() => setPaletteMode(null)}
+        />
+      )}
+      {showGraph && (
+        <GraphView
+          docs={searchDocs}
+          currentPath={currentPath}
+          onOpenNote={(p) => {
+            setShowGraph(false);
+            void onOpenWiki(p.replace(/\.md$/i, ''));
+          }}
+          onClose={() => setShowGraph(false)}
         />
       )}
       {showTagPanel && (

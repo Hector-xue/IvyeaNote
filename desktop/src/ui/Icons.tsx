@@ -2,7 +2,7 @@
  * v0.5.0 U5/U6：线性 SVG 图标（wireframe 风，stroke-width 1.6，fill none）。
  * 替代 emoji 图标，对齐 Obsidian 的克制视觉。
  */
-export type IconName = 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search' | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote' | 'code' | 'link' | 'image' | 'eye' | 'edit';
+export type IconName = 'graph' | 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search' | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote' | 'code' | 'link' | 'image' | 'eye' | 'edit';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   folder: <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" />,
@@ -52,6 +52,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M3 3h8l10 10-8 8L3 11V3z" />
       <circle cx="8" cy="8" r="1.5" />
+    </>
+  ),
+  graph: (
+    <>
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="8" r="2.5" />
+      <circle cx="12" cy="18" r="2.5" />
+      <path d="M8 7l7.5 1M7.5 8l3.5 8M16.5 10l-3.5 6" />
     </>
   ),
 };

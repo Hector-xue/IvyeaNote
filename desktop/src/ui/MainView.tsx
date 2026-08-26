@@ -96,6 +96,12 @@ interface Props {
   onAddDevice?(): void;
   /** v0.7.0 F3: wiki links */
   onOpenWiki?(target: string): void;
+  /** v0.7.1 F6: [[ completion candidates */
+  wikiTitles?: { path: string; title: string }[];
+  /** v0.7.1 F7: paste/drop image handler */
+  onPasteImage?(file: File): Promise<string | null>;
+  /** v0.7.1 F8: graph view */
+  onOpenGraph?(): void;
   /** v0.7.0 F4: tags panel */
   onOpenTags?(): void;
   wikiOut?: string[];
@@ -134,6 +140,12 @@ export function MainView(props: Props) {
         {props.onOpenTags && (
           <button className="ribbon-btn" title="标签" aria-label="标签" onClick={props.onOpenTags}>
             <RibbonIcon name="tag" />
+          </button>
+        )}
+
+        {props.onOpenGraph && (
+          <button className="ribbon-btn" title="图谱" aria-label="图谱" onClick={props.onOpenGraph}>
+            <RibbonIcon name="graph" />
           </button>
         )}
         <span className="ribbon-spacer" />
@@ -340,6 +352,9 @@ export function MainView(props: Props) {
             theme={props.theme}
             onInsertImage={props.onInsertImage}
             resolveImage={props.resolveImage}
+            onOpenWiki={props.onOpenWiki}
+            wikiTitles={props.wikiTitles}
+            onPasteImage={props.onPasteImage}
           />
         )}
         {/* v0.7.0 F3: wiki links panel */}

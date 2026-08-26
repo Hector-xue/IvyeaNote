@@ -30,6 +30,8 @@ import {
   type EditResult,
 } from '../lib/format';
 import { livePreview, livePreviewTheme } from '../lib/livePreview';
+import { autocompletion } from '@codemirror/autocomplete';
+import { wikiCompletion } from '../lib/wikiComplete';
 import { renderWikiLinks } from '../lib/wikilink';
 
 export interface MarkdownEditorProps {
@@ -45,9 +47,17 @@ export interface MarkdownEditorProps {
   resolveImage?: (rel: string) => Promise<string | null>;
   /** v0.7.0 F3：双链——点击 [[目标]] 的回调（App 负责查找/创建并跳转） */
   onOpenWiki?: (target: string) => void;
+  /** v0.7.1 F6：[[ 补全候选（全部笔记标题） */
+  wikiTitles?: { path: string; title: string }[];
+  /** v0.7.1 F7：粘贴/拖拽图片落盘，返回要插入的相对路径 */
+  onPasteImage?: (file: File) => Promise<string | null>;
 }
 
-function cmExtensions(onEdit: (text: string) => void, dark: boolean): Extension[] {
+function cmExtensions(
+  onEdit: (text: string) => void,
+  dark: boolean,
+  getTitles?: () => { path: string; title: string }[]
+): Extension[] {
   return [
     // v0.5.0 U1：Live Preview——默认隐藏行号（Obsidian 风格），装饰渲染见 livePreview.ts
     EditorView.theme({ '.cm-gutters': { display: 'none' } }),
@@ -61,6 +71,7 @@ function cmExtensions(onEdit: (text: string) => void, dark: boolean): Extension[
     ...(dark ? [oneDark] : [syntaxHighlighting(defaultHighlightStyle, { fallback: true })]),
     highlightSelectionMatches(),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
+    ...(getTitles ? [autocompletion({ override: [wikiCompletion(getTitles)] })] : []),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) onEdit(u.state.doc.toString());
     }),
@@ -105,7 +116,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (!host) return;
     const view = new EditorView({
       parent: host,
-      state: EditorState.create({ doc: '', extensions: cmExtensions(() => undefined, props.theme === 'dark') }),
+      state: EditorState.create({ doc: '', extensions: cmExtensions(() => undefined, props.theme === 'dark', () => props.wikiTitles ?? []) }),
     });
     viewRef.current = view;
     return () => {
@@ -122,7 +133,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     view.setState(
       EditorState.create({
         doc: props.doc ?? '',
-        extensions: cmExtensions(props.onEdit.bind(null, props.currentPath ?? ''), props.theme === 'dark'),
+        extensions: cmExtensions(props.onEdit.bind(null, props.currentPath ?? ''), props.theme === 'dark', () => props.wikiTitles ?? []),
       })
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,6 +174,22 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       cancelled = true;
     };
   }, [mode, props.doc, props.resolveImage]);
+
+  /** v0.7.1 F7：粘贴/拖入图片 → 落盘 Attachments/ → 在光标处插入引用 */
+  const insertDroppedImage = async (file: File, insertAt?: number) => {
+    if (!props.onPasteImage || !file.type.startsWith('image/')) return;
+    const view = viewRef.current;
+    try {
+      const rel = await props.onPasteImage(file);
+      if (!rel || !view) return;
+      const pos = insertAt ?? view.state.selection.main.from;
+      const text = `![](${rel})`;
+      view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
+      view.focus();
+    } catch {
+      // 静默：粘贴普通文本不受影响
+    }
+  };
 
   /** 对编辑器当前选区应用格式命令 */
   const applyFormat = (btn: ToolBtn) => {
@@ -246,7 +273,28 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   return (
     <div className={`md-editor ${props.mobile ? 'md-editor-mobile' : ''}`}>
       {!props.mobile && toolbar}
-      <div className="md-body">
+      <div
+        className="md-body"
+        onPaste={(e) => {
+          const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'));
+          if (item) {
+            const f = item.getAsFile();
+            if (f) {
+              e.preventDefault();
+              void insertDroppedImage(f);
+            }
+          }
+        }}
+        onDrop={(e) => {
+          const f = Array.from(e.dataTransfer?.files ?? []).find((i) => i.type.startsWith('image/'));
+          if (f) {
+            e.preventDefault();
+            const view = viewRef.current;
+            const pos = view?.posAtCoords({ x: e.clientX, y: e.clientY }) ?? undefined;
+            void insertDroppedImage(f, pos);
+          }
+        }}
+      >
         <div className="editor-host" ref={hostRef} style={{ display: mode === 'edit' ? undefined : 'none' }} />
         {mode === 'read' && <div className="md-preview" ref={previewRef} />}
       </div>

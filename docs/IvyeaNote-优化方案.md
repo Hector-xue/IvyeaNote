@@ -141,6 +141,14 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 
 ### 阶段 2：知识网络 —— v0.5
 
+> **实施记录（2026-08-26，v0.7.1 第四批·知识网络收口）**：阶段 2 剩余项全部落地——
+> - **F5 模板+日记**：lib/daily.ts（`日记/YYYY-MM-DD.md` 一键开/建、`{{date}}/{{time}}/{{title}}` 占位替换、Templates/ 目录）；命令面板「打开今日笔记」「从模板新建」（首次自动建示例模板）；日记可套用 Templates/日记.md。
+> - **F6 [[补全]]**：CodeMirror autocompletion，输入 `[[` 弹全库标题候选，选中插入完整链接。
+> - **F7 粘贴/拖拽图片**：编辑器 paste/drop 图片 → 自动存 `Attachments/日期-文件名`（重名序号）→ 光标处插入引用，随 blob 通道同步。
+> - **F8 图谱视图**：lib/graph.ts 纯 SVG 力导向（无 d3 依赖，斥力+弹簧+中心引力 150 轮）；全局/当前笔记一跳切换；虚拟节点（未创建目标）虚线显示；点击节点跳转；ribbon 图谱入口 + 命令面板。
+>
+> 至此阶段 2「知识网络」全部完成。门禁：tsc OK / oxlint 0 error / vitest 120/120 / build OK；go build + vet OK。
+
 > **实施记录（2026-08-26，v0.7.0 第三批·管理与知识网络）**：
 > - **H8 管理页**：Store 新增 ListUsers/DeleteUser（级联）/UserBlobBytes 双后端实现；`/api/v1/admin/users` 列表+删除（requireAdmin 鉴权、管理员保护）；`/admin` 页面（token 即用）。端到端验证：容量统计/非管理员 403/级联删除/管理员保护全过。
 > - **H8b 备份**：install-bare.sh 支持 IVNOTE_ENABLE_BACKUP=1，每日 03:00 备份 SQLite 保留 14 份。
