@@ -328,3 +328,52 @@ func (t *PGTx) BlobExists(ctx context.Context, hash string, userID int64) (bool,
 
 func (t *PGTx) Commit() error   { return t.tx.Commit(context.Background()) }
 func (t *PGTx) Rollback() error { return t.tx.Rollback(context.Background()) }
+
+// ---------- H8：用户管理 ----------
+
+func (s *PGStore) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, email, password_hash FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *PGStore) DeleteUser(ctx context.Context, userID int64) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// 逐表删除（无 ON DELETE CASCADE，按依赖顺序）
+	for _, stmt := range []string{
+		`DELETE FROM changes WHERE vault_id IN (SELECT id FROM vaults WHERE user_id=$1)`,
+		`DELETE FROM heads WHERE vault_id IN (SELECT id FROM vaults WHERE user_id=$1)`,
+		`DELETE FROM vaults WHERE user_id=$1`,
+		`DELETE FROM blobs WHERE user_id=$1`,
+		`DELETE FROM devices WHERE user_id=$1`,
+		`DELETE FROM refresh_tokens WHERE user_id=$1`,
+		`DELETE FROM users WHERE id=$1`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, userID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *PGStore) UserBlobBytes(ctx context.Context, userID int64) (int64, error) {
+	var n int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(size),0) FROM blobs WHERE user_id=$1`, userID).Scan(&n)
+	return n, err
+}

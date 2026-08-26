@@ -123,9 +123,13 @@ func main() {
 	}
 
 	openReg := getbool("IVNOTE_OPEN_REGISTRATION", false)
-	srv := api.New(st, auth.NewManager(secret), api.NewHub(), openReg)
+	srv := api.New(st, auth.NewManager(secret), api.NewHub(), openReg, adminEmail)
 	if openReg {
 		log.Printf("公开注册已开启 (IVNOTE_OPEN_REGISTRATION=true)")
+	}
+
+	if getbool("IVNOTE_DISCOVERY", true) {
+		go StartDiscoveryListener(strings.TrimPrefix(listen, ":"))
 	}
 
 	httpSrv := &http.Server{

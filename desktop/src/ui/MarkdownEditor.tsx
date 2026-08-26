@@ -30,6 +30,7 @@ import {
   type EditResult,
 } from '../lib/format';
 import { livePreview, livePreviewTheme } from '../lib/livePreview';
+import { renderWikiLinks } from '../lib/wikilink';
 
 export interface MarkdownEditorProps {
   doc: string;
@@ -42,6 +43,8 @@ export interface MarkdownEditorProps {
   onInsertImage?: () => Promise<string | null>;
   /** 阅读模式图片解析：相对路径 → 可显示的 URL */
   resolveImage?: (rel: string) => Promise<string | null>;
+  /** v0.7.0 F3：双链——点击 [[目标]] 的回调（App 负责查找/创建并跳转） */
+  onOpenWiki?: (target: string) => void;
 }
 
 function cmExtensions(onEdit: (text: string) => void, dark: boolean): Extension[] {
@@ -130,7 +133,17 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (mode !== 'read') return;
     const el = previewRef.current;
     if (!el) return;
-    el.innerHTML = renderMarkdown(props.doc ?? '');
+    let html = renderMarkdown(props.doc ?? '');
+    html = renderWikiLinks(html, (t) => `#/wiki/${encodeURIComponent(t)}`);
+    el.innerHTML = html;
+    // 双链点击（事件委托）
+    el.querySelectorAll('a.wikilink').forEach((a) => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const t = (a as HTMLElement).dataset.target;
+        if (t) props.onOpenWiki?.(t);
+      });
+    });
     if (!props.resolveImage) return;
     let cancelled = false;
     const imgs = Array.from(el.querySelectorAll('img'));

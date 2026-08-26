@@ -2,7 +2,7 @@
  * v0.5.0 U5/U6：线性 SVG 图标（wireframe 风，stroke-width 1.6，fill none）。
  * 替代 emoji 图标，对齐 Obsidian 的克制视觉。
  */
-export type IconName = 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search' | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote' | 'code' | 'link' | 'image' | 'eye' | 'edit';
+export type IconName = 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search' | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote' | 'code' | 'link' | 'image' | 'eye' | 'edit';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   folder: <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" />,
@@ -48,6 +48,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   edit: <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3zM14 6l3 3" />,
+  tag: (
+    <>
+      <path d="M3 3h8l10 10-8 8L3 11V3z" />
+      <circle cx="8" cy="8" r="1.5" />
+    </>
+  ),
 };
 
 export function RibbonIcon({ name, size = 18 }: { name: IconName; size?: number }) {

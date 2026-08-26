@@ -126,3 +126,16 @@ echo ""
 echo "✅ 安装完成！"
 echo "   服务状态: systemctl status $SERVICE_NAME"
 echo "   📄 账号文件: $TARGET/IvyeaNote-账号.txt"
+
+# ---------- 6) 可选：每日备份 cron（IVNOTE_ENABLE_BACKUP=1 开启） ----------
+if [[ "${IVNOTE_ENABLE_BACKUP:-0}" == "1" ]]; then
+  echo "⑤ 配置每日备份…"
+  BACKUP_DIR="/opt/ivyea-note/backups"
+  mkdir -p "$BACKUP_DIR"
+  cat > /etc/cron.d/ivnote-backup <<CRON
+# Ivyea Note 每日 03:00 备份（保留 14 份）
+0 3 * * * root cp "$DATA_DIR/ivnote.db" "$BACKUP_DIR/ivnote-\$(date +\%Y\%m\%d).db" && ls -t "$BACKUP_DIR"/ivnote-*.db | tail -n +15 | xargs -r rm -f
+CRON
+  chmod 644 /etc/cron.d/ivnote-backup
+  echo "   每日 03:00 备份到 $BACKUP_DIR（保留 14 天）"
+fi

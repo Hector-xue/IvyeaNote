@@ -409,3 +409,59 @@ func (t *SQLiteTx) Rollback() error {
 	t.store.mu.Unlock()
 	return err
 }
+
+// ---------- H8：用户管理 ----------
+
+func (s *SQLiteStore) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, email, password_hash FROM users ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []User{}
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) DeleteUser(ctx context.Context, userID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	done := false
+	defer func() {
+		if !done {
+			_ = tx.Rollback()
+		}
+	}()
+	for _, stmt := range []string{
+		`DELETE FROM changes WHERE vault_id IN (SELECT id FROM vaults WHERE user_id=?)`,
+		`DELETE FROM heads WHERE vault_id IN (SELECT id FROM vaults WHERE user_id=?)`,
+		`DELETE FROM vaults WHERE user_id=?`,
+		`DELETE FROM blobs WHERE user_id=?`,
+		`DELETE FROM devices WHERE user_id=?`,
+		`DELETE FROM refresh_tokens WHERE user_id=?`,
+		`DELETE FROM users WHERE id=?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, userID); err != nil {
+			return err
+		}
+	}
+	done = true
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) UserBlobBytes(ctx context.Context, userID int64) (int64, error) {
+	var n int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(size),0) FROM blobs WHERE user_id=?`, userID).Scan(&n)
+	return n, err
+}

@@ -93,6 +93,13 @@ type Store interface {
 	GetBlob(ctx context.Context, hash string, userID int64) ([]byte, error)
 	BlobExists(ctx context.Context, hash string, userID int64) (bool, error)
 
+	// ---------- 用户管理 (v0.7.0 H8) ----------
+	ListUsers(ctx context.Context) ([]User, error)
+	// DeleteUser cascades: vaults/changes/heads/blobs/devices/tokens/account
+	DeleteUser(ctx context.Context, userID int64) error
+	// UserBlobBytes: total blob bytes owned by user
+	UserBlobBytes(ctx context.Context, userID int64) (int64, error)
+
 	// ---------- 同步（heads + changes） ----------
 	// BeginTx 开启事务；返回的 Tx 传给 Sync 方法族。
 	BeginTx(ctx context.Context) (Tx, error)

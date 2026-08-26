@@ -7,7 +7,7 @@ import (
 )
 
 // serverVersion 随发版更新，状态页展示用。
-const serverVersion = "0.6.1"
+const serverVersion = "0.7.0"
 
 func (s *Server) handleStatusPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

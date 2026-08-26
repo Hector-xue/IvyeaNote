@@ -1,11 +1,14 @@
-// Ivyea Note 应用入口（lib 形式：桌面 binary 与 Android/iOS 共用）。
-// 业务逻辑（同步、编辑）全部在前端 WebView 里，Rust 侧保持最薄。
+// v0.7.0 H9: LAN discovery (Rust side).
+pub mod discover;
+pub use discover::discover_servers;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![discover_servers])
         .run(tauri::generate_context!())
-        .expect("Ivyea Note 启动失败");
+        .expect("error while running tauri application");
 }

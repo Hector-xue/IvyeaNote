@@ -11,6 +11,10 @@ import { syncVault, pushOnly, pullOnly, type FileIO, type FileMeta, type SyncRep
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
+import { Palette, type PaletteMode, type CommandItem } from './ui/Palette';
+import type { SearchDoc } from './lib/searchIndex';
+import { extractLinks, titleOfPath } from './lib/wikilink';
+import { buildTagIndex } from './lib/tags';
 import {
   loadState,
   saveState,
@@ -633,6 +637,68 @@ export default function App() {
   /** v0.6.1 H6: add-device pairing code dialog */
   const [pairInfo, setPairInfo] = useState<{ code: string; expiresIn: number } | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
+  /** v0.7.0 F1/F2: universal palette (search / switcher / commands) */
+  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
+  const [searchDocs, setSearchDocs] = useState<SearchDoc[]>([]);
+  /** v0.7.0 F4: tags panel */
+  const [showTagPanel, setShowTagPanel] = useState(false);
+  /** hasAccount / onOpenTrash 的稳定布尔（供 commands 依赖） */
+  const hasAccountFlag = !!state.account;
+  const onOpenTrashFlag = !!vault;
+
+  /** open palette; lazily load all note contents for the in-memory index */
+  /** preload all note contents into the in-memory index */
+  const openPalettePreload = useCallback(async () => {
+    if (!vault || searchDocs.length > 0 || files.length === 0) return;
+    try {
+      const docs: SearchDoc[] = [];
+      for (const path of files) {
+        try {
+          docs.push({ path, content: await io.read(vault.localPath ?? '', path) });
+        } catch {
+          // skip unreadable file
+        }
+      }
+      setSearchDocs(docs);
+    } catch {
+      // degrade silently
+    }
+  }, [vault, io, files, searchDocs.length]);
+
+  const openPalette = useCallback(
+    async (mode: PaletteMode) => {
+      if (!vault) return;
+      await openPalettePreload();
+      setPaletteMode(mode);
+    },
+    [vault, openPalettePreload]
+  );
+
+  /** v0.7.0 F4: open tags panel (preloads docs) */
+  const openTagPanel = useCallback(async () => {
+    await openPalettePreload();
+    setShowTagPanel(true);
+  }, [openPalettePreload]);
+
+  /** global shortcuts: Ctrl+K search / Ctrl+O switcher / Ctrl+P commands */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'k') {
+        e.preventDefault();
+        void openPalette('search');
+      } else if (k === 'o') {
+        e.preventDefault();
+        void openPalette('switcher');
+      } else if (k === 'p') {
+        e.preventDefault();
+        void openPalette('commands');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [openPalette]);
   const showPairCode = useCallback(async () => {
     if (!client) return;
     setPairBusy(true);
@@ -980,6 +1046,56 @@ export default function App() {
     setLastReport(null);
   }, []);
 
+  /** v0.7.0 F3: open or create a wiki link target */
+  const onOpenWiki = useCallback(
+    async (target: string) => {
+      if (!vault) return;
+      const existing = files.find((f) => titleOfPath(f) === target);
+      if (existing) {
+        void openFileInTab(existing);
+        return;
+      }
+      await io.write(vault.localPath ?? '', `${target}.md`, `# ${target}\n\n`);
+      await refreshFiles();
+      void openFileInTab(`${target}.md`);
+      void doSync();
+      toast(`已创建：${target}`, 'ok');
+    },
+    [vault, files, io, refreshFiles, openFileInTab, doSync, toast]
+  );
+
+  /** v0.7.0 F3: outbound links of current note + inbound links (from cached docs) */
+  const wikiLinks = useMemo(() => {
+    if (!currentPath || !doc) return { out: [] as string[], back: [] as string[] };
+    const out = extractLinks(doc);
+    const inbound = new Set<string>();
+    for (const d of searchDocs) {
+      if (d.path === currentPath) continue;
+      if (extractLinks(d.content).some((t) => t === titleOfPath(currentPath))) {
+        inbound.add(d.path);
+      }
+    }
+    return { out, back: [...inbound] };
+  }, [currentPath, doc, searchDocs]);
+
+  /** v0.7.0 F2: command registry (Ctrl+P) */
+  const commands: CommandItem[] = useMemo(
+    () =>
+      [
+        { id: 'new-note', label: '新建笔记', run: () => void onCreateNote('') },
+        { id: 'new-folder', label: '新建文件夹', run: () => void onCreateFolder('') },
+        { id: 'import-obsidian', label: '从 Obsidian 导入', run: () => void onImportObsidian() },
+        {
+          id: 'toggle-theme',
+          label: theme === 'light' ? '切换到深色主题' : '切换到浅色主题',
+          run: () => setTheme(theme === 'light' ? 'dark' : 'light'),
+        },
+        hasAccountFlag ? { id: 'add-device', label: '添加设备（配对码）', run: () => void showPairCode() } : null,
+        onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void openTrash() } : null,
+      ].filter((c): c is CommandItem => c !== null),
+    [onCreateNote, onCreateFolder, onImportObsidian, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, openTrash]
+  );
+
   // ---------- 渲染 ----------
 
   if (!state.account && showWelcome) {
@@ -1183,6 +1299,11 @@ export default function App() {
         onToggleDir={toggleDir}
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
         conflictCount={conflictFiles.length}
+        onOpenTags={() => void openTagPanel()}
+        onOpenWiki={(t) => void onOpenWiki(t)}
+        wikiOut={wikiLinks.out}
+        wikiBack={wikiLinks.back}
+        onOpenWikiPath={(p) => void openFileInTab(p)}
         onOpenConflicts={() => setShowConflict(true)}
         onAddDevice={() => void showPairCode()}
         addDeviceBusy={pairBusy}
@@ -1205,6 +1326,58 @@ export default function App() {
         }
         onCreateVault={createVault}
       />
+      {paletteMode && (
+        <Palette
+          mode={paletteMode}
+          docs={searchDocs}
+          commands={commands}
+          onOpenNote={(p) => void openFileInTab(p)}
+          onClose={() => setPaletteMode(null)}
+        />
+      )}
+      {showTagPanel && (
+        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowTagPanel(false)}>
+          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="tags">
+            <h2 className="dlg-title">{'\u6807\u7b7e'}</h2>
+            {(() => {
+              const idx = buildTagIndex(searchDocs);
+              if (idx.size === 0)
+                return <p className="dlg-desc">{'\u8fd8\u6ca1\u6709\u6807\u7b7e\u3002\u5728\u7b14\u8bb0\u91cc\u5199 #\u6807\u7b7e \u5373\u53ef\u3002'}</p>;
+              return (
+                <div className="tag-cloud">
+                  {[...idx.entries()]
+                    .sort((a, b) => b[1].length - a[1].length)
+                    .map(([tag, paths]) => (
+                      <button
+                        key={tag}
+                        className="tag-chip"
+                        onClick={() => {
+                          setShowTagPanel(false);
+                          void openPalette('search');
+                          window.setTimeout(() => {
+                            const input = document.querySelector<HTMLInputElement>('.palette-input');
+                            if (input) {
+                              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                              setter?.call(input, '#' + tag);
+                              input.dispatchEvent(new Event('input', { bubbles: true }));
+                            }
+                          }, 80);
+                        }}
+                      >
+                        #{tag} <span className="tag-count">{paths.length}</span>
+                      </button>
+                    ))}
+                </div>
+              );
+            })()}
+            <div className="dlg-actions">
+              <button className="btn primary" onClick={() => setShowTagPanel(false)}>
+                {'\u5173\u95ed'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {pairInfo && (
         <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}>
           <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="添加设备">

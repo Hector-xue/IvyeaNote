@@ -94,6 +94,13 @@ interface Props {
   onRibbonAction?(action: 'files'): void;
   /** v0.6.1 H6: add-device pairing */
   onAddDevice?(): void;
+  /** v0.7.0 F3: wiki links */
+  onOpenWiki?(target: string): void;
+  /** v0.7.0 F4: tags panel */
+  onOpenTags?(): void;
+  wikiOut?: string[];
+  wikiBack?: string[];
+  onOpenWikiPath?(path: string): void;
   addDeviceBusy?: boolean;
   /** v0.6.1 H7c：同步冲突待处理 */
   conflictCount?: number;
@@ -122,6 +129,11 @@ export function MainView(props: Props) {
         {props.onOpenTrash && (
           <button className="ribbon-btn" title="回收站" aria-label="回收站" onClick={props.onOpenTrash}>
             <RibbonIcon name="trash" />
+          </button>
+        )}
+        {props.onOpenTags && (
+          <button className="ribbon-btn" title="标签" aria-label="标签" onClick={props.onOpenTags}>
+            <RibbonIcon name="tag" />
           </button>
         )}
         <span className="ribbon-spacer" />
@@ -330,6 +342,31 @@ export function MainView(props: Props) {
             resolveImage={props.resolveImage}
           />
         )}
+        {/* v0.7.0 F3: wiki links panel */}
+        {(props.wikiOut?.length ?? 0) > 0 || (props.wikiBack?.length ?? 0) > 0 ? (
+          <div className="wiki-panel">
+            {(props.wikiOut?.length ?? 0) > 0 && (
+              <div className="wp-row">
+                <span className="wp-label">{'\u51fa\u94fe'}</span>
+                {props.wikiOut!.map((t) => (
+                  <button key={t} className="wp-link" onClick={() => props.onOpenWiki?.(t)}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
+            {(props.wikiBack?.length ?? 0) > 0 && (
+              <div className="wp-row">
+                <span className="wp-label">{'\u5165\u94fe'}</span>
+                {props.wikiBack!.map((p) => (
+                  <button key={p} className="wp-link" onClick={() => props.onOpenWikiPath?.(p)}>
+                    {p.split('/').pop()?.replace(/\.(md|markdown)$/i, '')}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
         {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
         <div className="status-bar">
           <span>{props.currentPath ?? '未选择笔记'}</span>

@@ -28,10 +28,11 @@ type Server struct {
 	hub              *Hub
 	log              *log.Logger
 	openRegistration bool // 是否开放公开注册（自托管默认关闭）
+	adminEmail       string // 管理员账号（H8 管理接口鉴权用）
 }
 
-func New(st store.Store, jwtMgr *auth.Manager, hub *Hub, openRegistration bool) *Server {
-	return &Server{st: st, jwt: jwtMgr, hub: hub, log: log.Default(), openRegistration: openRegistration}
+func New(st store.Store, jwtMgr *auth.Manager, hub *Hub, openRegistration bool, adminEmail string) *Server {
+	return &Server{st: st, jwt: jwtMgr, hub: hub, log: log.Default(), openRegistration: openRegistration, adminEmail: adminEmail}
 }
 
 // Routes 注册全部路由（Go 1.22+ 方法模式）。
@@ -41,6 +42,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /{$}", s.handleStatusPage)
+	mux.HandleFunc("GET /admin", s.handleAdminPage)
 	mux.HandleFunc("GET /app", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/app/", http.StatusMovedPermanently)
 	})
@@ -55,6 +57,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/sync/changes", s.authed(s.handlePull))
 	mux.Handle("PUT /api/v1/blobs/{hash}", s.authed(s.handleBlobPut))
 	mux.Handle("GET /api/v1/blobs/{hash}", s.authed(s.handleBlobGet))
+	mux.Handle("GET /api/v1/admin/users", s.requireAdmin(s.handleAdminUsers))
+	mux.Handle("DELETE /api/v1/admin/users/{id}", s.requireAdmin(s.handleAdminDeleteUser))
 	mux.Handle("POST /api/v1/pairing/create", s.authed(s.handlePairCreate))
 	mux.HandleFunc("POST /api/v1/pairing/claim", s.handlePairClaim)
 	mux.Handle("GET /ws", s.authedWS(s.hub.HandleWS))

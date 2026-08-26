@@ -141,6 +141,18 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 
 ### 阶段 2：知识网络 —— v0.5
 
+> **实施记录（2026-08-26，v0.7.0 第三批·管理与知识网络）**：
+> - **H8 管理页**：Store 新增 ListUsers/DeleteUser（级联）/UserBlobBytes 双后端实现；`/api/v1/admin/users` 列表+删除（requireAdmin 鉴权、管理员保护）；`/admin` 页面（token 即用）。端到端验证：容量统计/非管理员 403/级联删除/管理员保护全过。
+> - **H8b 备份**：install-bare.sh 支持 IVNOTE_ENABLE_BACKUP=1，每日 03:00 备份 SQLite 保留 14 份。
+> - **H9 局域网发现**：服务端 UDP :9999 应答 IVYEA-DISCOVER（IP+端口）；Rust `discover_servers` command + 客户端 discover.ts（浏览器静默降级）。
+> - **W1 Windows 免 Docker**：deploy/ivnote-win-setup.ps1——SQLite exe 首次运行向导 + 可选开机自启计划任务。
+> - **F1 全库搜索**：lib/searchIndex.ts 内存索引（标题加权/多词 AND/"短语"/path: 过滤/命中行预览）。
+> - **F2 万能面板**：ui/Palette.tsx——Ctrl+K 搜索 / Ctrl+O 快速切换 / Ctrl+P 命令面板三合一，键盘导航。
+> - **F3 双链**：lib/wikilink.ts 出链/反链/阅读模式渲染；点击跳转、目标不存在自动创建；编辑区底部出链/入链面板。
+> - **F4 标签**：lib/tags.ts 正文 #标签 + frontmatter tags 双解析；ribbon 标签云面板（按使用排序，点击转搜索）。
+>
+> 门禁：前端 tsc OK / oxlint 0 error / vitest 113/113 / build OK；服务端 go build + vet OK + H8 端到端验证。
+
 **目标：反链 + 图谱 + 附件（GPT 路线 V0.2），从"记事本"变"知识库"。**
 
 | 任务 | 说明 |
