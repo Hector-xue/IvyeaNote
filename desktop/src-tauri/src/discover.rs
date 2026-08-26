@@ -33,11 +33,17 @@ pub async fn discover_servers(timeout_ms: u64) -> Result<Vec<DiscoveredServer>, 
             Ok((n, addr)) => {
                 if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&buf[..n]) {
                     if v.get("service").and_then(|s| s.as_str()) == Some("ivyea-note") {
-                        let port = v
+                        let port = match v
                             .get("port")
                             .and_then(|p| p.as_str())
-                            .or_else(|| v.get("port").and_then(|p| p.as_i64()).map(|p| p.to_string()))
-                            .unwrap_or_else(|| "8080".into());
+                        {
+                            Some(s) => s.to_string(),
+                            None => v
+                                .get("port")
+                                .and_then(|p| p.as_i64())
+                                .map(|p| p.to_string())
+                                .unwrap_or_else(|| "8080".to_string()),
+                        };
                         let ips: Vec<String> = v
                             .get("ips")
                             .and_then(|i| i.as_array())

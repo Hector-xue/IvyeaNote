@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Ivyea Note",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "identifier": "com.ivyea.note",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,6 +26,15 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/icon.png", "icons/icon.ico"]
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQyMEVGMDdCMDhBN0FGREMKUldUY3I2Y0llL0FPMHZhT2JsbVFDU1RCMDJpMHdlczlYc0RvczI4aWN6OHVla0htUVpYQTB3bnkK",
+      "endpoints": [
+        "https://github.com/Hector-xue/IvyeaNote/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

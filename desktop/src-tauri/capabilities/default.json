@@ -18,6 +18,8 @@
       "allow": [{ "path": "$HOME/**" }, { "path": "/**" }]
     },
     "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

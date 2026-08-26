@@ -4,6 +4,8 @@ import { SetupGuide } from './ui/SetupGuide';
 import { MainView, type SortMode } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
+// v0.7.2：应用内更新
+import { checkForUpdate, installUpdate, openReleasePage, type UpdateInfo } from './lib/updater';
 import { useToast } from './ui/Toast';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
@@ -98,6 +100,92 @@ export default function App() {
   const { toast, toastEl } = useToast();
   /** 编辑防抖计时器：替代旧的「函数对象挂属性」写法（重构即坏、类型不安全） */
   const saveTimer = useRef<number | undefined>(undefined);
+
+  // ---- v0.7.2：应用内更新 ----
+  /** 当前版本：构建时由 vite define 注入（取自 tauri.conf.json），兜底 0.0.0 */
+  const appVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0';
+  const [pendingUpdate, setPendingUpdate] = useState<UpdateInfo | null>(null);
+  const [updating, setUpdating] = useState(false);
+  void updating; // 预留：后续接入下载进度 UI
+  /** 手动「检查更新」时置 true，用于区分静默检查（无更新不提示） */
+  const manualCheckRef = useRef(false);
+  /** 是否移动端（Android）：更新走跳转下载而非应用内安装 */
+  const isMobileDevice = /android|iphone|ipad/i.test(navigator.userAgent);
+
+  /** 检查更新并弹 Dialog；silent=true 时无更新不打扰 */
+  const runUpdateCheck = useCallback(
+    async (silent: boolean) => {
+      manualCheckRef.current = !silent;
+      try {
+        const info = await checkForUpdate(appVersion);
+        const dismissed = localStorage.getItem('ivnote.update.dismissed');
+        if (info && !(silent && info.version === dismissed)) {
+          setPendingUpdate(info);
+        } else if (!silent) {
+          toast(`已是最新版本（v${appVersion}）`, 'ok');
+        }
+      } catch {
+        if (!silent) toast('检查更新失败，请稍后重试或到 GitHub Releases 查看', 'error');
+      }
+    },
+    [appVersion, toast]
+  );
+
+  // 启动后延迟 3 秒静默检查一次（避免抢启动带宽/焦点）
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return;
+    const t = window.setTimeout(() => void runUpdateCheck(true), 3000);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 发现新版本时弹确认框（用户点「忽略此版本」后，同版本静默检查不再打扰）
+  useEffect(() => {
+    if (!pendingUpdate) return;
+    void (async () => {
+      const ok = await confirm({
+        title: `发现新版本 v${pendingUpdate.version}`,
+        description: isMobileDevice
+          ? `当前版本 v${appVersion}。安卓端请在浏览器中下载新 APK 安装。`
+          : `当前版本 v${appVersion}。更新将自动下载并重启应用。`,
+        okText: isMobileDevice ? '前往下载' : '立即更新',
+        cancelText: '忽略此版本',
+      });
+      if (ok) {
+        dismissUpdate();
+        await applyUpdate();
+      } else {
+        dismissUpdate();
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingUpdate]);
+
+  /** 确认更新：桌面走 updater 插件下载安装重启；Android 跳 Release 页 */
+  const applyUpdate = useCallback(async () => {
+    if (!pendingUpdate) return;
+    if (isMobileDevice) {
+      await openReleasePage();
+      return;
+    }
+    setUpdating(true);
+    try {
+      toast('正在下载更新…', 'ok');
+      await installUpdate();
+      // installUpdate 内部会 relaunch，正常不会走到这里
+    } catch {
+      setUpdating(false);
+      toast('更新失败，可到 GitHub Releases 手动下载', 'error');
+    }
+  }, [pendingUpdate, isMobileDevice, toast]);
+
+  /** 忽略此版本（记 localStorage，之后不再自动提示） */
+  const dismissUpdate = useCallback(() => {
+    if (pendingUpdate) {
+      localStorage.setItem('ivnote.update.dismissed', pendingUpdate.version);
+    }
+    setPendingUpdate(null);
+  }, [pendingUpdate]);
 
   const persist = useCallback((next: PersistState) => {
     stateRef.current = next;
@@ -1188,8 +1276,10 @@ export default function App() {
         },
         hasAccountFlag ? { id: 'add-device', label: '添加设备（配对码）', run: () => void showPairCode() } : null,
         onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void openTrash() } : null,
+        // v0.7.2：应用内更新入口（手动检查）
+        { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: () => void runUpdateCheck(false) },
       ].filter((c): c is CommandItem => c !== null),
-    [onCreateNote, onCreateFolder, onImportObsidian, openDailyNote, newFromTemplate, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, openTrash]
+    [onCreateNote, onCreateFolder, onImportObsidian, openDailyNote, newFromTemplate, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, openTrash, appVersion, runUpdateCheck]
   );
 
   // ---------- 渲染 ----------

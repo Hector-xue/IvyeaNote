@@ -33,6 +33,12 @@ jobs:
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      # v0.7.2：Rust 编译门禁 —— 打包前先 cargo check，类型错误几分钟内暴露
+      # （v0.7.0/0.7.1 的 discover.rs E0308 就是漏到这里才炸的）
+      - name: Rust 编译门禁（cargo check）
+        working-directory: desktop/src-tauri
+        run: cargo check --locked 2>/dev/null || cargo check
+
       - name: Linux 编译依赖（webkit2gtk 等）
         if: matrix.os == 'ubuntu-22.04'
         run: |
@@ -59,6 +65,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # v0.7.2：应用内更新 —— updater 产物（.sig 签名 + latest.json）必需
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: desktop
           args: ${{ matrix.args }}
@@ -216,3 +225,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/apk-out/*.apk
+
+# 说明：latest.json（应用内更新清单）由 tauri-action 在 build 矩阵里自动生成并上传到
+# Release —— 开启 createUpdaterArtifacts + 提供 TAURI_SIGNING_PRIVATE_KEY 即可，
+# 无需单独的 manifest job。updater endpoint 指向
+# releases/latest/download/latest.json，各平台任务上传的内容相同、后传者覆盖，无碍。

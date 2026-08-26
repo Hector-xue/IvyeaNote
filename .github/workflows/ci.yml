@@ -24,6 +24,13 @@ jobs:
       - name: 安装依赖
         run: npm install --no-audit --no-fund
 
+      # v0.7.2：Rust 编译门禁（v0.7.0/0.7.1 的 discover.rs E0308 曾漏到 release 才炸）
+      - name: Rust 编译门禁（cargo check）
+        working-directory: desktop/src-tauri
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          cargo check 2>/dev/null || cargo check
+
       - name: Lint（oxlint：含 react-hooks 规则，rules-of-hooks 违例即 error）
         run: npx oxlint src
 
