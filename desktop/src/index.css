@@ -1360,3 +1360,22 @@ button {
 .close-pdf {
   margin-left: 10px;
 }
+
+/* v0.6.0 H3：连接探测 */
+.probe-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 2px;
+  flex-wrap: wrap;
+}
+.probe-ok { color: var(--accent, #4a8); font-size: 12.5px; }
+.probe-fail { color: var(--danger, #c44); font-size: 12.5px; }
+.warn-hint {
+  font-size: 12px;
+  color: #b8860b;
+  background: rgba(255, 200, 0, 0.08);
+  border: 1px solid rgba(200, 160, 0, 0.35);
+  border-radius: 8px;
+  padding: 6px 10px;
+}

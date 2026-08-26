@@ -1,5 +1,6 @@
 // Package sync 实现同步核心：push 冲突判定/幂等去重、pull 增量游标。
 // 协议契约见 shared/protocol.md。
+// H1（v0.6.0）：数据访问改走 store.Store/store.Tx 接口，PostgreSQL 与 SQLite 双后端共用本逻辑。
 package sync
 
 import (
@@ -8,8 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/ivyea/ivyea-note/server/internal/store"
 )
 
 var ErrInvalidPath = errors.New("invalid path")
@@ -60,7 +60,7 @@ func reject(id, reason string) PushResult {
 
 // ApplyPush 在事务内应用单条变更：幂等检查 → 冲突检测 → 写 heads + 追加 changes。
 // 注意：delete 遇到更新的服务端版本会返回 conflict（修改胜出，由客户端复活本地文件）。
-func ApplyPush(ctx context.Context, tx pgx.Tx, vaultID, userID int64, deviceID string, ch PushChange) (PushResult, error) {
+func ApplyPush(ctx context.Context, tx store.Tx, vaultID, userID int64, deviceID string, ch PushChange) (PushResult, error) {
 	if err := ValidatePath(ch.Path); err != nil {
 		return reject(ch.ClientChangeID, "invalid_path"), nil
 	}
@@ -72,32 +72,21 @@ func ApplyPush(ctx context.Context, tx pgx.Tx, vaultID, userID int64, deviceID s
 	}
 
 	// 幂等：同 (device_id, client_change_id) 重复提交直接返回当前状态
-	var dup bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM changes WHERE device_id=$1 AND client_change_id=$2)`,
-		deviceID, ch.ClientChangeID).Scan(&dup); err != nil {
+	dup, err := tx.ChangeExists(ctx, deviceID, ch.ClientChangeID)
+	if err != nil {
 		return PushResult{}, err
 	}
 	if dup {
-		var ver int64
-		var bh *string
-		_ = tx.QueryRow(ctx,
-			`SELECT version, blob_hash FROM heads WHERE vault_id=$1 AND path=$2`,
-			vaultID, ch.Path).Scan(&ver, &bh)
-		return PushResult{ClientChangeID: ch.ClientChangeID, Status: "accepted", Version: ver}, nil
+		ver, bh, err := tx.CurrentVersion(ctx, vaultID, ch.Path)
+		if err != nil {
+			return PushResult{}, err
+		}
+		return PushResult{ClientChangeID: ch.ClientChangeID, Status: "accepted", Version: ver, ServerBlobHash: bh}, nil
 	}
 
 	// 冲突检测：base_version 必须等于服务端当前版本
-	var curVer int64
-	var curHash *string
-	var curDeleted bool
-	err := tx.QueryRow(ctx,
-		`SELECT version, blob_hash, deleted FROM heads WHERE vault_id=$1 AND path=$2 FOR UPDATE`,
-		vaultID, ch.Path).Scan(&curVer, &curHash, &curDeleted)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		curVer, curHash, curDeleted = 0, nil, false
-	case err != nil:
+	curVer, curHash, err := tx.CurrentVersion(ctx, vaultID, ch.Path)
+	if err != nil {
 		return PushResult{}, err
 	}
 	if ch.BaseVersion != curVer {
@@ -111,64 +100,56 @@ func ApplyPush(ctx context.Context, tx pgx.Tx, vaultID, userID int64, deviceID s
 
 	newVer := curVer + 1
 	if ch.Op == "upsert" {
-		var known bool
-		if err := tx.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM blobs WHERE hash=$1 AND user_id=$2)`,
-			*ch.BlobHash, userID).Scan(&known); err != nil {
+		known, err := tx.BlobExists(ctx, *ch.BlobHash, userID)
+		if err != nil {
 			return PushResult{}, err
 		}
 		if !known {
 			return reject(ch.ClientChangeID, "unknown_blob"), nil
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO heads(vault_id,path,version,blob_hash,deleted) VALUES($1,$2,$3,$4,FALSE)
-			 ON CONFLICT (vault_id,path) DO UPDATE
-			   SET version=EXCLUDED.version, blob_hash=EXCLUDED.blob_hash, deleted=FALSE`,
-			vaultID, ch.Path, newVer, *ch.BlobHash); err != nil {
-			return PushResult{}, err
-		}
-	} else {
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO heads(vault_id,path,version,blob_hash,deleted) VALUES($1,$2,$3,NULL,TRUE)
-			 ON CONFLICT (vault_id,path) DO UPDATE
-			   SET version=EXCLUDED.version, blob_hash=NULL, deleted=TRUE`,
-			vaultID, ch.Path, newVer); err != nil {
-			return PushResult{}, err
-		}
+	}
+	if err := tx.UpsertHead(ctx, store.Head{
+		VaultID:  vaultID,
+		Path:     ch.Path,
+		Version:  newVer,
+		BlobHash: ch.BlobHash,
+		Deleted:  ch.Op == "delete",
+	}); err != nil {
+		return PushResult{}, err
 	}
 
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO changes(vault_id,device_id,client_change_id,path,op,blob_hash,version,base_version)
-		 VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
-		vaultID, deviceID, ch.ClientChangeID, ch.Path, ch.Op, ch.BlobHash, newVer, ch.BaseVersion); err != nil {
+	if err := tx.AppendChange(ctx, &store.Change{
+		VaultID:  vaultID,
+		DeviceID: deviceID,
+		ClientID: ch.ClientChangeID,
+		Path:     ch.Path,
+		Op:       ch.Op,
+		BlobHash: ch.BlobHash,
+		Version:  newVer,
+		BaseVer:  ch.BaseVersion,
+	}); err != nil {
 		return PushResult{}, err
 	}
 	return PushResult{ClientChangeID: ch.ClientChangeID, Status: "accepted", Version: newVer}, nil
 }
 
 // Pull 按游标增量拉取变更流，返回本页变更与下一游标。
-func Pull(ctx context.Context, pool *pgxpool.Pool, vaultID, cursor int64, limit int) ([]Change, int64, error) {
-	rows, err := pool.Query(ctx,
-		`SELECT id, path, op, blob_hash, version, device_id, created_at
-		 FROM changes WHERE vault_id=$1 AND id>$2 ORDER BY id LIMIT $3`,
-		vaultID, cursor, limit)
+func Pull(ctx context.Context, st store.Store, vaultID, cursor int64, limit int) ([]Change, int64, error) {
+	rows, next, err := st.Pull(ctx, vaultID, cursor, limit)
 	if err != nil {
 		return nil, cursor, err
 	}
-	defer rows.Close()
-
-	out := make([]Change, 0, limit)
-	next := cursor
-	for rows.Next() {
-		var c Change
-		if err := rows.Scan(&c.Seq, &c.Path, &c.Op, &c.BlobHash, &c.Version, &c.DeviceID, &c.CreatedAt); err != nil {
-			return nil, cursor, err
-		}
-		out = append(out, c)
-		next = c.Seq
-	}
-	if err := rows.Err(); err != nil {
-		return nil, cursor, err
+	out := make([]Change, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, Change{
+			Seq:       c.ID,
+			Path:      c.Path,
+			Op:        c.Op,
+			BlobHash:  c.BlobHash,
+			Version:   c.Version,
+			DeviceID:  c.DeviceID,
+			CreatedAt: c.CreatedAt,
+		})
 	}
 	return out, next, nil
 }

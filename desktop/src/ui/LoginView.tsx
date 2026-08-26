@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { probeServer, normalizeServerUrl, isInsecurePublic } from '../lib/serverConn';
 import logoUrl from '../assets/logo.svg';
 
 interface Props {
@@ -38,14 +39,33 @@ export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
   const [pasteMode, setPasteMode] = useState(false);
   const [pasteText, setPasteText] = useState('');
 
+  // v0.6.0 H3/H4：连接探测与诊断
+  const [probing, setProbing] = useState(false);
+  const [probeMsg, setProbeMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const doProbe = async () => {
+    setProbeMsg(null);
+    setProbing(true);
+    try {
+      const r = await probeServer(serverUrl);
+      setServerUrl(r.url);
+      let text = r.message;
+      if (r.ok && r.insecurePublic) {
+        text += '｜⚠ 当前是公网 HTTP 明文连接，建议配置 HTTPS（见部署引导的 Cloudflare Tunnel 教程）';
+      }
+      setProbeMsg({ ok: r.ok, text });
+    } finally {
+      setProbing(false);
+    }
+  };
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setNotice('');
     setBusy(true);
     try {
-      let url = serverUrl.trim().replace(/\/+$/, '');
-      if (!/^https?:\/\//.test(url)) url = `https://${url}`;
+      const url = normalizeServerUrl(serverUrl);
       if (!url || url === 'https://') throw new Error('请填写你的服务器地址');
       if (password.length < 8) throw new Error('密码至少 8 位');
       localStorage.setItem('ivnote.server', url);
@@ -146,6 +166,17 @@ export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
             required
           />
         </label>
+        <div className="probe-row">
+          <button type="button" className="btn ghost" disabled={probing || !serverUrl.trim()} onClick={() => void doProbe()}>
+            {probing ? '测试中…' : '🔌 测试连接'}
+          </button>
+          {probeMsg && (
+            <span className={probeMsg.ok ? 'probe-ok' : 'probe-fail'}>{probeMsg.text}</span>
+          )}
+        </div>
+        {serverUrl && isInsecurePublic(normalizeServerUrl(serverUrl)) && (
+          <div className="warn-hint">⚠ 公网 HTTP 明文连接有被窃听风险，推荐配置 HTTPS（Cloudflare Tunnel，免费）</div>
+        )}
         <label>
           账号
           <input
@@ -169,7 +200,18 @@ export function LoginView({ onLogin, onShowGuide, onCancel }: Props) {
           />
         </label>
 
-        {error && <div className="error">{error}</div>}
+        {error && (
+          <div className="error">
+            {error}
+            {/未开放注册|registration_disabled/i.test(error) && (
+              <div style={{ marginTop: 6 }}>
+                自托管默认只允许管理员账号登录。账号密码在你部署后桌面生成的
+                「IvyeaNote-账号.txt」里；如需开放注册，在服务端 .env 设置
+                IVNOTE_OPEN_REGISTRATION=true 后重启服务。
+              </div>
+            )}
+          </div>
+        )}
         {notice && <div className="notice">{notice}</div>}
 
         <button type="submit" className="btn primary" disabled={busy}>
