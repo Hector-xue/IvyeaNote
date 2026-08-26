@@ -107,6 +107,15 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 
 ### 阶段 1：Local-first 落地 —— v0.4
 
+> **实施记录（2026-08-26，v0.4.0 第一批）**：用户实测 v0.3.4「导入 Obsidian / 绑定文件夹报错、新建笔记繁琐」，对标 Obsidian 重做可用性。已落地五项：
+> - **R1（根因修复）**：`capabilities/default.json` 缺 `dialog:default` 权限 → plugin-dialog 的 `open()` 被 Tauri 2 权限模型直接拒绝，导入/绑定必报错。补一行即修复。
+> - **T2 首启引导**：新增 `WelcomeView.tsx` 三卡（打开本地文件夹 / 从 Obsidian 导入 / 新建空白库），免登录即用；`ivnote.welcomed` 标记只显示一次。
+> - **T3 即时新建 + 标题跟随**：新建不再弹框要名字，直接建 `untitled.md`（重名自动序号）；新增 `lib/titleSync.ts`（extractH1/sanitizeTitle/titleToPath/uniqueName），编辑防抖落盘后 H1 与文件名不一致时自动重命名（同步层表达为新路径 upsert + 旧路径 delete）。
+> - **T4 导入体验**：进度条（n/N）+ 单文件失败不中断 + 完成明细 toast；登录态下导入完自动 pushOnly。
+> - **T5 回收站**：删除移入 `.trash/时间戳-文件名`，侧栏回收站入口支持恢复/彻底删除；主列表过滤 `.trash/`。
+>
+> 门禁全绿：oxlint 0 error、tsc OK、vitest 60/60（含 titleSync 10 例与即时新建/回收站新回归）、vite build OK。阶段 1 剩余任务（SQLite 索引/FTS5 搜索/版本历史）待后续批次。
+
 **目标：数据真正归用户 + 本地搜索，达到"非常好用的 Markdown 笔记软件"（GPT 路线 V0.1）。**
 
 | 任务 | 说明 |

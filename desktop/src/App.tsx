@@ -5,9 +5,11 @@ import { MainView, type SortMode } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useToast } from './ui/Toast';
+import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import { syncVault, pushOnly, pullOnly, type FileIO, type FileMeta, type SyncReport } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
+import { extractH1, titleToPath, uniqueName } from './lib/titleSync';
 import {
   loadState,
   saveState,
@@ -66,6 +68,8 @@ export default function App() {
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
   const [showLogin, setShowLogin] = useState(false);
+  /** v0.4.0 T2：首启引导（仅未登录且首次启动显示） */
+  const [showWelcome, setShowWelcome] = useState(() => !isWelcomed());
   const [theme, setTheme] = useState<'light' | 'dark'>(
     () => (localStorage.getItem('ivnote.theme') as 'light' | 'dark') || 'light'
   );
@@ -144,7 +148,8 @@ export default function App() {
       // v0.3.4：listMeta 一次拿路径+修改时间+大小
       const metas = await io.listMeta(vault.localPath ?? '');
       metasRef.current = new Map(metas.map((m) => [m.path, m]));
-      const all = metas.map((m) => m.path);
+      // v0.4.0 T5：.trash/ 回收站目录不进主列表
+      const all = metas.map((m) => m.path).filter((p) => !p.startsWith('.trash/'));
       setFiles(applySort(all.filter((p) => /\.md$/i.test(p))));
       setPdfs(applySort(all.filter((p) => /\.pdf$/i.test(p))));
     } catch (e) {
@@ -364,6 +369,34 @@ export default function App() {
     [vault, io, toast]
   );
 
+  /**
+   * v0.4.0 T3：标题跟随——编辑防抖落盘后，若正文首个 H1 与当前文件名不一致，
+   * 自动把文件重命名为标题（同目录内、清洗非法字符）。
+   * 同步层把改名表达为「新路径 upsert + 旧路径 delete」，多端自然收敛。
+   */
+  const maybeRenameToH1 = useCallback(
+    async (path: string, text: string) => {
+      if (!vault || !/\.md$/i.test(path)) return;
+      const h1 = extractH1(text);
+      if (!h1) return;
+      const target = titleToPath(path, h1);
+      if (target === path) return;
+      try {
+        if (await io.exists(vault.localPath ?? '', target)) return; // 目标已存在：不抢名
+        await io.write(vault.localPath ?? '', target, text);
+        await io.remove(vault.localPath ?? '', path);
+        setCurrentPath(target);
+        setDoc(text);
+        await refreshFiles();
+        toast(`已按标题重命名：${path.split('/').pop()} → ${target.split('/').pop()}`, 'ok');
+        void doSync();
+      } catch {
+        // 改名失败不影响编辑主流程
+      }
+    },
+    [vault, io, refreshFiles, doSync, toast]
+  );
+
   const onEdit = useCallback(
     (path: string, text: string) => {
       if (!vault || path !== currentPath) return;
@@ -374,41 +407,36 @@ export default function App() {
         try {
           await io.write(vault.localPath ?? '', path, text);
           void doSync();
+          // v0.4.0：标题跟随（在写盘之后执行，避免和防抖写盘竞争）
+          void maybeRenameToH1(path, text);
         } catch (e) {
           console.error('写盘失败', e);
         }
       }, 800);
     },
-    [vault, io, currentPath, doSync]
+    [vault, io, currentPath, doSync, maybeRenameToH1]
   );
 
+  /**
+   * v0.4.0 T3：Obsidian 式即时新建——不再弹框要名字，
+   * 直接创建 untitled.md（重名自动序号）并进入编辑态。
+   * 标题由用户在正文 H1 里写，文件名自动跟随（见 renameToTitleEffect）。
+   */
   const onCreateNote = useCallback(
     async (folder = '') => {
       if (!vault) return;
-      const relOf = (name: string) =>
-        `${folder ? folder + '/' : ''}${name.trim().replace(/^\/+|\/+$/g, '')}`;
-      // v0.3.3：应用内对话框替代 window.prompt（WebView2 下 prompt 静默返回 null，按钮形同虚设）
-      const name = await prompt({
-        title: '新建笔记',
-        description: '文件名可含子文件夹，如 日记/2026-08-24.md',
-        placeholder: '例：日记/2026-08-24.md',
-        okText: '创建',
-        validate: (v) => {
-          if (!v.trim()) return '请输入文件名';
-          const rel = relOf(v);
-          if (!/\.md$/i.test(rel)) return '文件名必须以 .md 结尾';
-          if (files.includes(rel)) return '同名文件已存在';
-          return null;
-        },
-      });
-      if (!name) return;
-      const rel = relOf(name);
-      await io.write(vault.localPath ?? '', rel, `# ${rel.split('/').pop()!.replace(/\.md$/i, '')}\n\n`);
+      const prefix = folder ? `${folder.replace(/\/+$/, '')}/` : '';
+      const base = uniqueName(
+        'untitled',
+        files.filter((f) => f.startsWith(prefix)).map((f) => f.slice(prefix.length))
+      );
+      const rel = `${prefix}${base}`;
+      await io.write(vault.localPath ?? '', rel, '# untitled\n\n');
       await refreshFiles();
       void openFile(rel);
       void doSync();
     },
-    [vault, files, io, refreshFiles, openFile, doSync, prompt]
+    [vault, files, io, refreshFiles, openFile, doSync]
   );
 
   const onDeleteFile = useCallback(
@@ -417,12 +445,21 @@ export default function App() {
       // v0.3.3：应用内确认框替代 window.confirm（安卓 WebView 行为统一）
       const ok = await confirm({
         title: '删除笔记',
-        description: `删除 ${path}？（会同步删除到所有设备）`,
+        description: `「${path}」将移入回收站，可在回收站恢复。`,
         okText: '删除',
         danger: true,
       });
       if (!ok) return;
       try {
+        // v0.4.0 T5：移入回收站而非直接物理删除
+        const base = path.split('/').pop() ?? path;
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        let trashRel = `.trash/${stamp}-${base}`;
+        while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
+          trashRel = trashRel.replace(/(\.md)$/i, `-1$1`);
+        }
+        const content = await io.read(vault.localPath ?? '', path);
+        await io.write(vault.localPath ?? '', trashRel, content);
         await io.remove(vault.localPath ?? '', path);
         if (currentPath === path) {
           setCurrentPath(null);
@@ -435,6 +472,71 @@ export default function App() {
       }
     },
     [vault, io, currentPath, refreshFiles, doSync, confirm, toast]
+  );
+
+  /**
+   * v0.4.0 T5：回收站。
+   * 列出 .trash/ 下全部条目；支持恢复（移回原目录）与彻底删除。
+   */
+  const [trashList, setTrashList] = useState<string[]>([]);
+  const [showTrash, setShowTrash] = useState(false);
+
+  const openTrash = useCallback(async () => {
+    if (!vault) return;
+    try {
+      const all = (await io.list(vault.localPath ?? '')).filter((p) => p.startsWith('.trash/'));
+      setTrashList(all);
+      setShowTrash(true);
+    } catch (e) {
+      toast(`读取回收站失败：${errText(e)}`, 'error');
+    }
+  }, [vault, io, toast]);
+
+  const restoreFromTrash = useCallback(
+    async (trashPath: string) => {
+      if (!vault) return;
+      // 文件名格式：时间戳-原名.md → 恢复到原目录下的原文件名
+      const base = trashPath.split('/').pop() ?? '';
+      const original = base.replace(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/, '');
+      try {
+        if (await io.exists(vault.localPath ?? '', original)) {
+          toast(`恢复失败：${original} 已存在同名笔记`, 'error');
+          return;
+        }
+        const content = await io.read(vault.localPath ?? '', trashPath);
+        await io.write(vault.localPath ?? '', original, content);
+        await io.remove(vault.localPath ?? '', trashPath);
+        setTrashList((l) => l.filter((p) => p !== trashPath));
+        await refreshFiles();
+        void doSync();
+        toast(`已恢复：${original}`, 'ok');
+      } catch (e) {
+        toast(`恢复失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, refreshFiles, doSync, toast]
+  );
+
+  const purgeFromTrash = useCallback(
+    async (trashPath: string) => {
+      if (!vault) return;
+      const ok = await confirm({
+        title: '彻底删除',
+        description: `${trashPath} 将被永久删除，不可恢复。`,
+        okText: '永久删除',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await io.remove(vault.localPath ?? '', trashPath);
+        setTrashList((l) => l.filter((p) => p !== trashPath));
+        await refreshFiles();
+        void doSync();
+      } catch (e) {
+        toast(`删除失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, refreshFiles, doSync, confirm, toast]
   );
 
   // ---------- v0.3.4：插图 / 图片解析 / PDF ----------
@@ -536,9 +638,14 @@ export default function App() {
 
   // ---------- Obsidian 一键导入 ----------
 
+  /** v0.4.0 T4：导入进度（null=未在导入；否则显示 n/N） */
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
+
   const onImportObsidian = useCallback(async () => {
     if (!vault || importing) return;
     setImporting(true);
+    setImportProgress({ done: 0, total: 0 });
+    let failed: string[] = [];
     try {
       if (isTauri) {
         // 桌面端：选文件夹，递归读取全部 Markdown（跳过 .obsidian 等隐藏目录）
@@ -558,10 +665,22 @@ export default function App() {
           }
         };
         await walk(dir, '');
-        for (const f of out) {
-          await io.write(vault.localPath ?? '', f.rel, await readTextFile(f.abs));
+        failed = [];
+        setImportProgress({ done: 0, total: out.length });
+        for (let i = 0; i < out.length; i++) {
+          try {
+            await io.write(vault.localPath ?? '', out[i].rel, await readTextFile(out[i].abs));
+          } catch {
+            failed.push(out[i].rel); // 单文件失败不中断整体导入
+          }
+          setImportProgress({ done: i + 1, total: out.length });
         }
-        toast(`已从 Obsidian 导入 ${out.length} 个笔记到本地库，点「上传」即可同步到服务器`, 'ok');
+        toast(
+          failed.length === 0
+            ? `已从 Obsidian 导入 ${out.length} 个笔记${stateRef.current.account ? '，正在同步到服务器…' : ''}`
+            : `导入完成：成功 ${out.length - failed.length} 个，失败 ${failed.length} 个（首个失败：${failed[0]}）`,
+          failed.length === 0 ? 'ok' : 'error'
+        );
       } else {
         // 浏览器端：优先用目录选择句柄，保留子目录结构；否则退化为文件夹多选
         type DirHandleLike = {
@@ -605,19 +724,34 @@ export default function App() {
             }));
         }
         let n = 0;
+        failed = [];
+        setImportProgress({ done: 0, total: entries.length });
         for (const e of entries) {
-          await io.write(vault.localPath ?? '', e.rel, await e.getText());
-          n++;
+          try {
+            await io.write(vault.localPath ?? '', e.rel, await e.getText());
+            n++;
+          } catch {
+            failed.push(e.rel);
+          }
+          setImportProgress({ done: n + failed.length, total: entries.length });
         }
-        toast(`已从 Obsidian 导入 ${n} 个笔记，点「上传」即可同步到服务器`, 'ok');
+        toast(
+          failed.length === 0
+            ? `已从 Obsidian 导入 ${n} 个笔记${stateRef.current.account ? '，正在同步到服务器…' : ''}`
+            : `导入完成：成功 ${n} 个，失败 ${failed.length} 个（首个失败：${failed[0]}）`,
+          failed.length === 0 ? 'ok' : 'error'
+        );
       }
       await refreshFiles();
+      // v0.4.0 T4：导入完成自动同步一次（已登录时）
+      if (client) void doUpload();
     } catch (e) {
       toast(`导入失败：${errText(e)}`, 'error');
     } finally {
       setImporting(false);
+      setImportProgress(null);
     }
-  }, [vault, importing, io, refreshFiles, toast]);
+  }, [vault, importing, io, refreshFiles, toast, client, doUpload]);
 
   // ---------- Vault / 文件夹绑定 ----------
 
@@ -677,6 +811,30 @@ export default function App() {
   }, []);
 
   // ---------- 渲染 ----------
+
+  if (!state.account && showWelcome) {
+    return (
+      <div className="app">
+        <WelcomeView
+          onOpenFolder={() => {
+            setShowWelcome(false);
+            void onBindFolder();
+          }}
+          onImportObsidian={() => {
+            setShowWelcome(false);
+            void onImportObsidian();
+          }}
+          onCreateBlank={() => {
+            setShowWelcome(false);
+            void onCreateNote('');
+          }}
+          onOpenLogin={() => setShowLogin(true)}
+        />
+        {dialogEl}
+        {toastEl}
+      </div>
+    );
+  }
 
   // 登录页只在用户主动唤起且尚未登录时显示；平时无账号也直达主界面（本地模式）
   // 注意：此处 early return 之前所有 hooks 均已调用完毕（v0.3.3 修复 Rules of Hooks 违例）
@@ -839,6 +997,9 @@ export default function App() {
         onClosePdf={onClosePdf}
         onInsertImage={onInsertImage}
         resolveImage={resolveImage}
+        importProgress={importProgress}
+        trashCount={trashList.length}
+        onOpenTrash={() => void openTrash()}
         vaultSelector={
           <select
             value={activeVaultId ?? ''}
@@ -858,6 +1019,37 @@ export default function App() {
         }
         onCreateVault={createVault}
       />
+      {showTrash && (
+        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowTrash(false)}>
+          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="回收站">
+            <h2 className="dlg-title">回收站</h2>
+            {trashList.length === 0 ? (
+              <p className="dlg-desc">回收站是空的。</p>
+            ) : (
+              <ul className="trash-list">
+                {trashList.map((p) => (
+                  <li key={p} className="trash-item">
+                    <span className="ti-name" title={p}>
+                      {p.replace(/^\.trash\//, '')}
+                    </span>
+                    <button className="btn ghost" onClick={() => void restoreFromTrash(p)}>
+                      恢复
+                    </button>
+                    <button className="btn danger" onClick={() => void purgeFromTrash(p)}>
+                      彻底删除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="dlg-actions">
+              <button className="btn primary" onClick={() => setShowTrash(false)}>
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {dialogEl}
       {toastEl}
     </div>

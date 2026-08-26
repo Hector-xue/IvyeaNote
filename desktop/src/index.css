@@ -168,6 +168,121 @@ button {
   display: flex;
 }
 
+/* v0.4.0 T4：Obsidian 导入进度条 */
+.import-progress {
+  padding: 4px 2px;
+}
+.ip-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.ip-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.15s ease;
+}
+.ip-text {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* v0.4.0 T2：首启引导 */
+.welcome-mask {
+  position: fixed;
+  inset: 0;
+  background: var(--bg, #f7f7f8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+.welcome-card {
+  max-width: 640px;
+  text-align: center;
+  padding: 24px;
+}
+.welcome-logo {
+  width: 56px;
+  height: 56px;
+}
+.welcome-card h1 {
+  font-size: 22px;
+  margin: 12px 0 6px;
+}
+.welcome-sub {
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+.welcome-cards {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.welcome-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 180px;
+  padding: 18px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: transparent;
+  text-align: center;
+}
+.welcome-item:hover,
+.welcome-item.primary {
+  border-color: var(--accent);
+}
+.wi-icon {
+  font-size: 26px;
+}
+.wi-title {
+  font-weight: 600;
+}
+.wi-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+.welcome-foot {
+  margin-top: 22px;
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+/* v0.4.0 T5：回收站面板 */
+.trash-card {
+  min-width: 420px;
+  max-width: 560px;
+}
+.trash-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.trash-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.trash-item .ti-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+
 .syncing-hint {
   color: var(--muted);
   font-size: 12px;

@@ -98,55 +98,52 @@ import App from './App';
 
 beforeEach(() => {
   localStorage.clear();
+  localStorage.setItem('ivnote.welcomed', '1'); // v0.4.0：跳过首启引导（引导页单独测）
   memFiles.clear();
   memFiles.set('a.md', '# A');
   memFiles.set('sub/b.md', '# B');
 });
 
+/** 渲染并等主界面出现 */
+async function renderMain() {
+  render(<App />);
+  await screen.findByText('a.md');
+}
+
 describe('R2：免登录本地模式文件列表不被 client 门控', () => {
   it('无账号启动：侧栏列出本地库全部 .md 文件', async () => {
-    render(<App />);
-    expect(await screen.findByText('a.md')).toBeTruthy();
+    await renderMain();
+    expect(screen.getByText('a.md')).toBeTruthy();
     expect(screen.getByText('b.md')).toBeTruthy();
     // 本地库名出现在笔记库选择器里
     expect(screen.getByText('我的笔记')).toBeTruthy();
   });
 });
 
-describe('R1：新建/删除走应用内 Dialog（WebView2 不支持 window.prompt/confirm）', () => {
-  it('新建笔记：弹应用内对话框，输入后落盘，全程不调 window.prompt', async () => {
+describe('v0.4.0 T3：即时新建（Obsidian 式）', () => {
+  it('点新建直接创建 untitled.md 并落盘，全程不调 window.prompt', async () => {
     const promptSpy = vi.spyOn(window, 'prompt');
-    render(<App />);
-    await screen.findByText('a.md');
+    await renderMain();
 
     fireEvent.click(screen.getByText('＋ 新建笔记'));
-    // 应用内对话框出现（标题 + 占位符）
-    const input = await screen.findByPlaceholderText('例：日记/2026-08-24.md');
-    fireEvent.change(input, { target: { value: 'new.md' } });
-    fireEvent.click(screen.getByText('创建'));
 
-    await waitFor(() => expect(memFiles.has('new.md')).toBe(true));
-    expect(memFiles.get('new.md')).toContain('# new');
+    await waitFor(() => expect(memFiles.has('untitled.md')).toBe(true));
+    expect(memFiles.get('untitled.md')).toContain('# untitled');
     expect(promptSpy).not.toHaveBeenCalled();
-    // 新文件进入侧栏列表（面包屑也会显示同名，故用 findAll）
-    expect((await screen.findAllByText('new.md')).length).toBeGreaterThanOrEqual(1);
   });
 
-  it('新建笔记：校验失败行内报错，不创建文件', async () => {
-    render(<App />);
-    await screen.findByText('a.md');
+  it('重名自动序号：再建一个变成 untitled 1', async () => {
+    memFiles.set('untitled.md', '# untitled');
+    await renderMain();
     fireEvent.click(screen.getByText('＋ 新建笔记'));
-    const input = await screen.findByPlaceholderText('例：日记/2026-08-24.md');
-    fireEvent.change(input, { target: { value: 'a.md' } });
-    fireEvent.click(screen.getByText('创建'));
-    expect(screen.getByText('同名文件已存在')).toBeTruthy();
-    expect(memFiles.size).toBe(2); // 没有新文件
+    await waitFor(() => expect(memFiles.has('untitled 1.md')).toBe(true));
   });
+});
 
-  it('删除笔记：弹确认框，确认后删除（不调 window.confirm）', async () => {
+describe('v0.4.0 T5：删除进回收站', () => {
+  it('删除笔记：确认后移入 .trash/，不调 window.confirm；回收站可恢复', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
-    render(<App />);
-    await screen.findByText('a.md');
+    await renderMain();
 
     fireEvent.click(screen.getAllByTitle('删除')[0]);
     expect(await screen.findByText('删除笔记')).toBeTruthy(); // 对话框标题
@@ -154,13 +151,21 @@ describe('R1：新建/删除走应用内 Dialog（WebView2 不支持 window.prom
 
     await waitFor(() => expect(memFiles.has('a.md')).toBe(false));
     expect(confirmSpy).not.toHaveBeenCalled();
+    // 原文已进回收站
+    const trashKey = [...memFiles.keys()].find((k) => k.startsWith('.trash/') && k.endsWith('-a.md'));
+    expect(trashKey).toBeTruthy();
+    expect(memFiles.get(trashKey!)).toContain('# A');
+
+    // 回收站面板：恢复
+    fireEvent.click(screen.getByText(/回收站/));
+    fireEvent.click(await screen.findByText('恢复'));
+    await waitFor(() => expect(memFiles.has('a.md')).toBe(true));
   });
 });
 
 describe('R2：无账号时同步按钮显式禁用并提示（不再静默 no-op）', () => {
   it('上传/拉取按钮禁用且带「登录后可用」提示', async () => {
-    render(<App />);
-    await screen.findByText('a.md');
+    await renderMain();
     const gated = screen.getAllByTitle('云同步需要登录后可用');
     expect(gated.length).toBe(2); // 上传 + 拉取
     for (const b of gated) expect((b as HTMLButtonElement).disabled).toBe(true);
@@ -172,8 +177,7 @@ describe('R2：无账号时同步按钮显式禁用并提示（不再静默 no-o
 
 describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
   it('打开登录页再返回，界面正常存活', async () => {
-    render(<App />);
-    await screen.findByText('a.md');
+    await renderMain();
 
     // 打开登录页（此前此操作直接崩白屏）
     fireEvent.click(screen.getAllByText('登录同步')[0]);

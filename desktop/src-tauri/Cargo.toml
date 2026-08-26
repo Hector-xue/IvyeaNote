@@ -1,6 +1,6 @@
 [package]
 name = "ivyea-note-desktop"
-version = "0.3.4"
+version = "0.4.0"
 description = "Ivyea Note 桌面端：本地 Markdown · 多端同步"
 authors = ["ivyea"]
 edition = "2021"

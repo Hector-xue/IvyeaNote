@@ -70,6 +70,11 @@ interface Props {
   /** v0.3.4：插图与图片解析（透传给编辑器） */
   onInsertImage?: () => Promise<string | null>;
   resolveImage?: (rel: string) => Promise<string | null>;
+  /** v0.4.0 T4：Obsidian 导入进度（null=未在导入） */
+  importProgress?: { done: number; total: number } | null;
+  /** v0.4.0 T5：回收站 */
+  trashCount?: number;
+  onOpenTrash?(): void;
 }
 
 export function MainView(props: Props) {
@@ -140,6 +145,24 @@ export function MainView(props: Props) {
             <option value="mtime">按修改时间</option>
           </select>
         </div>
+        {props.importProgress && (
+          <div className="import-progress" title="正在导入 Obsidian 笔记">
+            <div className="ip-bar">
+              <div
+                className="ip-fill"
+                style={{
+                  width:
+                    props.importProgress.total > 0
+                      ? `${Math.round((props.importProgress.done / props.importProgress.total) * 100)}%`
+                      : '10%',
+                }}
+              />
+            </div>
+            <span className="ip-text">
+              导入中 {props.importProgress.done}/{props.importProgress.total || '…'}
+            </span>
+          </div>
+        )}
 
         {!props.vault.localPath ? (
           <button className="bind" onClick={props.onBindFolder}>
@@ -226,6 +249,11 @@ export function MainView(props: Props) {
 
         <div className="sidebar-foot">
           <button onClick={props.onCreateNote}>＋ 新建笔记</button>
+          {props.onOpenTrash && (
+            <button onClick={props.onOpenTrash} title="回收站">
+              🗑 回收站{props.trashCount ? `（${props.trashCount}）` : ''}
+            </button>
+          )}
           {props.hasAccount ? (
             <button onClick={props.onLogout}>退出登录</button>
           ) : (
