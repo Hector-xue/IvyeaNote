@@ -32,7 +32,7 @@ jobs:
 
       - name: Rust 编译门禁（cargo check）
         working-directory: desktop/src-tauri
-        run: cargo check 2>/dev/null || cargo check
+        run: cargo check
 
       - name: Lint（oxlint：含 react-hooks 规则，rules-of-hooks 违例即 error）
         run: npx oxlint src
