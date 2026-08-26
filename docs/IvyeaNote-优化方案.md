@@ -159,6 +159,18 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 >
 > 门禁：oxlint 0 error / tsc OK / vitest 120/120 / build OK；版本号四处均已同步 0.7.2。真机点检项：APK 装机后看抽屉打开时 logo 是否在状态栏下方、选中文字是否浮出气泡且点击加粗后气泡跟随刷新。
 
+### v0.7.3 第六批·移动端交互对标 Obsidian
+
+> **实施记录（2026-08-26，v0.7.3）**：针对用户「对标 Obsidian 还差很远」的反馈，落地六项高频路径改造——
+> - **P1 长按操作菜单**：抽屉文件/文件夹长按（contextmenu）弹出 Bottom Sheet（重命名=内联输入行，规避 window.prompt 禁令；删除走 App 层回收站确认），移除常驻 ✕ 按钮。
+> - **P2 折叠树**：移动端文件列表改用桌面同款 buildFileTree 嵌套树，文件夹可折叠（localStorage 持久化，与桌面共用 ivnote.collapsed 键）。
+> - **P3 手势与返回键**：主区左缘右滑呼出抽屉；history hash 栈 + popstate 监听，Android 返回键逐级关闭 操作单→大纲→重命名→抽屉。
+> - **P4 活预览**：阅读模式任务 checkbox 解禁可点击并回写源码（按文档顺序映射任务行）；图片点击全屏 lightbox。
+> - **P5 反向链接区块**：笔记页文末列出引用当前笔记的笔记（复用 App wikiLinks/searchDocs 缓存，无新增 IO）。
+> - **P6 大纲浮层**：顶栏 ≡ 入口弹 heading 列表（新 lib/headings.ts 提取，跳过代码块），点击跳转编辑器对应行。
+>
+> 门禁：tsc OK / oxlint 0 error / vitest 124/124（+4 headings 用例）/ build OK；版本号四处同步 0.7.3。全文搜索（FTS5 接入搜索链路）留待 v0.8 与 Local-first 收尾。
+
 > **实施记录（2026-08-26，v0.7.0 第三批·管理与知识网络）**：
 > - **H8 管理页**：Store 新增 ListUsers/DeleteUser（级联）/UserBlobBytes 双后端实现；`/api/v1/admin/users` 列表+删除（requireAdmin 鉴权、管理员保护）；`/admin` 页面（token 即用）。端到端验证：容量统计/非管理员 403/级联删除/管理员保护全过。
 > - **H8b 备份**：install-bare.sh 支持 IVNOTE_ENABLE_BACKUP=1，每日 03:00 备份 SQLite 保留 14 份。

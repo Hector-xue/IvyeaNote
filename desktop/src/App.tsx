@@ -643,6 +643,39 @@ export default function App() {
     [openFile]
   );
 
+  /** v0.7.3 P1：重命名笔记（移动端长按菜单；同名冲突自动序号） */
+  const onRenameFile = useCallback(
+    async (path: string, newNameRaw: string) => {
+      if (!vault || !/\.md$/i.test(path)) return;
+      const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+      let base = newNameRaw.trim().replace(/\\/g, '/').replaceAll('/', '');
+      if (!base) return;
+      base = base.replace(/\.(md|markdown)$/i, '') + '.md';
+      const target = `${dir}${base}`;
+      if (target === path) return;
+      try {
+        let final = target;
+        if (await io.exists(vault.localPath ?? '', final)) {
+          // 目标已存在：自动序号 -2、-3…
+          const stem = base.replace(/\.md$/i, '');
+          let i = 2;
+          while (await io.exists(vault.localPath ?? '', `${dir}${stem}-${i}.md`).catch(() => false)) i++;
+          final = `${dir}${stem}-${i}.md`;
+        }
+        const content = await io.read(vault.localPath ?? '', path);
+        await io.write(vault.localPath ?? '', final, content);
+        await io.remove(vault.localPath ?? '', path);
+        if (currentPath === path) setCurrentPath(final);
+        await refreshFiles();
+        void doSync();
+        toast(`已重命名：${titleOfPath(path)} → ${titleOfPath(final)}`, 'ok');
+      } catch (e) {
+        toast(`重命名失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, currentPath, refreshFiles, doSync, toast]
+  );
+
   const onDeleteFile = useCallback(
     async (path: string) => {
       if (!vault) return;
@@ -1362,6 +1395,8 @@ export default function App() {
           onEdit={onEdit}
           onCreateNote={() => void onCreateNote('')}
           onDeleteFile={(p) => void onDeleteFile(p)}
+          onRenameFile={(p, name) => void onRenameFile(p, name)}
+          backlinks={wikiLinks.back}
           onSync={() => void doSync()}
           onCreateVault={createVault}
           theme={theme}

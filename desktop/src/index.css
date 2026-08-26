@@ -1385,6 +1385,146 @@ button {
   color: var(--accent-text);
 }
 
+/* ============ v0.7.3 P1/P2/P6：底部操作单 / 折叠树 / 大纲 / 反链 ============ */
+/* 底部操作单（Bottom Sheet） */
+.m-sheet-mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 20;
+  display: flex;
+  align-items: flex-end;
+}
+.m-sheet {
+  width: 100%;
+  background: var(--panel);
+  border-radius: var(--radius-l, 20px) var(--radius-l, 20px) 0 0;
+  padding: calc(12px + env(safe-area-inset-bottom)) 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: sheet-up 0.2s ease-out;
+}
+@keyframes sheet-up {
+  from { transform: translateY(40%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.m-sheet-title {
+  font-size: var(--font-footnote, 13px);
+  color: var(--muted);
+  text-align: center;
+  padding-bottom: 8px;
+}
+.m-sheet-item {
+  border: none;
+  background: transparent;
+  text-align: left;
+  font-size: var(--font-body, 16px);
+  color: var(--text);
+  padding: 13px 16px;
+  border-radius: var(--radius-s, 10px);
+}
+.m-sheet-item:active { background: var(--accent-weak); }
+.m-sheet-item.danger { color: #d4574e; }
+.m-sheet-item.cancel {
+  margin-top: 4px;
+  border-top: 0.5px solid var(--separator, var(--border));
+  border-radius: 0;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 移动端折叠树（复用桌面 ft-caret 视觉，行高触控化） */
+.m-ft-dir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.m-ft-dir .ft-caret {
+  width: 14px;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.m-ft-dir.open .ft-caret { transform: rotate(90deg); }
+.m-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  font-size: 15px;
+  border-radius: var(--radius-s, 10px);
+  padding-right: 8px;
+}
+.m-file-row.active { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.m-file-chev { color: var(--muted); opacity: 0.5; }
+.m-file-list .empty { padding: 24px 12px; text-align: center; }
+
+/* 大纲浮层 */
+.m-outline {
+  max-height: 70vh;
+  overflow-y: auto;
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  background: var(--blur-bg, var(--panel));
+  outline: 0.5px solid var(--separator, var(--border));
+}
+.outline-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+  width: 100%;
+}
+
+/* 反向链接区块 */
+.m-backlinks {
+  border-top: 0.5px solid var(--separator, var(--border));
+  padding: 14px 16px calc(20px + env(safe-area-inset-bottom));
+}
+.m-backlinks-title {
+  font-size: var(--font-footnote, 13px);
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.m-backlink-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 15px;
+  padding: 9px 10px;
+  border-radius: var(--radius-s, 10px);
+}
+.m-backlink-item:active { background: var(--accent-weak); }
+.m-backlink-path {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 图片全屏预览 */
+.m-img-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.m-img-viewer img {
+  max-width: 96vw;
+  max-height: 92vh;
+  object-fit: contain;
+}
+
 /* ============ v0.3.4：阅读模式 ============ */
 .md-preview {
   flex: 1;

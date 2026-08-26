@@ -111,6 +111,32 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
   const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
+  /** v0.7.3 P4：图片全屏预览 */
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  /** v0.7.3 P4 lightbox 打开器（阅读模式图片点击时调用） */
+  const openLightbox = (src: string, alt: string) => setLightbox({ src, alt });
+
+  // v0.7.3 P6：大纲跳转桥——MobileView 派发 ivnote-jump(offset)
+  useEffect(() => {
+    const onJump = (e: Event) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const offset = (e as CustomEvent<number>).detail;
+      try {
+        setMode('edit');
+        requestAnimationFrame(() => {
+          const v = viewRef.current;
+          if (!v) return;
+          v.dispatch({ selection: { anchor: offset }, scrollIntoView: true });
+          v.focus();
+        });
+      } catch {
+        /* offset 越界忽略 */
+      }
+    };
+    window.addEventListener('ivnote-jump', onJump);
+    return () => window.removeEventListener('ivnote-jump', onJump);
+  }, []);
 
   // 创建 CodeMirror 实例（一次）
   useEffect(() => {
@@ -142,7 +168,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.currentPath, props.theme]);
 
-  // 阅读模式：渲染 + 异步替换图片
+  // 阅读模式：渲染 + 异步替换图片 + 活预览（v0.7.3 P4）
   useEffect(() => {
     if (mode !== 'read') return;
     const el = previewRef.current;
@@ -150,6 +176,35 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     let html = renderMarkdown(props.doc ?? '');
     html = renderWikiLinks(html, (t) => `#/wiki/${encodeURIComponent(t)}`);
     el.innerHTML = html;
+
+    // v0.7.3 P4a：任务列表 checkbox 变为可交互——点击回写源码
+    // marked 把 `- [ ]` 渲染成 <input type="checkbox" disabled>；按文档顺序映射回源码行
+    const checkboxes = Array.from(el.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+    if (checkboxes.length > 0 && props.doc) {
+      const lines = (props.doc ?? '').split('\n');
+      const taskLines: number[] = [];
+      lines.forEach((ln, i) => {
+        if (/^\s*([-*+])\s+\[( |x|X)\]\s+/.test(ln)) taskLines.push(i);
+      });
+      checkboxes.forEach((cb, idx) => {
+        cb.disabled = false;
+        cb.removeAttribute('disabled');
+        const lineNo = taskLines[idx];
+        cb.addEventListener('change', () => {
+          if (lineNo == null || !props.onEdit || !props.currentPath) return;
+          const m = lines[lineNo].match(/^(\s*([-*+])\s+)\[( |x|X)\]/);
+          if (!m) return;
+          const replaced = lines[lineNo].replace(
+            /^(\s*([-*+])\s+)\[( |x|X)\]/,
+            (_all, pre: string) => `${pre}[${cb.checked ? 'x' : ' '}]`
+          );
+          lines[lineNo] = replaced;
+          props.onEdit(props.currentPath!, lines.join('\n'));
+          // 勾选状态保留（下一轮 effect 重新渲染时会以新 doc 校准）
+        });
+      });
+    }
+
     // 双链点击（事件委托）
     el.querySelectorAll('a.wikilink').forEach((a) => {
       a.addEventListener('click', (e) => {
@@ -158,6 +213,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         if (t) props.onOpenWiki?.(t);
       });
     });
+
     if (!props.resolveImage) return;
     let cancelled = false;
     const imgs = Array.from(el.querySelectorAll('img'));
@@ -172,6 +228,15 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           img.alt = `${img.alt}（图片加载失败）`;
         }
       }
+      // v0.7.3 P4b：图片点击全屏预览（轻量 lightbox，点任意处关闭）
+      if (cancelled) return;
+      imgs.forEach((img) => {
+        img.style.cursor = 'zoom-in';
+        img.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openLightbox(img.src, img.alt);
+        });
+      });
     })();
     return () => {
       cancelled = true;
@@ -414,6 +479,12 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           >
             {mode === 'edit' ? '👁' : '✎'}
           </button>
+        </div>
+      )}
+      {/* v0.7.3 P4：图片全屏预览 */}
+      {lightbox && (
+        <div className="m-img-viewer" onClick={() => setLightbox(null)}>
+          <img src={lightbox.src} alt={lightbox.alt} />
         </div>
       )}
     </div>
