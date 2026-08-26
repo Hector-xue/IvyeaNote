@@ -10,8 +10,6 @@ import {
   EditorView,
   keymap,
   highlightActiveLine,
-  highlightActiveLineGutter,
-  lineNumbers,
   drawSelection,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
@@ -31,6 +29,7 @@ import {
   toggleTaskList,
   type EditResult,
 } from '../lib/format';
+import { livePreview, livePreviewTheme } from '../lib/livePreview';
 
 export interface MarkdownEditorProps {
   doc: string;
@@ -47,8 +46,10 @@ export interface MarkdownEditorProps {
 
 function cmExtensions(onEdit: (text: string) => void, dark: boolean): Extension[] {
   return [
-    lineNumbers(),
-    highlightActiveLineGutter(),
+    // v0.5.0 U1：Live Preview——默认隐藏行号（Obsidian 风格），装饰渲染见 livePreview.ts
+    EditorView.theme({ '.cm-gutters': { display: 'none' } }),
+    EditorView.theme(livePreviewTheme),
+    livePreview,
     highlightActiveLine(),
     drawSelection(),
     history(),

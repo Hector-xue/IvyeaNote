@@ -83,15 +83,26 @@ vi.mock('@codemirror/view', () => ({
     setState() {}
     destroy() {}
     static updateListener = { of: () => ({}) };
+    static theme = () => ({});
   },
+  ViewPlugin: { fromClass: () => ({}) },
+  Decoration: {
+    none: [],
+    set: () => [],
+    line: () => ({ range: () => null }),
+    mark: () => ({ range: () => null }),
+    replace: () => ({ range: () => null }),
+  },
+  WidgetType: class {},
   keymap: { of: () => ({}) },
   highlightActiveLine: () => ({}),
-  highlightActiveLineGutter: () => ({}),
-  lineNumbers: () => ({}),
   drawSelection: () => ({}),
 }));
 vi.mock('@codemirror/state', () => ({
   EditorState: { create: () => ({}) },
+  EditorSelection: { range: () => ({}), cursor: () => ({}) },
+  StateEffect: { define: () => ({ of: () => ({}) }) },
+  Range: class {},
 }));
 
 import App from './App';
@@ -104,17 +115,17 @@ beforeEach(() => {
   memFiles.set('sub/b.md', '# B');
 });
 
-/** 渲染并等主界面出现 */
+/** 渲染并等主界面出现（v0.5.0：文件树隐藏后缀，找 'a'） */
 async function renderMain() {
   render(<App />);
-  await screen.findByText('a.md');
+  await screen.findByText('a');
 }
 
 describe('R2：免登录本地模式文件列表不被 client 门控', () => {
   it('无账号启动：侧栏列出本地库全部 .md 文件', async () => {
     await renderMain();
-    expect(screen.getByText('a.md')).toBeTruthy();
-    expect(screen.getByText('b.md')).toBeTruthy();
+    expect(screen.getByText('a')).toBeTruthy();
+    expect(screen.getByText('b')).toBeTruthy();
     // 本地库名出现在笔记库选择器里
     expect(screen.getByText('我的笔记')).toBeTruthy();
   });
@@ -149,17 +160,19 @@ describe('v0.4.0 T5：删除进回收站', () => {
     expect(await screen.findByText('删除笔记')).toBeTruthy(); // 对话框标题
     fireEvent.click(screen.getByText('删除')); // 确认按钮（红色）
 
-    await waitFor(() => expect(memFiles.has('a.md')).toBe(false));
+    // v0.5.0 文件树：sub 文件夹排在文件前，第一个删除按钮属于 sub/b.md
+    await waitFor(() => expect(memFiles.has('sub/b.md')).toBe(false), { timeout: 3000 });
+    expect(memFiles.has('a.md')).toBe(true);
     expect(confirmSpy).not.toHaveBeenCalled();
-    // 原文已进回收站
-    const trashKey = [...memFiles.keys()].find((k) => k.startsWith('.trash/') && k.endsWith('-a.md'));
+    // 原文已进回收站（sub__b.md：目录用 __ 编码）
+    const trashKey = [...memFiles.keys()].find((k) => k.startsWith('.trash/') && k.endsWith('-sub__b.md'));
     expect(trashKey).toBeTruthy();
-    expect(memFiles.get(trashKey!)).toContain('# A');
+    expect(memFiles.get(trashKey!)).toContain('# B');
 
     // 回收站面板：恢复
     fireEvent.click(screen.getByText(/回收站/));
     fireEvent.click(await screen.findByText('恢复'));
-    await waitFor(() => expect(memFiles.has('a.md')).toBe(true));
+    await waitFor(() => expect(memFiles.has('sub/b.md')).toBe(true));
   });
 });
 
@@ -185,7 +198,7 @@ describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
 
     // 返回主界面
     fireEvent.click(screen.getByText('先不登录，直接记笔记 →'));
-    expect(await screen.findByText('a.md')).toBeTruthy();
+    expect(await screen.findByText('a')).toBeTruthy();
     expect(document.querySelector('.login-card')).toBeNull();
   });
 });

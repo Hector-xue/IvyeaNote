@@ -1,6 +1,10 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import logoUrl from '../assets/logo.svg';
 import { MarkdownEditor } from './MarkdownEditor';
+import { FileTree, buildFileTree } from './FileTree';
+import { TabsBar } from './TabsBar';
+import { RibbonIcon } from './Icons';
+import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
 
@@ -75,15 +79,53 @@ interface Props {
   /** v0.4.0 T5：回收站 */
   trashCount?: number;
   onOpenTrash?(): void;
+  /** v0.5.0 U3：文件树折叠与新建文件夹 */
+  collapsedDirs: Set<string>;
+  onToggleDir(dir: string): void;
+  onCreateFolder(parent?: string): void;
+  /** v0.5.0 U2：多标签页 */
+  tabs?: string[];
+  activeTab?: string | null;
+  onSelectTab?(path: string): void;
+  onCloseTab?(path: string): void;
+  /** v0.5.0 U5：ribbon 动作（预留扩展；当前仅 files） */
+  onRibbonAction?(action: 'files'): void;
 }
 
 export function MainView(props: Props) {
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const tree = buildTree(props.files);
+  /** v0.5.0 U3：递归树由扁平路径构建 */
+  const fileTree = useMemo(() => buildFileTree(props.files), [props.files]);
   const pdfTree = buildTree(props.pdfs);
+  /** v0.5.0 U4：字数统计 */
+  const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
 
   return (
     <>
+      {/* v0.5.0 U5：左侧 icon ribbon（对标 Obsidian 功能栏） */}
+      <nav className="ribbon" aria-label="功能栏">
+        <button
+          className="ribbon-btn"
+          title="文件"
+          aria-label="文件"
+          onClick={() => props.onRibbonAction?.('files')}
+        >
+          <RibbonIcon name="folder" />
+        </button>
+        {props.onOpenTrash && (
+          <button className="ribbon-btn" title="回收站" aria-label="回收站" onClick={props.onOpenTrash}>
+            <RibbonIcon name="trash" />
+          </button>
+        )}
+        <span className="ribbon-spacer" />
+        <button
+          className="ribbon-btn"
+          title={props.theme === 'light' ? '切换深色' : '切换浅色'}
+          aria-label="切换主题"
+          onClick={props.onToggleTheme}
+        >
+          <RibbonIcon name={props.theme === 'light' ? 'moon' : 'sun'} />
+        </button>
+      </nav>
       <aside className="sidebar">
         <div className="side-head">
           <img src={logoUrl} alt="" className="brand-logo" />
@@ -176,55 +218,17 @@ export function MainView(props: Props) {
         )}
 
         <div className="file-list">
-          {[...tree.entries()].map(([dir, nodes]) => (
-            <div key={dir || '/'} className="dir-group">
-              {dir && (
-                <div
-                  className="dir-label"
-                  onClick={() =>
-                    setCollapsed((s) => {
-                      const n = new Set(s);
-                      if (n.has(dir)) n.delete(dir);
-                      else n.add(dir);
-                      return n;
-                    })
-                  }
-                >
-                  {collapsed.has(dir) ? '▸' : '▾'} {dir}
-                </div>
-              )}
-              {!collapsed.has(dir) &&
-                nodes.map((n) => (
-                  <div
-                    key={n.path}
-                    className={`file ${props.currentPath === n.path ? 'active' : ''}`}
-                    onClick={() => props.onSelect(n.path)}
-                  >
-                    <span className="file-name">{n.name}</span>
-                    <span className="file-actions">
-                      <button
-                        title="在此文件夹新建笔记"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          props.onNewFolderNote(n.dir);
-                        }}
-                      >
-                        ＋
-                      </button>
-                      <button
-                        title="删除"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          props.onDeleteFile(n.path);
-                        }}
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  </div>
-                ))}
-            </div>
-          ))}
+          {/* v0.5.0 U3：递归文件树（隐藏后缀 / hover 操作 / 多层折叠） */}
+          <FileTree
+            nodes={fileTree}
+            currentPath={props.currentPath}
+            collapsed={props.collapsedDirs}
+            onToggleDir={props.onToggleDir}
+            onSelectFile={props.onSelect}
+            onNewNoteIn={props.onNewFolderNote}
+            onNewFolderIn={props.onCreateFolder}
+            onDeleteFile={props.onDeleteFile}
+          />
           {/* v0.3.4：PDF 列表 */}
           {props.pdfs.length > 0 && (
             <div className="dir-group">
@@ -249,6 +253,9 @@ export function MainView(props: Props) {
 
         <div className="sidebar-foot">
           <button onClick={props.onCreateNote}>＋ 新建笔记</button>
+          <button onClick={() => props.onCreateFolder('')} title="新建根文件夹">
+            ⊞ 新建文件夹
+          </button>
           {props.onOpenTrash && (
             <button onClick={props.onOpenTrash} title="回收站">
               🗑 回收站{props.trashCount ? `（${props.trashCount}）` : ''}
@@ -263,6 +270,15 @@ export function MainView(props: Props) {
       </aside>
 
       <main className="editor-pane">
+        {/* v0.5.0 U2：标签栏 */}
+        {props.tabs && props.tabs.length > 0 && props.onSelectTab && props.onCloseTab && (
+          <TabsBar
+            tabs={props.tabs}
+            active={props.activeTab ?? props.currentPath}
+            onSelect={props.onSelectTab}
+            onClose={props.onCloseTab}
+          />
+        )}
         <div className="editor-head">
           <span className="crumb">
             {props.pdfView ? `📄 ${props.pdfView}` : (props.currentPath ?? '未选择笔记')}
@@ -293,6 +309,13 @@ export function MainView(props: Props) {
             resolveImage={props.resolveImage}
           />
         )}
+        {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
+        <div className="status-bar">
+          <span>{props.currentPath ?? '未选择笔记'}</span>
+          <span className="st-right">
+            {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
+          </span>
+        </div>
       </main>
     </>
   );

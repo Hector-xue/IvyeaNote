@@ -9,7 +9,8 @@ import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import { syncVault, pushOnly, pullOnly, type FileIO, type FileMeta, type SyncReport } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
-import { extractH1, titleToPath, uniqueName } from './lib/titleSync';
+import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
+import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import {
   loadState,
   saveState,
@@ -439,6 +440,97 @@ export default function App() {
     [vault, files, io, refreshFiles, openFile, doSync]
   );
 
+  /** v0.5.0 U3：文件夹折叠状态（持久化） */
+  const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => loadCollapsed());
+  const toggleDir = useCallback((dir: string) => {
+    setCollapsedDirs((s) => {
+      const n = new Set(s);
+      if (n.has(dir)) n.delete(dir);
+      else n.add(dir);
+      saveCollapsed(n);
+      return n;
+    });
+  }, []);
+
+  /** v0.5.0 U3：新建文件夹 */
+  const onCreateFolder = useCallback(
+    async (parent = '') => {
+      if (!vault) return;
+      const name = await prompt({
+        title: '新建文件夹',
+        placeholder: parent ? `${parent}/文件夹名` : '文件夹名',
+        okText: '创建',
+        validate: (v) => {
+          const t = sanitizeTitle(v, '');
+          if (!t) return '请输入文件夹名';
+          const full = parent ? `${parent}/${t}` : t;
+          if (files.some((f) => f.startsWith(full + '/'))) return '同名文件夹已存在';
+          return null;
+        },
+      });
+      if (!name) return;
+      const full = `${parent ? parent + '/' : ''}${sanitizeTitle(name, '未命名')}`;
+      try {
+        // 空文件夹用一个占位文件保证目录存在（Obsidian 同款做法的简化版）
+        await io.write(vault.localPath ?? '', `${full}/.keep`, '');
+        await refreshFiles();
+        void doSync();
+      } catch (e) {
+        toast(`创建失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, files, refreshFiles, doSync, prompt, toast]
+  );
+
+  /** v0.5.0 U2：多标签页（打开的笔记路径列表 + 当前激活），持久化 */
+  const [openTabs, setOpenTabs] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ivnote.tabs') ?? '[]') as string[];
+    } catch {
+      return [];
+    }
+  });
+  const [activeTab, setActiveTab] = useState<string | null>(
+    () => localStorage.getItem('ivnote.activeTab')
+  );
+  useEffect(() => {
+    localStorage.setItem('ivnote.tabs', JSON.stringify(openTabs));
+    if (activeTab) localStorage.setItem('ivnote.activeTab', activeTab);
+    else localStorage.removeItem('ivnote.activeTab');
+  }, [openTabs, activeTab]);
+
+  /** 打开笔记：确保标签存在并激活（包装 openFile） */
+  const openFileInTab = useCallback(
+    async (path: string) => {
+      setOpenTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
+      setActiveTab(path);
+      await openFile(path);
+    },
+    [openFile]
+  );
+
+  /** 关闭标签：若是当前标签则切到相邻标签 */
+  const closeTab = useCallback(
+    (path: string) => {
+      setOpenTabs((tabs) => {
+        const idx = tabs.indexOf(path);
+        const next = tabs.filter((t) => t !== path);
+        setActiveTab((cur) => {
+          if (cur !== path) return cur;
+          const fallback = next[Math.min(idx, next.length - 1)] ?? null;
+          if (fallback) void openFile(fallback);
+          else {
+            setCurrentPath(null);
+            setDoc(null);
+          }
+          return fallback;
+        });
+        return next;
+      });
+    },
+    [openFile]
+  );
+
   const onDeleteFile = useCallback(
     async (path: string) => {
       if (!vault) return;
@@ -452,7 +544,8 @@ export default function App() {
       if (!ok) return;
       try {
         // v0.4.0 T5：移入回收站而非直接物理删除
-        const base = path.split('/').pop() ?? path;
+        // v0.5.0：目录结构编码进文件名（sub/b.md → sub__b.md），恢复时可还原
+        const base = path.replaceAll('/', '__');
         const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
         let trashRel = `.trash/${stamp}-${base}`;
         while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
@@ -495,9 +588,9 @@ export default function App() {
   const restoreFromTrash = useCallback(
     async (trashPath: string) => {
       if (!vault) return;
-      // 文件名格式：时间戳-原名.md → 恢复到原目录下的原文件名
+      // 文件名格式：时间戳-原路径（目录用 __ 编码）→ 还原完整相对路径
       const base = trashPath.split('/').pop() ?? '';
-      const original = base.replace(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/, '');
+      const original = base.replace(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/, '').replaceAll('__', '/');
       try {
         if (await io.exists(vault.localPath ?? '', original)) {
           toast(`恢复失败：${original} 已存在同名笔记`, 'error');
@@ -957,6 +1050,9 @@ export default function App() {
             </select>
           }
           onCreateVault={createVault}
+          collapsedDirs={collapsedDirs}
+          onToggleDir={toggleDir}
+          onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
         />
         {dialogEl}
         {toastEl}
@@ -974,7 +1070,7 @@ export default function App() {
         doc={doc}
         syncing={syncing}
         lastReport={lastReport}
-        onSelect={(p) => void openFile(p)}
+        onSelect={(p) => void openFileInTab(p)}
         onEdit={onEdit}
         onCreateNote={() => void onCreateNote('')}
         onNewFolderNote={(folder) => void onCreateNote(folder)}
@@ -982,6 +1078,10 @@ export default function App() {
         onUpload={() => void doUpload()}
         onDownload={() => void doDownload()}
         onImportObsidian={() => void onImportObsidian()}
+        tabs={openTabs}
+        activeTab={activeTab}
+        onSelectTab={(p) => void openFileInTab(p)}
+        onCloseTab={closeTab}
         theme={theme}
         onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
         onBindFolder={() => void onBindFolder()}
@@ -1000,6 +1100,9 @@ export default function App() {
         importProgress={importProgress}
         trashCount={trashList.length}
         onOpenTrash={() => void openTrash()}
+        collapsedDirs={collapsedDirs}
+        onToggleDir={toggleDir}
+        onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
         vaultSelector={
           <select
             value={activeVaultId ?? ''}

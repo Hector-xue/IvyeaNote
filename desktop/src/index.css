@@ -283,6 +283,150 @@ button {
 }
 
 
+/* v0.5.0 U3：递归文件树 */
+.ft-node { min-width: 0; }
+.ft-dir, .ft-file {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  padding-right: 8px !important;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text, #333);
+  border-radius: 6px;
+  margin: 1px 6px;
+  width: auto;
+  box-sizing: border-box;
+}
+.ft-dir:hover, .ft-file:hover {
+  background: rgba(127,127,127,0.10);
+}
+.ft-file.active {
+  background: var(--accent-soft, rgba(74,140,90,0.14));
+  color: var(--accent, #4a8);
+}
+.ft-caret {
+  font-size: 10px;
+  color: var(--muted);
+  width: 12px;
+  flex: none;
+}
+.ft-dir-name, .ft-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ft-actions {
+  display: none;
+  gap: 2px;
+  flex: none;
+}
+.ft-dir:hover .ft-actions, .ft-file:hover .ft-actions { display: inline-flex; }
+.ft-actions button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.ft-actions button:hover { color: var(--accent); background: rgba(127,127,127,0.15); }
+
+/* v0.5.0 U2：标签栏 */
+.tabs-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg, #fafafa);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 180px;
+  user-select: none;
+}
+.tab:hover { background: rgba(127,127,127,0.08); }
+.tab.active {
+  background: var(--panel, #fff);
+  border-color: var(--border);
+  color: var(--text, #333);
+  position: relative;
+}
+.tab.active::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: var(--panel, #fff);
+}
+.tab-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.tab-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.tab-close:hover { background: rgba(127,127,127,0.2); color: var(--text, #333); }
+
+/* v0.5.0 U5：左侧 icon ribbon */
+.ribbon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px;
+  border-right: 1px solid var(--border);
+  background: var(--bg, #fafafa);
+}
+.ribbon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  display: inline-flex;
+}
+.ribbon-btn:hover {
+  color: var(--accent);
+  background: rgba(127,127,127,0.12);
+}
+.ribbon-spacer { flex: 1; }
+
+/* v0.5.0 U4：底部状态栏 */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 3px 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: var(--bg, #fafafa);
+  user-select: none;
+}
+.status-bar .st-right { margin-left: auto; }
+
 .syncing-hint {
   color: var(--muted);
   font-size: 12px;
@@ -462,6 +606,19 @@ button {
   flex: 1;
   overflow: auto;
   padding: 0 8px 16px;
+}
+
+/* v0.5.0 U6：可读行宽 + 正文排版（对标 Obsidian） */
+.editor-host .cm-content {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 24px 40vh;
+  font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+}
+.editor-host .cm-line {
+  max-width: 760px;
 }
 
 .editor-host .cm-editor {

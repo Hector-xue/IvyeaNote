@@ -107,6 +107,16 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 
 ### 阶段 1：Local-first 落地 —— v0.4
 
+> **实施记录（2026-08-26，v0.5.0 第二批·UI 对标）**：用户以四组截图对比指出呈现层差距（Obsidian 是成稿、IvyeaNote 是源码），落地六项 UI 重做：
+> - **U1 实时预览**：新增 `lib/livePreview.ts`（CodeMirror ViewPlugin 装饰）——标题/加粗/斜体/行内代码/引用在编辑态直接渲染，标记符光标靠近时显示源码（Obsidian live preview 行为）；任务 `- [ ]` 渲染为可点击复选框（点击切换源码，完成项划线）；隐藏行号。
+> - **U3 文件树**：新增 `ui/FileTree.tsx`——多层递归树、文件夹优先排序、隐藏 .md 后缀、hover 浮现操作、折叠状态持久化（`ivnote.collapsed`）、新建文件夹（`.keep` 占位）。
+> - **U4 状态栏**：新增 `lib/wordCount.ts`——中英混排词数/字符数（CJK 逐字、英文分词、代码块不计），底部状态栏显示路径+统计。
+> - **U2 多标签页**：新增 `ui/TabsBar.tsx`——打开即开标签、切换/关闭、关闭当前自动回退相邻、持久化（`ivnote.tabs`/`ivnote.activeTab`）。
+> - **U5 icon ribbon**：新增 `ui/Icons.tsx` 线性 SVG 图标集（stroke 1.6 wireframe 风），左侧 ribbon：文件/回收站/主题切换。
+> - **U6 排版**：可读行宽 760px 居中、正文 15px/1.75 行高、系统无衬线字体栈。
+>
+> 门禁全绿：tsc OK、vitest 83/83（新增 livePreview 5 + FileTree 6 + wordCount 7 + TabsBar 5）、vite build OK。
+
 > **实施记录（2026-08-26，v0.4.0 第一批）**：用户实测 v0.3.4「导入 Obsidian / 绑定文件夹报错、新建笔记繁琐」，对标 Obsidian 重做可用性。已落地五项：
 > - **R1（根因修复）**：`capabilities/default.json` 缺 `dialog:default` 权限 → plugin-dialog 的 `open()` 被 Tauri 2 权限模型直接拒绝，导入/绑定必报错。补一行即修复。
 > - **T2 首启引导**：新增 `WelcomeView.tsx` 三卡（打开本地文件夹 / 从 Obsidian 导入 / 新建空白库），免登录即用；`ivnote.welcomed` 标记只显示一次。
