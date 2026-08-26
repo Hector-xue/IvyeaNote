@@ -22,3 +22,4 @@ desktop/tsconfig.tsbuildinfo
 desktop/src-tauri/gen/android/
 desktop/src-tauri/gen/apple/
 desktop/apk-out/
+server/ivnote-server
