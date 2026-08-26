@@ -157,13 +157,13 @@ export function MobileView(props: Props) {
         </div>
       </aside>
 
-      {/* 主区 */}
+      {/* 主区：iOS 化导航栏 + 大标题 */}
       <main className="m-main">
         <header className="m-topbar">
           <button className="icon-btn" onClick={() => setDrawerOpen(true)} aria-label="打开菜单">
             ☰
           </button>
-          <span className="m-title">{props.currentPath ?? props.vault.name}</span>
+          <span className="m-title-small">{props.currentPath ? props.currentPath.split('/').pop() : props.vault.name}</span>
           <button
             className={`icon-btn m-sync ${props.syncing ? 'spin' : ''}`}
             onClick={props.onSync}
@@ -174,6 +174,11 @@ export function MobileView(props: Props) {
             ↻
           </button>
         </header>
+        {props.currentPath != null && (
+          <h1 className="m-large-title" aria-hidden="true">
+            <span>{props.currentPath.split('/').pop()}</span>
+          </h1>
+        )}
 
         {hasError && <div className="m-error">⚠ {report!.errors[0]}</div>}
 

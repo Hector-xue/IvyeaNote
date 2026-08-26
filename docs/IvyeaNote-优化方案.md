@@ -149,6 +149,16 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 >
 > 至此阶段 2「知识网络」全部完成。门禁：tsc OK / oxlint 0 error / vitest 120/120 / build OK；go build + vet OK。
 
+### v0.7.2 第五批·移动端 iOS 化 UI 重做
+
+> **实施记录（2026-08-26，v0.7.2）**：用户反馈两个移动端问题——①格式工具栏（加粗等）位置割裂不像原生 App；②抽屉 logo 顶到状态栏与系统时间重叠。落地四项：
+> - **P1 安全区修复**：`index.html` viewport 加 `viewport-fit=cover`；`.m-drawer` padding 加 `env(safe-area-inset-top/bottom)`。安卓端 MainActivity 已是 `enableEdgeToEdge()` 全屏绘制，此前前端完全没吃安全区。
+> - **P2 design token**：`:root`/dark 两套新增字阶（22/17/16/13px）、圆角阶（10/14/20）、间距阶、毛玻璃材质变量 `--blur-bg`。
+> - **P3 选区浮动气泡**：MarkdownEditor 移动端移除常驻横条，改为监听 selectionchange——非空选区时在选区上方浮出毛玻璃胶囊气泡（B/I/H/列表/任务/引用/代码/链接），带缩放淡入动画，折叠选区即消失；底部仅留最小插入栏（插图+阅读切换）。
+> - **P4 iOS 化导航与列表**：顶栏改 17px semibold 小标题 + 毛玻璃 + 0.5px separator；查看笔记时增加 22px 大标题行；文件列表卡片化分组（圆角容器+组内分隔线）；搜索框改 iOS 灰底圆角样式。桌面端工具栏同步换毛玻璃材质并统一 hover/active 过渡。
+>
+> 门禁：oxlint 0 error / tsc OK / vitest 120/120 / build OK；版本号四处均已同步 0.7.2。真机点检项：APK 装机后看抽屉打开时 logo 是否在状态栏下方、选中文字是否浮出气泡且点击加粗后气泡跟随刷新。
+
 > **实施记录（2026-08-26，v0.7.0 第三批·管理与知识网络）**：
 > - **H8 管理页**：Store 新增 ListUsers/DeleteUser（级联）/UserBlobBytes 双后端实现；`/api/v1/admin/users` 列表+删除（requireAdmin 鉴权、管理员保护）；`/admin` 页面（token 即用）。端到端验证：容量统计/非管理员 403/级联删除/管理员保护全过。
 > - **H8b 备份**：install-bare.sh 支持 IVNOTE_ENABLE_BACKUP=1，每日 03:00 备份 SQLite 保留 14 份。

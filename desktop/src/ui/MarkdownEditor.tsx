@@ -109,6 +109,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const viewRef = useRef<EditorView | null>(null);
   const [mode, setMode] = useState<'edit' | 'read'>('edit');
   const [imgBusy, setImgBusy] = useState(false);
+  /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
+  const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
 
   // 创建 CodeMirror 实例（一次）
   useEffect(() => {
@@ -136,6 +138,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         extensions: cmExtensions(props.onEdit.bind(null, props.currentPath ?? ''), props.theme === 'dark', () => props.wikiTitles ?? []),
       })
     );
+    setBubble(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.currentPath, props.theme]);
 
@@ -189,6 +192,75 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     } catch {
       // 静默：粘贴普通文本不受影响
     }
+  };
+
+  /** v0.7.2 移动端：非空选区时显示气泡（在选区上方浮出），折叠选区时隐藏 */
+  const [bubblePos, setBubblePos] = useState<{ left: number; top: number } | null>(null);
+  useEffect(() => {
+    if (!props.mobile) return;
+    const view = viewRef.current;
+    if (!view) return;
+    const update = () => {
+      if (mode !== 'edit') {
+        setBubble(null);
+        setBubblePos(null);
+        return;
+      }
+      const { from, to } = view.state.selection.main;
+      if (from === to || view.state.readOnly) {
+        setBubble(null);
+        setBubblePos(null);
+        return;
+      }
+      setBubble({ from, to });
+      try {
+        const c1 = view.coordsAtPos(from);
+        const c2 = view.coordsAtPos(to);
+        const hostRect = view.dom.getBoundingClientRect();
+        if (c1 && c2) {
+          const x1 = Math.min(c1.left, c2.left) - hostRect.left;
+          const x2 = Math.max(c1.right, c2.right) - hostRect.left;
+          const yTop = Math.min(c1.top, c2.top) - hostRect.top;
+          setBubblePos({ left: (x1 + x2) / 2, top: yTop });
+        }
+      } catch {
+        /* 视口外坐标暂不可得，仅隐藏定位 */
+        setBubblePos(null);
+      }
+    };
+    update();
+    document.addEventListener('selectionchange', update);
+    return () => document.removeEventListener('selectionchange', update);
+  }, [props.mobile, props.currentPath, mode]);
+
+  /** 气泡按钮应用格式后刷新自身状态（选区被重设为选中文本） */
+  const bubbleFormat = (btn: ToolBtn) => {
+    applyFormat(btn);
+    // dispatch 后下一帧重新读取选区/坐标
+    requestAnimationFrame(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      const { from, to } = view.state.selection.main;
+      if (from === to) {
+        setBubble(null);
+        setBubblePos(null);
+        return;
+      }
+      setBubble({ from, to });
+      try {
+        const c1 = view.coordsAtPos(from);
+        const c2 = view.coordsAtPos(to);
+        const hostRect = view.dom.getBoundingClientRect();
+        if (c1 && c2) {
+          const x1 = Math.min(c1.left, c2.left) - hostRect.left;
+          const x2 = Math.max(c1.right, c2.right) - hostRect.left;
+          const yTop = Math.min(c1.top, c2.top) - hostRect.top;
+          setBubblePos({ left: (x1 + x2) / 2, top: yTop });
+        }
+      } catch {
+        setBubblePos(null);
+      }
+    });
   };
 
   /** 对编辑器当前选区应用格式命令 */
@@ -298,7 +370,52 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         <div className="editor-host" ref={hostRef} style={{ display: mode === 'edit' ? undefined : 'none' }} />
         {mode === 'read' && <div className="md-preview" ref={previewRef} />}
       </div>
-      {props.mobile && toolbar}
+      {/* v0.7.2 移动端：选区浮动气泡（替代常驻横条） */}
+      {props.mobile && bubble && bubblePos && mode === 'edit' && (
+        <div
+          className="md-bubble"
+          role="toolbar"
+          aria-label="格式工具"
+          style={{ left: bubblePos.left, top: bubblePos.top }}
+        >
+          {TOOLS.filter((b) => ['b', 'i', 'h', 'ul', 'task', 'q', 'code', 'link'].includes(b.key)).map((b) => (
+            <button
+              key={b.key}
+              className={`md-tool ${b.key === 'b' ? 't-bold' : b.key === 'i' ? 't-italic' : ''}`}
+              title={b.title}
+              aria-label={b.title}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => bubbleFormat(b)}
+            >
+              {b.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {props.mobile && (
+        <div className="md-insert-bar">
+          <button
+            className="md-tool"
+            title="插入图片"
+            aria-label="插入图片"
+            onPointerDown={(e) => e.preventDefault()}
+            disabled={imgBusy}
+            onClick={() => void doInsertImage()}
+          >
+            🖼
+          </button>
+          <span className="md-toolbar-spacer" />
+          <button
+            className={`md-tool md-mode ${mode === 'read' ? 'active' : ''}`}
+            title={mode === 'edit' ? '切换到阅读模式' : '切换到编辑模式'}
+            aria-label="切换编辑/阅读"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => setMode(mode === 'edit' ? 'read' : 'edit')}
+          >
+            {mode === 'edit' ? '👁' : '✎'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
