@@ -15,6 +15,8 @@ import type { SyncReport } from '../lib/sync';
 import type { SortMode } from './MainView';
 
 interface Props {
+  /** v0.7.4：移动端更新检查入口 */
+  onCheckUpdate?: () => void;
   vault: VaultMeta;
   files: string[];
   pdfs: string[];
@@ -343,6 +345,7 @@ export function MobileView(props: Props) {
 
         <div className="sidebar-foot">
           <button onClick={props.onCreateNote}>＋ 新建笔记</button>
+          {props.onCheckUpdate && <button onClick={props.onCheckUpdate}>检查更新</button>}
           <button onClick={props.onCreateVault}>＋ 新建笔记库</button>
           {props.hasAccount ? (
             <button onClick={props.onLogout}>退出登录</button>

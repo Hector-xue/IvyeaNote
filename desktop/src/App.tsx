@@ -35,16 +35,24 @@ import {
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 
-/** 移动端判定：窄屏或触屏设备（UA 粗判），命中即用 MobileView 单栏布局 */
+/** 移动端判定：真机 UA（Android/iOS）直接命中，或窄屏窗口——命中即用 MobileView 单栏布局 */
 function useIsMobile(): boolean {
-  const [m, setM] = useState(() => window.matchMedia('(max-width: 768px)').matches);
+  const [m, setM] = useState(
+    () =>
+      isMobileUA() || window.matchMedia('(max-width: 768px)').matches
+  );
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 768px)');
-    const fn = () => setM(mq.matches);
+    const fn = () => setM(isMobileUA() || mq.matches);
     mq.addEventListener('change', fn);
     return () => mq.removeEventListener('change', fn);
   }, []);
   return m;
+}
+
+/** v0.7.4：Android WebView 报告的 CSS 宽度可能 >768 导致桌面布局误判（v0.7.3 真机反馈），UA 判定优先 */
+function isMobileUA(): boolean {
+  return typeof navigator !== 'undefined' && /android|iphone|ipad/i.test(navigator.userAgent);
 }
 
 function errText(e: unknown): string {
@@ -110,7 +118,7 @@ export default function App() {
   /** 手动「检查更新」时置 true，用于区分静默检查（无更新不提示） */
   const manualCheckRef = useRef(false);
   /** 是否移动端（Android）：更新走跳转下载而非应用内安装 */
-  const isMobileDevice = /android|iphone|ipad/i.test(navigator.userAgent);
+  const isMobileDevice = isMobileUA();
 
   /** 检查更新并弹 Dialog；silent=true 时无更新不打扰 */
   const runUpdateCheck = useCallback(
@@ -1397,6 +1405,7 @@ export default function App() {
           onDeleteFile={(p) => void onDeleteFile(p)}
           onRenameFile={(p, name) => void onRenameFile(p, name)}
           backlinks={wikiLinks.back}
+          onCheckUpdate={() => void runUpdateCheck(false)}
           onSync={() => void doSync()}
           onCreateVault={createVault}
           theme={theme}

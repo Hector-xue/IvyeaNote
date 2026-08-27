@@ -171,6 +171,15 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 >
 > 门禁：tsc OK / oxlint 0 error / vitest 124/124（+4 headings 用例）/ build OK；版本号四处同步 0.7.3。全文搜索（FTS5 接入搜索链路）留待 v0.8 与 Local-first 收尾。
 
+### v0.7.4 热修·移动端布局误判 + 更新入口
+
+> **实施记录（2026-08-27，v0.7.4）**：用户真机反馈 v0.7.3「桌面/手机都像回退了」。解包 APK 内嵌资产取证后定位——**不是功能丢失，而是布局误判**：
+> - **R1 布局误判修复**：useIsMobile 原来只按 CSS 宽度 ≤768px 判定，该真机 WebView 报告宽度超阈值 → 整个 App 渲染成桌面布局（顶部标签栏、标题下常驻 B/I/H 工具栏、等宽字编辑区）。修复：Android/iOS UA 直接命中移动布局，宽度判定仅作浏览器窄窗兜底。
+> - **R2 更新入口补齐**：更新检查入口只在命令面板（Ctrl+P），手机上不可达；且安卓 updater 逻辑依赖 GitHub API 可能静默失败。已在抽屉底部加「检查更新」按钮（复用 checkForUpdate 移动分支：GitHub latest tag 与注入版本号比较）。
+> - 取证方法记录：Tauri Android 将前端以 brotli 压缩内嵌于 lib*.so，可按 assets/index-*.js 名称偏移穷举 brotli 流起点解出 JS/CSS，直接验证发布包内容与代码一致性。
+>
+> 门禁：tsc OK / oxlint 0 error / vitest 128/128（+4 isNewer 用例）/ build OK；版本号四处同步 0.7.4。
+
 > **实施记录（2026-08-26，v0.7.0 第三批·管理与知识网络）**：
 > - **H8 管理页**：Store 新增 ListUsers/DeleteUser（级联）/UserBlobBytes 双后端实现；`/api/v1/admin/users` 列表+删除（requireAdmin 鉴权、管理员保护）；`/admin` 页面（token 即用）。端到端验证：容量统计/非管理员 403/级联删除/管理员保护全过。
 > - **H8b 备份**：install-bare.sh 支持 IVNOTE_ENABLE_BACKUP=1，每日 03:00 备份 SQLite 保留 14 份。

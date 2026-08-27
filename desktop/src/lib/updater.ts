@@ -101,3 +101,15 @@ export async function openReleasePage(): Promise<void> {
     window.open(RELEASE_PAGE, "_blank");
   }
 }
+
+/** v0.7.4：语义化版本比较（a > b 返回 true）；忽略非数字段 */
+export function isNewerVersion(a: string, b: string): boolean {
+  const pa = a.split(/[.-]/).map((x) => parseInt(x, 10) || 0);
+  const pb = b.split(/[.-]/).map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? 0;
+    const y = pb[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
