@@ -180,6 +180,8 @@ GPT 方案推荐 Flutter。**本项目决定保留 Tauri（桌面 + Android 统�
 >
 > 门禁：tsc OK / oxlint 0 error / vitest 128/128（+4 isNewer 用例）/ build OK；版本号四处同步 0.7.4。
 
+> **v0.7.4 发布确认**：tag 已推送，CI 出三平台安装包 + APK（release.yml）。真机验收点：手机打开后应为单栏移动布局（抽屉+大标题+底部插入栏），长按文件弹操作单，抽屉底部「检查更新」可点。
+
 > **实施记录（2026-08-26，v0.7.0 第三批·管理与知识网络）**：
 > - **H8 管理页**：Store 新增 ListUsers/DeleteUser（级联）/UserBlobBytes 双后端实现；`/api/v1/admin/users` 列表+删除（requireAdmin 鉴权、管理员保护）；`/admin` 页面（token 即用）。端到端验证：容量统计/非管理员 403/级联删除/管理员保护全过。
 > - **H8b 备份**：install-bare.sh 支持 IVNOTE_ENABLE_BACKUP=1，每日 03:00 备份 SQLite 保留 14 份。
