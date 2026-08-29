@@ -1,0 +1,138 @@
+/**
+ * 设计 token —— 全项目**唯一**的尺寸与颜色来源。
+ *
+ * 为什么单独一个文件：index.css 是按版本累加起来的（`v0.5.0 U3`、`v0.7.2 P3`…），
+ * 里面有几十处硬编码的 12px / 13px / 14.5px。那不是设计系统，那是历史。
+ * 新增和改动一律从这里取值，index.css 里的硬编码逐步换掉。
+ *
+ * 定位：**安静的纸**。笔记软件的界面应该在视线里消失，只剩文字。
+ * 参照 Bear / Things / Apple Notes 的克制，不是仪表盘。
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- 中性色阶：从纸到墨 ---- */
+  --n-0: #ffffff;
+  --n-1: #fbfaf7; /* 纸 */
+  --n-2: #f4f2ed;
+  --n-3: #e9e6df; /* 分隔线 */
+  --n-4: #d5d1c8;
+  --n-6: #8b8880; /* 次要文字 */
+  --n-8: #4a4842;
+  --n-9: #2b2a26; /* 正文墨色。刻意不用纯黑：纯黑在纸底上过硬 */
+
+  /* ---- 品牌绿。只用于「当前选中」和「链接」两处，别处一律中性 ---- */
+  --brand: #3f6b45;
+  --brand-soft: #eaf0e6;
+  --brand-ink: #ffffff;
+
+  --bg: var(--n-1);
+  --panel: var(--n-0);
+  --panel-2: var(--n-2);
+  --border: var(--n-3);
+  --text: var(--n-9);
+  --muted: var(--n-6);
+  --accent: var(--brand);
+  --accent-weak: var(--brand-soft);
+  /* index.css 里的历史别名，收编进来免得走 fallback 用到硬编码色 */
+  --accent-soft: var(--brand-soft);
+  --accent-text: var(--brand-ink);
+  --ok: #4a8b4f;
+  --danger: #c0564d;
+  --separator: var(--border);
+
+  /* ---- 字阶。6 档够用，多了就会开始随手加 ---- */
+  --fs-title: 28px; /* 大标题 */
+  --fs-h: 22px; /* 区块标题 */
+  --fs-lead: 17px; /* 导航栏 / 强调 */
+  --fs-body: 15px; /* 正文 */
+  --fs-sm: 13px; /* 侧栏 / 辅助 */
+  --fs-xs: 11px; /* 角标 */
+
+  /* 兼容旧名（index.css 里还在用，逐步换掉后可删） */
+  --font-title: var(--fs-h);
+  --font-headline: var(--fs-lead);
+  --font-body: var(--fs-body);
+  --font-footnote: var(--fs-sm);
+
+  /* ---- 字重。中文只有 Regular/Bold 两档可靠（Windows 尤其），
+         所以只用 400/600，不用 300/500——那两档会被合成得很难看。 ---- */
+  --fw-normal: 400;
+  --fw-bold: 600;
+
+  /* ---- 字体栈 ---- */
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'HarmonyOS Sans SC',
+    'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --font-read: var(--font-ui);
+  --font-mono: ui-monospace, SFMono-Regular, 'JetBrains Mono', Menlo, Consolas,
+    'Noto Sans Mono CJK SC', monospace;
+
+  /* ---- 间距：8 的倍数为主 ---- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* ---- 圆角：控件 / 面板 / 浮层 / Sheet ---- */
+  --r-1: 6px;
+  --r-2: 10px;
+  --r-3: 14px;
+  --r-4: 20px;
+  --radius-s: var(--r-2);
+  --radius-m: var(--r-3);
+  --radius-l: var(--r-4);
+
+  /* ---- 阴影只有两档：浮层、拖拽中。其余不给阴影。 ---- */
+  --shadow-pop: 0 8px 32px rgba(30, 32, 28, 0.10), 0 1px 3px rgba(30, 32, 28, 0.06);
+  --shadow-drag: 0 12px 28px rgba(30, 32, 28, 0.18);
+  --shadow: var(--shadow-pop);
+
+  /* ---- 材质：毛玻璃只给真浮层（浮动工具条/命令面板/Sheet），常驻面板一律实色 ---- */
+  --blur-bg: rgba(255, 255, 255, 0.78);
+
+  /* ---- 正文可读宽度。编辑态与阅读态必须共用同一个值，
+         否则切换视图时文字会重排，是最廉价也最刺眼的「不精致」 ---- */
+  --measure: 720px;
+
+  /* ---- 动效：只用来解释空间关系，不做装饰 ---- */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-1: 160ms;
+  --dur-2: 240ms;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* 深色不是浅色反相：墨底要偏冷偏沉，文字不能用纯白 */
+  --n-0: #1b1e1d;
+  --n-1: #161918;
+  --n-2: #212524;
+  --n-3: #2f3432;
+  --n-4: #414744;
+  --n-6: #8d948f;
+  --n-8: #c3cac5;
+  --n-9: #e3e8e4;
+
+  /* 绿色在深底上要提亮，否则对比度不够 */
+  --brand: #7fb56e;
+  --brand-soft: #23301f;
+  --brand-ink: #10230a;
+
+  --ok: #6cb771;
+  --danger: #d97a70;
+
+  --shadow-pop: 0 8px 32px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-drag: 0 12px 28px rgba(0, 0, 0, 0.55);
+  --blur-bg: rgba(27, 30, 29, 0.78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+  }
+}

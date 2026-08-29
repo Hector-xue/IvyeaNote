@@ -64,6 +64,14 @@ ivyea note/
   - **决策变更**：方案原定的 `tauri-plugin-sql`(SQLite/FTS5) **不做**——开发机无 cargo 且只有 webkit2gtk-4.0，加 Rust 依赖等于写下无法验证能否编译的代码。`NoteIndex` 接口不变，将来换回 SQLite 消费方零改动。详见 `docs/IvyeaNote-方案-v2.md` 的决策框。
   - 门禁：oxlint 0 error / tsc OK / vitest **185/185**（+24）/ vite build OK。
 
+- [x] v0.7.7 设计系统落地（2026-08-29）：把「按版本累加的 CSS」拆成有层次的设计层——
+  - `styles/tokens.css`：**全项目唯一**的尺寸/颜色来源（中性色阶、6 档字阶、间距、圆角、两档阴影、动效缓动）。index.css 里两处重复的 `:root`/深色块已删除，避免它们反过来覆盖 token。
+  - `styles/typography.css`：编辑态与阅读态**共用同一套**文字规则。此前编辑区 15px/行宽 760、阅读区 14.5px/行宽 860，按一下「阅读模式」全文重排且字号变化——这是最刺眼的不精致。现在两边共用 `--measure` 与 `--fs-body`，切换视图文字纹丝不动。中文排版三条硬规矩写进注释：标题禁负字距、大字轻小字重、只用 400/600 两档（中文字体尤其 Windows 只有 Regular/Bold，300/500 会被合成糊掉）。
+  - `styles/surface.css`：平面层次（写作面最亮、侧栏后退一档）、细滚动条（静止不可见，hover 才出）、控件与自绘下拉箭头、`:focus-visible` 焦点环、浮层毛玻璃只给真浮层。
+  - 阅读态排版重做：标题上留白大下留白小、引用只留左侧细线不铺底、行内代码不描边、表格只留横线、H1 去掉 GitHub 式下划线。
+  - 验证方式：headless Chrome 加载**真实构建产物**，浅色/深色两套各出图核对，并脚本检查删除旧 `:root` 后没有留下未定义的 CSS 变量。
+  - 门禁：oxlint 0 error / tsc OK / vitest 185/185 / vite build OK。
+
 服务端本地运行：
 
 ```bash

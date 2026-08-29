@@ -1,0 +1,238 @@
+/**
+ * 排版层 —— 编辑态与阅读态的**同一套**文字规则。
+ *
+ * v0.7.x 的问题：编辑区 15px / 行宽 760px、阅读区 14.5px / 行宽 860px，
+ * 于是按一下「阅读模式」全文重排、字号还变了。这是最廉价也最刺眼的「不精致」。
+ * 现在两边共用 `--measure` 和 `--fs-body`，切换视图文字纹丝不动。
+ *
+ * 中文排版的三条硬规矩（踩过的坑）：
+ * 1. **中文标题禁负字距**——拉丁字体的 letter-spacing:-0.02em 放到汉字上会挤成一坨；
+ * 2. **大字轻、小字重**——28px 标题用 600 就够，13px 辅助文字反而要 500/600 才立得住；
+ * 3. **只用 400/600 两档**——中文字体（尤其 Windows）通常只有 Regular/Bold，
+ *    写 300/500 会被合成，笔画会糊。
+ *
+ * 本文件在 index.css 之后加载，负责覆盖那些按版本累加出来的排版规则。
+ */
+
+/* ---------------------------------------------------------------- 通用 */
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 中西文之间自动加空隙，中英混排的排版质量主要靠这一条 */
+  text-spacing-trim: space-all;
+}
+
+/* ---------------------------------------------------- 编辑态（CodeMirror） */
+
+.editor-host .cm-scroller {
+  /* 旧规则在这里设了 monospace，导致 gutter 和内容字体打架 */
+  font-family: var(--font-read);
+  line-height: 1.75;
+}
+
+.editor-host .cm-content {
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--sp-5) var(--sp-5) 40vh;
+  font-family: var(--font-read);
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  color: var(--text);
+  caret-color: var(--accent);
+}
+
+.editor-host .cm-line {
+  max-width: var(--measure);
+  /* 中文没有词间空格，靠标点换行；不给 break-word 会在长英文 URL 处溢出 */
+  overflow-wrap: break-word;
+}
+
+.editor-host .cm-editor {
+  min-height: 100%;
+  background: transparent;
+}
+.editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+.editor-host .cm-gutters {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+}
+/* 当前行不做高亮块——编辑正文时那道底色是纯噪音 */
+.editor-host .cm-activeLine,
+.editor-host .cm-activeLineGutter {
+  background: transparent;
+}
+.editor-host .cm-selectionBackground,
+.editor-host .cm-content ::selection {
+  background: var(--accent-weak);
+}
+
+/* 实时预览里的标记（livePreview.ts 的装饰）沿用同一套字阶 */
+.editor-host .cm-content .cm-header-1 {
+  font-size: var(--fs-title);
+  font-weight: var(--fw-bold);
+  line-height: 1.3;
+}
+.editor-host .cm-content .cm-header-2 {
+  font-size: var(--fs-h);
+  font-weight: var(--fw-bold);
+  line-height: 1.35;
+}
+.editor-host .cm-content .cm-header-3 {
+  font-size: var(--fs-lead);
+  font-weight: var(--fw-bold);
+}
+
+/* ------------------------------------------------------------ 阅读态 */
+
+.md-preview {
+  flex: 1;
+  overflow: auto;
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--sp-5) var(--sp-5) var(--sp-7);
+  font-family: var(--font-read);
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  color: var(--text);
+}
+
+/* 标题节奏：上留白大、下留白小——让标题黏住它领的那段，是排版的基本功 */
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4 {
+  font-weight: var(--fw-bold);
+  letter-spacing: 0; /* 中文标题禁负字距 */
+  line-height: 1.35;
+  margin: 1.6em 0 0.5em;
+}
+.md-preview h1 {
+  font-size: var(--fs-title);
+  margin-top: 0.2em;
+  border-bottom: none; /* 旧版是 GitHub 式下划线，太重 */
+  padding-bottom: 0;
+}
+.md-preview h2 {
+  font-size: var(--fs-h);
+}
+.md-preview h3 {
+  font-size: var(--fs-lead);
+}
+.md-preview h4 {
+  font-size: var(--fs-body);
+  color: var(--n-8);
+}
+
+.md-preview p,
+.md-preview ul,
+.md-preview ol,
+.md-preview blockquote,
+.md-preview pre,
+.md-preview table {
+  margin: 0.85em 0;
+}
+
+.md-preview ul,
+.md-preview ol {
+  padding-left: 1.4em;
+}
+.md-preview li {
+  margin: 0.25em 0;
+}
+.md-preview li::marker {
+  color: var(--muted);
+}
+
+.md-preview a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.md-preview a:hover {
+  border-bottom-color: var(--accent);
+}
+
+/* 引用：只留左边一道细线，不铺底色——底色会让引用比正文更抢眼，本末倒置 */
+.md-preview blockquote {
+  border-left: 2px solid var(--n-4);
+  background: transparent;
+  border-radius: 0;
+  padding: 0.1em 0 0.1em 1.1em;
+  color: var(--n-8);
+}
+
+.md-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--panel-2);
+  border: none; /* 行内代码不描边，描边会把一行文字切得七零八落 */
+  border-radius: var(--r-1);
+  padding: 0.1em 0.35em;
+}
+.md-preview pre {
+  background: var(--panel-2);
+  border-radius: var(--r-2);
+  overflow-x: auto;
+}
+.md-preview pre code {
+  display: block;
+  padding: var(--sp-3) var(--sp-4);
+  background: transparent;
+  line-height: 1.6;
+}
+
+.md-preview img {
+  max-width: 100%;
+  border: none;
+  border-radius: var(--r-2);
+}
+
+/* 表格：只留横线，竖线一律不要——竖线会把表格变成牢笼 */
+.md-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.95em;
+}
+.md-preview th,
+.md-preview td {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-3);
+  text-align: left;
+}
+.md-preview th {
+  font-weight: var(--fw-bold);
+  color: var(--n-8);
+  border-bottom-color: var(--n-4);
+}
+.md-preview tr:last-child td {
+  border-bottom: none;
+}
+
+.md-preview hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: var(--sp-6) 0;
+}
+
+.md-preview input[type='checkbox'] {
+  margin-right: var(--sp-2);
+  accent-color: var(--accent);
+}
+
+/* 移动端：阅读宽度让位给屏幕宽度，字号略大一点点便于手持阅读 */
+@media (max-width: 768px) {
+  .md-preview,
+  .editor-host .cm-content {
+    max-width: 100%;
+    padding-left: var(--sp-4);
+    padding-right: var(--sp-4);
+    font-size: 16px;
+  }
+}

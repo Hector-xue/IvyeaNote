@@ -1,0 +1,203 @@
+/**
+ * 表面层 —— 平面层次、滚动条、控件、焦点、动效。
+ *
+ * 排版决定「读起来舒不舒服」，这一层决定「看起来是不是被设计过」。
+ * 三条法则（对应方案 v2 §4.2）：
+ * 1. 文字是主角：正文区不放常驻装饰，工具条按需浮现；
+ * 2. 层级靠留白和明度，不靠线和框：全局最多两级分隔线，能省的边框都省掉；
+ * 3. 动效只用来解释空间关系，不做装饰。
+ */
+
+/* ---------------------------------------------------------- 平面层次
+   写作面最亮、侧栏后退一档。Bear / Things 都是这个做法：
+   让眼睛一进来就落在正文上，而不是先扫一遍侧栏。 */
+
+.app {
+  background: var(--bg);
+}
+
+.sidebar {
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+/* 编辑 / 阅读区是最亮的那一面 */
+.editor-host,
+.md-preview,
+.editor-pane {
+  background: var(--panel);
+}
+
+/* ------------------------------------------------------------ 滚动条
+   细、无箭头、静止时几乎看不见。滚动条是最容易暴露「没设计过」的地方。 */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+*:hover {
+  scrollbar-color: var(--n-4) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  transition: background-color var(--dur-2) var(--ease);
+}
+*:hover::-webkit-scrollbar-thumb {
+  background-color: var(--n-4);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--n-6);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ------------------------------------------------------------ 控件 */
+
+.btn {
+  border-radius: var(--r-1);
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  transition:
+    background-color var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+.btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--n-4);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+/* 主按钮不描边、不加阴影：它靠颜色就够显眼了，再加装饰就吵 */
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  font-weight: var(--fw-bold);
+}
+.btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+  border-color: transparent;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.vault-row select {
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--sp-2) var(--sp-3);
+  /* 原生下拉箭头在深色下会渲染成浅色方块，换成自绘的细雪佛龙 */
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: var(--sp-6);
+}
+
+/* ------------------------------------------------------- 焦点可见性
+   键盘用户必须看得见焦点，鼠标用户不该被焦点环打扰——这正是 :focus-visible 的用途 */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-1);
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ------------------------------------------------------------ 文件树
+   行高够手指点、hover 只给极轻的底、选中才用品牌色 */
+
+.ft-dir,
+.ft-file {
+  font-size: var(--fs-sm);
+  border-radius: var(--r-1);
+  margin: 1px var(--sp-2);
+  padding: 5px var(--sp-2);
+  transition: background-color var(--dur-1) var(--ease);
+}
+.ft-dir:hover,
+.ft-file:hover {
+  background: var(--panel-2);
+}
+.ft-file.active {
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-weight: var(--fw-bold);
+}
+.ft-dir-name {
+  color: var(--n-8);
+}
+
+/* ------------------------------------------------------------ 浮层
+   毛玻璃只给真正浮起来的东西，常驻面板一律实色——
+   到处都毛玻璃只会让界面变脏 */
+
+.palette-panel,
+.m-bubble,
+.sheet,
+.dlg-card {
+  background: var(--blur-bg);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-pop);
+  border: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------------ 状态栏
+   最不重要的信息，给最低的存在感 */
+
+.status-bar {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding: var(--sp-2) var(--sp-4);
+  background: var(--bg);
+}
+
+/* --------------------------------------------------------- 拖拽反馈 */
+
+.ft-file.dragging,
+.ft-dir.dragging {
+  opacity: 0.4;
+}
+.ft-dir.drop-target {
+  background: var(--accent-weak);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.ft-root.drop-target {
+  background: var(--accent-weak);
+  border-radius: var(--r-2);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
