@@ -5,6 +5,7 @@ import { FileTree, buildFileTree } from './FileTree';
 import { TabsBar } from './TabsBar';
 import { RibbonIcon } from './Icons';
 import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
+import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
 import type { TreeNode } from './FileTree';
@@ -138,6 +139,23 @@ export function MainView(props: Props) {
     [props.files, props.emptyDirs]
   );
   const [rightCollapsed, setRightCollapsed] = useState(loadRightPanelCollapsed);
+  /** 方案 §4.4：侧栏与右栏可拖拽调宽，宽度持久化 */
+  const sideW = usePanelWidth({
+    key: 'ivnote.sidebar.width',
+    defaultWidth: 264,
+    min: 200,
+    max: 520,
+    edge: 'right',
+    label: '侧栏',
+  });
+  const rightW = usePanelWidth({
+    key: 'ivnote.rightPanel.width',
+    defaultWidth: 248,
+    min: 200,
+    max: 520,
+    edge: 'left',
+    label: '右栏',
+  });
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */
   const [sidebarTab, setSidebarTab] = useState<'files' | 'search'>('files');
@@ -222,7 +240,10 @@ export function MainView(props: Props) {
           <RibbonIcon name={props.theme === 'light' ? 'moon' : 'sun'} />
         </button>
       </nav>
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        style={{ width: sideW.width, minWidth: sideW.width, maxWidth: sideW.width }}
+      >
         <div className="side-head">
           <img src={logoUrl} alt="" className="brand-logo" />
           <span className="brand-name">Ivyea Note</span>
@@ -390,6 +411,7 @@ export function MainView(props: Props) {
         </div>
       </aside>
 
+      <div className={`panel-resizer ${sideW.dragging ? 'dragging' : ''}`} {...sideW.handleProps} />
       <main className="editor-pane">
         {/* v0.5.0 U2：标签栏 */}
         {props.tabs && props.tabs.length > 0 && props.onSelectTab && props.onCloseTab && (
@@ -442,7 +464,11 @@ export function MainView(props: Props) {
         </div>
       </main>
       {/* v0.7.9 E8：右栏常驻大纲 + 双链。移动端早有，桌面此前缺席 */}
+      {!rightCollapsed && (
+        <div className={`panel-resizer ${rightW.dragging ? 'dragging' : ''}`} {...rightW.handleProps} />
+      )}
       <RightPanel
+        width={rightW.width}
         doc={props.doc}
         wikiOut={props.wikiOut}
         wikiBack={props.wikiBack}

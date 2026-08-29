@@ -28,6 +28,8 @@ interface Props {
   onOpenWiki?(title: string): void;
   onOpenWikiPath?(path: string): void;
   collapsed: boolean;
+  /** 由 usePanelWidth 给的宽度（方案 §4.4 可调宽） */
+  width?: number;
   onToggle(): void;
 }
 
@@ -52,7 +54,10 @@ export function RightPanel(props: Props) {
   const back = props.wikiBack ?? [];
 
   return (
-    <aside className="right-panel">
+    <aside
+      className="right-panel"
+      style={props.width ? { width: props.width, minWidth: props.width, maxWidth: props.width } : undefined}
+    >
       <div className="rp-head">
         <span className="rp-title">大纲</span>
         <button className="icon-btn" title="收起" onClick={props.onToggle}>

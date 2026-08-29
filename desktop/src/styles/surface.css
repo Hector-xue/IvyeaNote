@@ -708,3 +708,40 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ------------------------------------------------------------ 面板调宽把手
+   方案 §4.4：侧栏与右栏可拖拽调宽。把手是 .app 里的一个 flex 兄弟，
+   用负外边距抵消自身宽度——加进来之后版面几乎不动，只多出 1px。
+   常态完全透明（§4.2「层级靠留白，不靠线和框」），hover / 拖拽 / 键盘聚焦
+   时才浮出一条强调色细线。 */
+.panel-resizer {
+  flex: 0 0 5px;
+  margin: 0 -2px;
+  z-index: 5;
+  cursor: col-resize;
+  position: relative;
+  /* 触摸设备上按住拖动时不要连带滚动页面 */
+  touch-action: none;
+  background: transparent;
+}
+.panel-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.panel-resizer:hover::after,
+.panel-resizer:focus-visible::after,
+.panel-resizer.dragging::after {
+  background: var(--accent);
+}
+.panel-resizer:focus-visible {
+  outline: none;
+}
+/* 拖拽中整页禁选：否则划过正文会把文字一起选中 */
+body:has(.panel-resizer.dragging) {
+  user-select: none;
+  cursor: col-resize;
+}
