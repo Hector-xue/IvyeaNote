@@ -55,6 +55,15 @@ ivyea note/
   - 文档口径对齐：技术方案更正移动端选型（未采用 Flutter）与不实的勾选项；删除空目录 `mobile/`。
   - 门禁：oxlint 0 error / tsc OK / vitest **161/161**（+33）/ vite build OK。
 
+- [x] v0.7.6 P1 地基（第一批，2026-08-29）：
+  - **检索引擎重写**：旧实现是「把全库正文小写化后 `String.includes` 全扫」+ 按出现次数粗加权。现在是**倒排索引 + BM25**（`lib/searchIndex.ts`），有 IDF 与长度归一化——罕见词不再和常见词同权，短文不再被长文压死；2000 篇实测检索 <50ms（用例断言）。对外签名不变，命令面板/标签面板/图谱一行未改。
+  - **中文分词**（`lib/tokenize.ts`）：CJK 切二元组 + 拉丁按词，索引与查询同一套切法。⚠️ 二元组不解决词边界（搜「告优」仍会命中「广告优化」），要真词边界需词典分词，本阶段不做——这次拿到的是速度与排序质量。
+  - **索引快照持久化**：正文快照落 `.ivyea/cache/content.json`，启动只读 1 个文件再按 mtime+size 对账，不再逐个重读全库。快照是**可丢弃缓存**：过期/损坏/被手删都只是「这次多读几个文件」，绝不会读错内容。
+  - **文件监听**：外部编辑器（Obsidian/VSCode）改同一目录现在能感知了——用 plugin-fs 自带的 `watch`（无新增 Rust 依赖，只加 `fs:allow-watch` 权限），800ms 去抖，并过滤掉软件自身的 `.ivyea/` 写入避免自触发。
+  - **修 npm 源污染**：`desktop/.npmrc` 曾把 registry 写死成国内镜像**并提交入库**，lockfile 里 83 个 `resolved` 全指向镜像——任何人 clone 或 CI 拉包都会被路由过去。已钉回 `registry.npmjs.org` 并重写 lockfile；用**干净安装**验证（删空 node_modules 走 `npm ci`：154 包 10 秒、exit 0、零镜像引用）。
+  - **决策变更**：方案原定的 `tauri-plugin-sql`(SQLite/FTS5) **不做**——开发机无 cargo 且只有 webkit2gtk-4.0，加 Rust 依赖等于写下无法验证能否编译的代码。`NoteIndex` 接口不变，将来换回 SQLite 消费方零改动。详见 `docs/IvyeaNote-方案-v2.md` 的决策框。
+  - 门禁：oxlint 0 error / tsc OK / vitest **185/185**（+24）/ vite build OK。
+
 服务端本地运行：
 
 ```bash

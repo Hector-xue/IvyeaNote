@@ -50,3 +50,70 @@ describe('searchNotes', () => {
     expect(searchNotes(docs, 'path:文章')).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// v0.8.0 倒排索引 + BM25 带来的新行为
+
+describe('BM25 排序（v0.8.0）', () => {
+  it('罕见词权重高于常见词：只含罕见词的笔记排在前面', () => {
+    const corpus = [
+      { path: '甲.md', content: '广告 广告 广告 广告 广告' }, // 常见词，出现多次
+      { path: '乙.md', content: '广告 鹦鹉螺' }, // 含罕见词
+      { path: '丙.md', content: '广告 优化' },
+      { path: '丁.md', content: '广告 出价' },
+    ];
+    const hits = searchNotes(corpus, '广告 鹦鹉螺');
+    expect(hits[0].path).toBe('乙.md');
+  });
+
+  it('长度归一化：同样命中一次，短文排在长文前面（旧实现相反）', () => {
+    const long = '无关内容 '.repeat(200) + '独特词';
+    const corpus = [
+      { path: '长文.md', content: long },
+      { path: '短文.md', content: '独特词' },
+    ];
+    const hits = searchNotes(corpus, '独特词');
+    expect(hits.map((h) => h.path)).toEqual(['短文.md', '长文.md']);
+  });
+});
+
+describe('单字 CJK 查询（前缀展开）', () => {
+  it('搜单个字能命中包含它的词', () => {
+    const corpus = [
+      { path: 'a.md', content: '猫粮很贵' },
+      { path: 'b.md', content: '完全无关' },
+    ];
+    const hits = searchNotes(corpus, '猫');
+    expect(hits.map((h) => h.path)).toEqual(['a.md']);
+  });
+});
+
+describe('tag: 过滤（v0.8.0 新增）', () => {
+  const corpus = [
+    { path: 'x.md', content: '广告策略 #亚马逊' },
+    { path: 'y.md', content: '广告策略 #小红书' },
+  ];
+  it('按标签收窄', () => {
+    const hits = searchNotes(corpus, '广告 tag:亚马逊');
+    expect(hits.map((h) => h.path)).toEqual(['x.md']);
+  });
+  it('带 # 前缀也认', () => {
+    expect(searchNotes(corpus, '广告 tag:#小红书').map((h) => h.path)).toEqual(['y.md']);
+  });
+});
+
+describe('规模与速度', () => {
+  it('2000 篇笔记检索在 50ms 内返回（旧实现要全量扫正文）', () => {
+    const corpus = Array.from({ length: 2000 }, (_, i) => ({
+      path: `n${i}.md`,
+      content: `第 ${i} 篇 亚马逊广告优化 出价策略 关键词研究 `.repeat(20),
+    }));
+    corpus[1234].content += ' 独一无二的稀有词';
+    searchNotes(corpus, '预热'); // 先建索引，不计入
+    const t0 = performance.now();
+    const hits = searchNotes(corpus, '稀有');
+    const ms = performance.now() - t0;
+    expect(hits[0].path).toBe('n1234.md');
+    expect(ms).toBeLessThan(50);
+  });
+});

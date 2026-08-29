@@ -496,6 +496,50 @@ export default function App() {
   // 卸载时清理编辑防抖计时器
   useEffect(() => () => window.clearTimeout(saveTimer.current), []);
 
+  /**
+   * v0.7.5 1.3：文件系统监听。
+   *
+   * 「卸载软件后目录里还是标准 Markdown、可以用 Obsidian/VSCode 直接打开」是本产品
+   * 的第一卖点，可 v0.7.4 之前**外部改了文件应用完全不知道**——侧栏不更新、索引不更新，
+   * 下一次同步还可能拿旧状态去推。
+   *
+   * 用 plugin-fs 自带的 watch（无需新增 Rust 依赖，只要 `fs:allow-watch` 权限），
+   * 800ms 去抖，事件只用来触发 refreshFiles——真正判断「哪几个文件变了」仍然由
+   * 索引层按 mtime+size 对账，watcher 只是个「该看一眼了」的信号。
+   */
+  useEffect(() => {
+    const root = vault?.localPath;
+    if (!isTauri || !root) return;
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const { watch } = await import('@tauri-apps/plugin-fs');
+        const un = await watch(
+          root,
+          (e) => {
+            // 忽略软件自己的元数据目录：索引快照每 10 秒落一次盘，
+            // 不过滤的话会自己触发自己，白白重扫一遍文件列表。
+            const paths = Array.isArray(e.paths) ? e.paths : [];
+            if (paths.length > 0 && paths.every((p) => p.replace(/\\/g, '/').includes('/.ivyea/')))
+              return;
+            void refreshFiles();
+          },
+          { recursive: true, delayMs: 800 }
+        );
+        if (disposed) un();
+        else stop = un;
+      } catch (err) {
+        // 监听不可用（权限缺失 / 平台不支持）不影响主流程：手动刷新和同步仍然工作
+        console.warn('文件监听未启用', err);
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [vault?.localPath, refreshFiles]);
+
   // ---------- 文件操作 ----------
 
   const openFile = useCallback(

@@ -72,9 +72,67 @@ export interface NoteIndex {
   rebuild(): void;
 }
 
-/** 只索引 Markdown；附件/PDF 不进正文索引 */
+/** 只索引 Markdown；附件/PDF、回收站、软件自己的元数据目录都不进正文索引 */
 export function isIndexable(path: string): boolean {
-  return /\.(md|markdown)$/i.test(path) && !path.startsWith('.trash/');
+  return (
+    /\.(md|markdown)$/i.test(path) &&
+    !path.startsWith('.trash/') &&
+    !path.startsWith('.ivyea/')
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 索引快照持久化
+//
+// 目的只有一个：**别在每次启动时把整个库重读一遍**。几千篇笔记走 Tauri IPC
+// 逐个读，是启动最慢的一段。快照存下来后，启动只读 1 个文件，再按 mtime+size
+// 对账，只重读真正变过的那几篇。
+//
+// 快照是**可丢弃缓存**，不是真相：它过期、损坏、被人手删，结果都只是「这次多读几个
+// 文件」，不会读错内容——因为对账永远以磁盘上的 mtime+size 为准。
+
+const CACHE_PATH = '.ivyea/cache/content.json';
+const CACHE_VERSION = 1;
+
+interface CacheFile {
+  v: number;
+  entries: [string, number, number, string][]; // [path, mtime, size, content]
+}
+
+export async function loadIndexCache(
+  io: FileIO,
+  vaultPath: string
+): Promise<Map<string, IndexEntry>> {
+  const map = new Map<string, IndexEntry>();
+  try {
+    const raw = await io.read(vaultPath, CACHE_PATH);
+    const data = JSON.parse(raw) as CacheFile;
+    if (data.v !== CACHE_VERSION || !Array.isArray(data.entries)) return map;
+    for (const [path, mtime, size, content] of data.entries) {
+      if (typeof path === 'string' && typeof content === 'string' && isIndexable(path)) {
+        map.set(path, { path, mtime, size, content });
+      }
+    }
+  } catch {
+    // 没有快照 / 解析失败：当成空索引，全量重建。这是设计内的降级，不是错误。
+  }
+  return map;
+}
+
+export async function saveIndexCache(
+  io: FileIO,
+  vaultPath: string,
+  map: ReadonlyMap<string, IndexEntry>
+): Promise<void> {
+  const data: CacheFile = {
+    v: CACHE_VERSION,
+    entries: [...map.values()].map((e) => [e.path, e.mtime, e.size, e.content]),
+  };
+  try {
+    await io.write(vaultPath, CACHE_PATH, JSON.stringify(data));
+  } catch {
+    // 写不进去不影响使用，下次启动全量重建而已
+  }
 }
 
 /**
@@ -91,19 +149,45 @@ export function useNoteIndex(
   const [version, setVersion] = useState(0);
   const [ready, setReady] = useState(false);
   const runRef = useRef(0);
+  /** 本轮 vault 是否已尝试过读快照（只读一次） */
+  const hydratedRef = useRef(false);
+  const saveTimer = useRef<number | undefined>(undefined);
 
-  // vault 切换：整个索引作废
-  const vaultKey = `${vaultPath}`;
-  const lastVault = useRef(vaultKey);
-  if (lastVault.current !== vaultKey) {
-    lastVault.current = vaultKey;
+  // vault 切换：整个索引作废，快照也要重读
+  const lastVault = useRef(vaultPath);
+  if (lastVault.current !== vaultPath) {
+    lastVault.current = vaultPath;
     mapRef.current = new Map();
+    hydratedRef.current = false;
   }
+
+  /** 延迟落快照。编辑时每次落盘都存一遍太浪费，而快照过期是自愈的
+   *  （下次对账按 mtime+size 发现不一致就重读），所以拖长一点完全安全。 */
+  const scheduleSave = useCallback(() => {
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => {
+      void saveIndexCache(io, vaultPath, mapRef.current);
+    }, 10_000);
+  }, [io, vaultPath]);
 
   useEffect(() => {
     const run = ++runRef.current;
     let cancelled = false;
+    const stale = () => cancelled || run !== runRef.current;
+
     void (async () => {
+      // 首轮先吃快照：把上次的正文直接装进来，接着的对账就只需重读变过的那几篇，
+      // 而不是把几千个文件重新走一遍 IPC。
+      if (!hydratedRef.current) {
+        hydratedRef.current = true;
+        const cached = await loadIndexCache(io, vaultPath);
+        if (stale()) return;
+        if (mapRef.current.size === 0 && cached.size > 0) {
+          mapRef.current = cached;
+          setVersion((v) => v + 1);
+        }
+      }
+
       const { toRead, toDrop } = diffIndex(mapRef.current, stamps);
       if (toRead.length === 0 && toDrop.length === 0) {
         setReady(true);
@@ -111,38 +195,56 @@ export function useNoteIndex(
       }
       const fresh: IndexEntry[] = [];
       for (const s of toRead) {
-        if (cancelled || run !== runRef.current) return;
+        if (stale()) return;
         try {
           fresh.push({ ...s, content: await io.read(vaultPath, s.path) });
         } catch {
           // 单文件读失败不影响其余：下一轮对账会再试
         }
       }
-      if (cancelled || run !== runRef.current) return;
+      if (stale()) return;
       for (const p of toDrop) mapRef.current.delete(p);
       for (const e of fresh) mapRef.current.set(e.path, e);
       setVersion((v) => v + 1);
       setReady(true);
+      scheduleSave();
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [io, vaultPath, stamps]);
+  }, [io, vaultPath, stamps, scheduleSave]);
 
-  const touch = useCallback((path: string, content: string) => {
-    if (!isIndexable(path)) return;
-    const old = mapRef.current.get(path);
-    mapRef.current.set(path, {
-      path,
-      mtime: old?.mtime ?? 0,
-      size: content.length,
-      content,
-    });
-    setVersion((v) => v + 1);
-  }, []);
+  // 卸载时把待写的快照冲掉，别把刚建好的索引丢了
+  useEffect(
+    () => () => {
+      if (saveTimer.current !== undefined) {
+        window.clearTimeout(saveTimer.current);
+        void saveIndexCache(io, vaultPath, mapRef.current);
+      }
+    },
+    [io, vaultPath]
+  );
+
+  const touch = useCallback(
+    (path: string, content: string) => {
+      if (!isIndexable(path)) return;
+      const old = mapRef.current.get(path);
+      mapRef.current.set(path, {
+        path,
+        mtime: old?.mtime ?? 0,
+        size: content.length,
+        content,
+      });
+      setVersion((v) => v + 1);
+      scheduleSave();
+    },
+    [scheduleSave]
+  );
 
   const rebuild = useCallback(() => {
     mapRef.current = new Map();
+    hydratedRef.current = true; // 明确要求重建时不要再吃旧快照
     runRef.current++;
     setReady(false);
     setVersion((v) => v + 1);
