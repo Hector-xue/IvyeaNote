@@ -1,3 +1,8 @@
+> **【已归档】** 本文是 2026-08-24 的初始设计稿，保留供追溯。
+> 现行方案见 [`IvyeaNote-方案-v2.md`](./IvyeaNote-方案-v2.md)。
+> 与现状不符的两处已就地更正：①移动端**未采用 Flutter**，桌面与安卓共用 Tauri 2 + React；
+> ②「MVP 必须」清单里的勾曾经与代码不符，已按 v0.8.0 实际状态重打。
+
 # Ivyea Note 技术方案
 
 > 版本：v1.0 ｜ 日期：2026-08-24 ｜ 状态：待评审
@@ -30,11 +35,11 @@
 ### 1.2 功能范围
 
 **MVP（V1）必须**
-- [x] Markdown 编辑（语法高亮、所见即所得可选）、双链 `[[]]`、标签、反链面板
+- [x] Markdown 编辑（CodeMirror 6 + 实时预览）、双链 `[[]]`、标签、反链面板
 - [x] Vault 文件树管理（新建/重命名/移动/删除/回收站）
-- [x] 全文搜索（本地索引）
+- [x] 全文搜索（**内存索引**；SQLite/FTS5 在 v2 方案的 P1 阶段落地）
 - [x] 图片/附件插入（本地引用 + 自动上传同步）
-- [x] 多端同步：桌面(Windows/macOS/Linux) + 手机(iOS/Android)，增量、断点续传、冲突自动合并
+- [x] 多端同步：桌面(Windows/macOS/Linux) + 安卓，增量、冲突自动合并（**iOS 未做**，待 macOS 构建条件与开发者账号）
 - [x] 账号登录（先支持单用户「个人模式」，预留多用户）
 
 **V2 规划**
@@ -57,7 +62,7 @@
 | 桌面壳 | Electron / **Tauri 2** | **Tauri 2** | 包体 ~10MB vs ~150MB；内存占用低；Rust 侧可直接承载同步核心；Tauri 2 已支持移动端（保底方案） |
 | 桌面 UI | React / Vue / Svelte | **React + TypeScript** | 生态最全，CodeMirror/ProseMirror 封装成熟 |
 | 编辑器内核 | CodeMirror 6 / ProseMirror(Tiptap/Milkdown) / Monaco | **CodeMirror 6** | Obsidian 同款内核；Markdown 支持一流；性能好（万行文档流畅）；后续想要所见即所得再叠 Milkdown |
-| 移动端 | Flutter / React Native / Tauri Mobile / 原生双端 | **Flutter** | 一套代码出 iOS+Android；文字渲染与滚动性能优于 RN；markdown 编辑器组件（super_editor/AppFlowy Editor）可用 |
+| 移动端 | Flutter / React Native / Tauri Mobile / 原生双端 | ~~Flutter~~ → **Tauri 2 Android** | 初稿选 Flutter 的前提是「从零开始」。实际推进中桌面 Tauri 已跑通，切 Flutter 等于把 UI/编辑器/同步引擎全部用 Dart 重写一遍，故改为桌面与安卓共用同一份 React/TS（约 90% 代码复用）。代价：安卓是 WebView 渲染，对笔记类应用可接受 |
 | 同步客户端逻辑 | 各端各写 / Rust 共享库 | **MVP 各端薄实现 + shared 协议测试集**，V2 下沉 Rust 库（flutter_rust_bridge / Tauri 直链） | 同步客户端很薄（REST+SQLite），重复实现的成本 < 跨语言 FFI 的调试成本；用同一套协议一致性测试保证两端行为一致 |
 | 服务端语言 | Go / Node(NestJS) / Python(FastAPI) / Rust(Axum) | **Go** | 单二进制部署最省心；并发模型适合长连接推送；交叉编译方便 |
 | 数据库 | PostgreSQL / SQLite / MongoDB | **PostgreSQL 15+** | 事务、JSONB、全文检索备用；运维资料最多 |
@@ -66,7 +71,7 @@
 | 认证 | 自研 JWT / 第三方(Authelia 等) | **自研 JWT（access 15min + refresh 30d 轮换）**，argon2id 存密码 | 单用户场景自研足够且可控 |
 
 ### 2.2 推荐组合一句话
-**Tauri 2 + React + CodeMirror 6（桌面）｜ Flutter（移动）｜ Go + PostgreSQL + 本地 Blob + Caddy（服务端）｜ REST + WebSocket 同步协议**
+**Tauri 2 + React + CodeMirror 6（桌面 + 安卓共用）｜ Go + SQLite/PostgreSQL + 本地 Blob + 宿主 nginx（服务端）｜ REST + WebSocket 同步协议**
 
 ---
 
@@ -74,8 +79,8 @@
 
 ```
 ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐
-│   桌面端 (Tauri) │      │  移动端(Flutter) │      │  其他端(未来CLI) │
-│  React+CM6 UI   │      │  super_editor   │      │                 │
+│   桌面端 (Tauri) │      │ 安卓端(Tauri 2) │      │  其他端(未来CLI) │
+│  React+CM6 UI   │      │  React + CM6    │      │                 │
 │  ┌───────────┐  │      │  ┌───────────┐  │      │                 │
 │  │SyncClient │  │      │  │SyncClient │  │      │                 │
 │  └─────┬─────┘  │      │  └─────┬─────┘  │      │                 │
@@ -317,7 +322,7 @@ services:
 | **M0 奠基** | 1 周 | 仓库初始化、CI(GitHub Actions)、协议文档+一致性测试用例框架 | CI 绿灯 |
 | **M1 服务端+协议验证** | 3 周 | auth/vault/sync/blob API、WS 推送、docker compose 部署脚本 | 用两个 curl 脚本模拟双端，冲突/离线/乱序用例全部收敛一致 |
 | **M2 桌面端 MVP** | 4 周 | Tauri 应用：文件树、CM6 编辑器、双链/标签、搜索、后台同步 | 与官方 Obsidian 同时打开同一 vault 目录互不破坏；断网编辑→联网自动同步 |
-| **M3 移动端 MVP** | 4 周 | Flutter App：浏览/编辑/搜索/拍照插图/同步 | iOS+Android 真机通过；后台回前台 5s 内完成增量同步 |
+| **M3 移动端 MVP** | 4 周 | ~~Flutter App~~ → **Tauri 2 Android**（与桌面同一份 React 代码）：浏览/编辑/搜索/插图/同步 | 安卓真机通过；iOS 未做 |
 | **M4 打磨发布** | 2 周 | 冲突 UI、回收站、设置页、自动更新、安装文档 | 自己全设备日常使用一周无数据丢失 |
 | **V2** | 按需 | E2EE、历史版本、分享链接、插件 | — |
 
@@ -326,7 +331,7 @@ services:
 |---|---|
 | 同步 bug 丢数据（最大风险） | 本地文件永远最后才动：先写临时文件再原子 rename；每次同步前快照；协议一致性测试覆盖乱序/重复/离线用例 |
 | iOS 后台限制导致同步不及时 | 回前台/打开 App 时强制 pull；WS 仅前台保活；接受「iOS 推送延迟」为平台约束 |
-| Flutter 编辑器体验不及 CM6 | V1 移动端以「查看+轻编辑」定位，重度编辑回桌面；后续评估 super_editor 深度定制 |
+| ~~Flutter 编辑器体验不及 CM6~~（已不适用：移动端改用 Tauri Android，与桌面同为 CodeMirror 6） | — |
 | 个人服务器单点故障 | restic 异地备份 + 客户端本地永远有全量数据（local-first 天然容灾） |
 
 ---

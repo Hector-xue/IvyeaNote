@@ -1,69 +1,3 @@
-/* ============ 主题变量：浅色（默认） / 深色 ============ */
-:root {
-  color-scheme: light;
-  --bg: #f6f8f4;
-  --panel: #ffffff;
-  --panel-2: #fbfcfa;
-  --border: #e4ebe3;
-  --text: #24312a;
-  --muted: #7d8a80;
-  --accent: #5ba832;
-  --accent-weak: #eef6e8;
-  --accent-text: #ffffff;
-  --ok: #46b04a;
-  --danger: #d4574e;
-  --shadow: 0 6px 24px rgba(36, 49, 42, 0.06);
-
-  /* ---- iOS 化 design token（v0.7.2）---- */
-  --font-title: 22px;      /* Large Title */
-  --font-headline: 17px;   /* Headline / 导航栏 */
-  --font-body: 16px;       /* Body */
-  --font-footnote: 13px;   /* Footnote */
-  --radius-s: 10px;
-  --radius-m: 14px;
-  --radius-l: 20px;
-  --sp-1: 4px;
-  --sp-2: 8px;
-  --sp-3: 12px;
-  --sp-4: 16px;
-  --sp-6: 24px;
-  /* 毛玻璃材质：顶栏/气泡/浮层通用 */
-  --blur-bg: rgba(255, 255, 255, 0.72);
-  --separator: var(--border);
-}
-
-[data-theme='dark'] {
-  color-scheme: dark;
-  --bg: #14181a;
-  --panel: #1c2124;
-  --panel-2: #22282b;
-  --border: #2c3438;
-  --text: #e2e8e4;
-  --muted: #8a978f;
-  --accent: #7cc95a;
-  --accent-weak: #26331f;
-  --accent-text: #10230a;
-  --ok: #58c05c;
-  --danger: #e06c62;
-  --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-
-  /* 深色对应 token（同结构，仅颜色不同） */
-  --font-title: 22px;
-  --font-headline: 17px;
-  --font-body: 16px;
-  --font-footnote: 13px;
-  --radius-s: 10px;
-  --radius-m: 14px;
-  --radius-l: 20px;
-  --sp-1: 4px;
-  --sp-2: 8px;
-  --sp-3: 12px;
-  --sp-4: 16px;
-  --sp-6: 24px;
-  --blur-bg: rgba(28, 33, 36, 0.72);
-  --separator: var(--border);
-}
-
 * {
   box-sizing: border-box;
   margin: 0;
@@ -368,6 +302,26 @@ button {
 }
 .ft-actions button:hover { color: var(--accent); background: rgba(127,127,127,0.15); }
 
+/* v0.7.5 E1：拖拽移动
+   反馈只做两件事——「我正在拖谁」和「会落到哪」。落点用整块着色而不是插入线，
+   因为这里是「移入文件夹」而不是「排序」，一条线会让人误以为能调顺序。 */
+.ft-root {
+  min-height: 100%;
+  /* 库根落区必须覆盖列表下方的空白，否则「拖到空白处移回根目录」没有可落的地方 */
+}
+.ft-file[draggable='true'], .ft-dir[draggable='true'] { -webkit-user-drag: element; }
+.ft-file.dragging, .ft-dir.dragging { opacity: 0.4; }
+.ft-dir.drop-target {
+  background: var(--accent-weak, rgba(74, 140, 90, 0.16));
+  box-shadow: inset 0 0 0 1.5px var(--accent, #4a8);
+}
+.ft-dir.drop-target .ft-dir-name { color: var(--accent, #4a8); font-weight: 500; }
+.ft-root.drop-target {
+  background: var(--accent-weak, rgba(74, 140, 90, 0.10));
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1.5px var(--accent, #4a8);
+}
+
 /* v0.5.0 U2：标签栏 */
 .tabs-bar {
   display: flex;
@@ -581,20 +535,29 @@ button {
   text-align: center;
 }
 
+/* 两列网格而不是单行 flex：侧栏默认 264px，四五个按钮平分成一行只剩 53px，
+   「新建笔记」会被折成「新建/笔记」两行。网格保证任何按钮数下都不折行。 */
 .sidebar-foot {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }
+/* 奇数个时最后一个独占整行，不留半行空档 */
+.sidebar-foot button:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 .sidebar-foot button {
-  flex: 1;
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 7px 0;
+  padding: 7px 4px;
   border-radius: 8px;
   font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar-foot button:hover {
   background: var(--panel-2);
@@ -639,46 +602,6 @@ button {
   flex: 1;
   overflow: auto;
   padding: 0 8px 16px;
-}
-
-/* v0.5.0 U6：可读行宽 + 正文排版（对标 Obsidian） */
-.editor-host .cm-content {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 16px 24px 40vh;
-  font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  font-size: 15px;
-  line-height: 1.75;
-}
-.editor-host .cm-line {
-  max-width: 760px;
-}
-
-.editor-host .cm-editor {
-  min-height: 100%;
-  background: transparent;
-}
-.editor-host .cm-editor.cm-focused {
-  outline: none;
-}
-.editor-host .cm-scroller {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
-  line-height: 1.65;
-}
-
-/* 浅色主题下编辑器文字颜色跟随全局变量 */
-[data-theme='light'] .editor-host .cm-content {
-  color: var(--text);
-  caret-color: var(--accent);
-}
-[data-theme='light'] .editor-host .cm-gutters {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-}
-[data-theme='light'] .editor-host .cm-activeLineGutter,
-[data-theme='light'] .editor-host .cm-activeLine {
-  background: var(--accent-weak);
 }
 
 /* ============ 登录页 ============ */
@@ -1046,17 +969,6 @@ button {
   font-size: 12.5px;
 }
 
-/* 深浅色变量兜底（移动 WebView 可能没有桌面定义） */
-:root {
-  --panel: #fff;
-  --border: #e8e8e8;
-  --muted: #888;
-}
-[data-theme='dark'] {
-  --panel: #1e1f22;
-  --border: #34363b;
-  --muted: #999;
-}
 .paste-toggle { display: block; margin: 0 auto 10px; font-size: 13px; }
 .paste-box {
   width: 100%;

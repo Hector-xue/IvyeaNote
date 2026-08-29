@@ -62,6 +62,21 @@ function mockServer(opts: { changes: ServerChangeRow[] }) {
           });
           continue;
         }
+        /*
+         * **假服务端必须和真服务端一样严。**
+         * 这里原来不校验 blob 有没有传，照单全收——而真服务端会 rejected。
+         * 于是「pushOnly 从不上传 blob」这个 P0 在 17 条一致性用例下全绿，
+         * 却在真机上表现为「同步成功、↑0、笔记永远上不去」。假的比真的宽松，
+         * 测试就成了自我安慰。
+         */
+        if (ch.op === 'upsert' && (!ch.blob_hash || !blobStore.has(ch.blob_hash))) {
+          results.push({
+            client_change_id: ch.client_change_id,
+            status: 'rejected',
+            reason: 'blob 未上传',
+          });
+          continue;
+        }
         const next = cur + 1;
         versions.set(ch.path, next);
         opts.changes.push({
@@ -204,5 +219,32 @@ describe('syncVault 一致性场景', () => {
     expect(local.get(report.conflicts[0])).toContain('server-line');
     // 本地原文件保持未丢
     expect(local.get('n.md')).toBe('mine-line');
+  });
+});
+
+describe('推送必须带内容（v0.9.1 P0 回归）', () => {
+  it('新文件推上去时 blob 已经先传好，且 change 里带着它的 sha256', async () => {
+    const changes: ServerChangeRow[] = [];
+    const meta = newVaultMeta(1, 'v');
+    const r = await run(meta, memIO(new Map([['a.md', '# 内容\n']])), mockServer({ changes }));
+    expect(r.errors).toEqual([]);
+    expect(r.pushed).toBe(1);
+    // 变更流里必须带 blob_hash——没有它，服务端不知道内容在哪
+    expect(changes[0].blob_hash).toBeTruthy();
+    // 而且那个 hash 指向的 blob 得真的传上去了
+    expect(blobStore.has(changes[0].blob_hash!)).toBe(true);
+    expect(blobStore.get(changes[0].blob_hash!)).toBe('# 内容\n');
+  });
+
+  it('服务端 rejected 会出现在报告里，不再被静默吞掉', async () => {
+    const changes: ServerChangeRow[] = [];
+    const server = mockServer({ changes });
+    // 让 putBlob 变成空操作：模拟内容没能上传（真服务端会因此 rejected）
+    (server as unknown as { putBlob: () => Promise<void> }).putBlob = async () => undefined;
+    const meta = newVaultMeta(1, 'v');
+    const r = await run(meta, memIO(new Map([['a.md', '# 没传上去的内容\n']])), server);
+    expect(r.pushed).toBe(0);
+    expect(r.errors.join(' ')).toContain('a.md');
+    expect(r.errors.join(' ')).toContain('拒绝');
   });
 });

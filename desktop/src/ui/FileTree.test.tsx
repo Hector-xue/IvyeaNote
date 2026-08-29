@@ -77,3 +77,34 @@ describe('FileTree 交互', () => {
     expect(screen.getByText('b')).toBeTruthy();
   });
 });
+
+describe('buildFileTree 的空文件夹', () => {
+  it('只有 .md 时行为不变', () => {
+    const t = buildFileTree(['a.md', '日记/一.md']);
+    expect(t.map((n) => `${n.type}:${n.path}`)).toEqual(['dir:日记', 'file:a.md']);
+  });
+
+  it('显式目录会出现，即使里面一篇笔记都没有——「新建文件夹」靠这条才可见', () => {
+    const t = buildFileTree([], ['项目']);
+    expect(t.map((n) => `${n.type}:${n.path}`)).toEqual(['dir:项目']);
+    expect(t[0].children).toEqual([]);
+  });
+
+  it('显式目录与同名的文件推导目录合并，不产生两个节点', () => {
+    const t = buildFileTree(['项目/立项.md'], ['项目']);
+    expect(t.filter((n) => n.path === '项目')).toHaveLength(1);
+    expect(t[0].children?.map((c) => c.path)).toEqual(['项目/立项.md']);
+  });
+
+  it('多层空目录逐级建出来', () => {
+    const t = buildFileTree([], ['归档/2026/一季度']);
+    expect(t[0].path).toBe('归档');
+    expect(t[0].children?.[0].path).toBe('归档/2026');
+    expect(t[0].children?.[0].children?.[0].path).toBe('归档/2026/一季度');
+  });
+
+  it('空文件夹排在文件前面（与既有排序一致）', () => {
+    const t = buildFileTree(['z.md'], ['空']);
+    expect(t.map((n) => n.type)).toEqual(['dir', 'file']);
+  });
+});

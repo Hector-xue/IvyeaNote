@@ -61,6 +61,11 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("DELETE /api/v1/admin/users/{id}", s.requireAdmin(s.handleAdminDeleteUser))
 	mux.Handle("POST /api/v1/pairing/create", s.authed(s.handlePairCreate))
 	mux.HandleFunc("POST /api/v1/pairing/claim", s.handlePairClaim)
+	// P3 Agent 融合：MCP endpoint（长期令牌鉴权，见 mcp.go）
+	mux.HandleFunc("POST /mcp", s.handleMCP)
+	mux.Handle("POST /api/v1/mcp/tokens", s.authed(s.handleMCPTokenCreate))
+	mux.Handle("GET /api/v1/mcp/tokens", s.authed(s.handleMCPTokenList))
+	mux.Handle("DELETE /api/v1/mcp/tokens/{id}", s.authed(s.handleMCPTokenDelete))
 	mux.Handle("GET /ws", s.authedWS(s.hub.HandleWS))
 	return mux
 }

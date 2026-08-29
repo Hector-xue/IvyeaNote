@@ -80,6 +80,10 @@ vi.mock('./lib/fs-adapters', () => ({
 // ---------- CodeMirror 打桩：jsdom 里只测交互，不起真编辑器 ----------
 vi.mock('@codemirror/view', () => ({
   EditorView: class {
+    // 桩要尽量像真的：v0.9.1 的「外部改动回灌」会读 state.doc，
+    // 桩里缺了它就会以渲染期异常的形式炸掉整页（真 CM 永远有 state）
+    state = { doc: { toString: () => '', length: 0 }, selection: { main: { head: 0 } } };
+    dispatch() {}
     setState() {}
     destroy() {}
     static updateListener = { of: () => ({}) };
@@ -99,7 +103,9 @@ vi.mock('@codemirror/view', () => ({
   drawSelection: () => ({}),
 }));
 vi.mock('@codemirror/state', () => ({
-  EditorState: { create: () => ({}) },
+  // phrases 是 v0.7.9 查找面板汉化用到的 facet；桩里缺了会以
+  // 「Cannot read properties of undefined (reading 'of')」的形式炸在渲染期
+  EditorState: { create: () => ({}), phrases: { of: () => ({}) } },
   EditorSelection: { range: () => ({}), cursor: () => ({}) },
   StateEffect: { define: () => ({ of: () => ({}) }) },
   Range: class {},

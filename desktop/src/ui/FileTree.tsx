@@ -1,11 +1,13 @@
 /**
- * v0.5.0 U3：多层文件树（对标 Obsidian 文件管理器）。
- * - 递归嵌套树，替代旧的一层目录分组
+ * 多层文件树（对标 Obsidian 文件管理器）。
+ * - 递归嵌套树，文件夹优先排序
  * - 文件名隐藏 .md 后缀
- * - hover 浮现操作按钮（新建/删除）
+ * - hover 浮现操作按钮
  * - 文件夹折叠（持久化到 localStorage）
+ * - v0.7.5 E1：**拖拽移动**——拖文件/文件夹到目标文件夹即移动，拖到空白处移到库根；
+ *   悬停折叠文件夹 600ms 自动展开（Obsidian 的 spring-loaded 行为）
  */
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 
 export interface TreeNode {
   name: string;
@@ -15,8 +17,28 @@ export interface TreeNode {
 }
 
 /** 由扁平路径列表构建嵌套树 */
-export function buildFileTree(paths: string[]): TreeNode[] {
+/**
+ * @param paths 笔记路径（.md）
+ * @param dirs  额外要显示的目录——**空文件夹只能靠它出现**。树本来只从 .md 路径推导，
+ *              于是「新建文件夹」建出来的空目录（里面只有一个 .keep 占位）在侧栏
+ *              完全不显示：用户点完像什么都没发生，也没法把笔记拖进去。
+ */
+export function buildFileTree(paths: string[], dirs: readonly string[] = []): TreeNode[] {
   const root: TreeNode = { name: '', path: '', type: 'dir', children: [] };
+  // 先把显式目录建出来，再让文件挂进去（顺序无所谓，find 会复用已有节点）
+  for (const d of dirs) {
+    let cur = root;
+    const segs = d.split('/').filter(Boolean);
+    for (let i = 0; i < segs.length; i++) {
+      const path = segs.slice(0, i + 1).join('/');
+      let next = cur.children!.find((c) => c.type === 'dir' && c.path === path);
+      if (!next) {
+        next = { name: segs[i], path, type: 'dir', children: [] };
+        cur.children!.push(next);
+      }
+      cur = next;
+    }
+  }
   for (const p of [...paths].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))) {
     const parts = p.split('/');
     let cur = root;
@@ -47,6 +69,13 @@ export function displayName(name: string, isFile: boolean): string {
   return isFile ? name.replace(/\.(md|markdown)$/i, '') : name;
 }
 
+/** 拖拽载荷。用组件内 ref 传递而不是只靠 dataTransfer——后者在 WebView2/安卓
+ *  WebView 里对自定义 MIME 的支持不一致，实测会拿到空串。 */
+interface DragItem {
+  path: string;
+  isDir: boolean;
+}
+
 interface Props {
   nodes: TreeNode[];
   currentPath: string | null;
@@ -56,19 +85,108 @@ interface Props {
   onNewNoteIn(folder: string): void;
   onNewFolderIn(folder: string): void;
   onDeleteFile(path: string): void;
+  /** v0.7.5 E1：把 src 移动到 destDir（'' = 库根）。未传则整棵树不可拖。 */
+  onMovePath?(src: string, destDir: string, isDir: boolean): void;
+  /** v0.7.9 E3：右键菜单。桌面右键、移动长按都走这里，共用一套菜单定义。 */
+  onContextMenu?(node: TreeNode, x: number, y: number): void;
 }
 
 export function FileTree(props: Props) {
+  const dragRef = useRef<DragItem | null>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [dropDir, setDropDir] = useState<string | null>(null);
+  const springTimer = useRef<number | undefined>(undefined);
+  const canDrag = !!props.onMovePath;
+
+  const clearSpring = () => {
+    window.clearTimeout(springTimer.current);
+    springTimer.current = undefined;
+  };
+
+  const endDrag = () => {
+    clearSpring();
+    dragRef.current = null;
+    setDragging(null);
+    setDropDir(null);
+  };
+
+  /** 目标是否合法：不能把目录拖进自己或自己的子目录 */
+  const canDropInto = (destDir: string): boolean => {
+    const d = dragRef.current;
+    if (!d) return false;
+    if (d.isDir && (destDir === d.path || destDir.startsWith(`${d.path}/`))) return false;
+    // 原地拖：落点就是当前所在目录
+    const parent = d.path.includes('/') ? d.path.slice(0, d.path.lastIndexOf('/')) : '';
+    return parent !== destDir;
+  };
+
+  const startDrag = (e: React.DragEvent, path: string, isDir: boolean) => {
+    dragRef.current = { path, isDir };
+    setDragging(path);
+    // Firefox 必须 setData 才会真正发起拖拽
+    e.dataTransfer.setData('text/plain', path);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const overDir = (e: React.DragEvent, dir: string, isCollapsed: boolean) => {
+    if (!canDrag || !canDropInto(dir)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    if (dropDir !== dir) {
+      setDropDir(dir);
+      clearSpring();
+      // 悬停自动展开折叠的文件夹，方便拖进深层目录
+      if (isCollapsed) {
+        springTimer.current = window.setTimeout(() => props.onToggleDir(dir), 600);
+      }
+    }
+  };
+
+  const dropInto = (e: React.DragEvent, dir: string) => {
+    if (!canDrag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const d = dragRef.current;
+    if (d && canDropInto(dir)) props.onMovePath!(d.path, dir, d.isDir);
+    endDrag();
+  };
+
   const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
     const pad = { paddingLeft: `${10 + depth * 16}px` };
     if (node.type === 'dir') {
       const isOpen = !props.collapsed.has(node.path);
+      const cls = [
+        'ft-dir',
+        isOpen ? 'open' : '',
+        dropDir === node.path ? 'drop-target' : '',
+        dragging === node.path ? 'dragging' : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
       return (
         <div key={node.path} className="ft-node">
           <div
-            className={`ft-dir ${isOpen ? 'open' : ''}`}
+            className={cls}
             style={pad}
+            draggable={canDrag}
+            onDragStart={(e) => startDrag(e, node.path, true)}
+            onDragEnd={endDrag}
+            onDragOver={(e) => overDir(e, node.path, !isOpen)}
+            onDragLeave={() => {
+              if (dropDir === node.path) {
+                clearSpring();
+                setDropDir(null);
+              }
+            }}
+            onDrop={(e) => dropInto(e, node.path)}
             onClick={() => props.onToggleDir(node.path)}
+            onContextMenu={(e) => {
+              if (!props.onContextMenu) return;
+              e.preventDefault();
+              e.stopPropagation();
+              props.onContextMenu(node, e.clientX, e.clientY);
+            }}
           >
             <span className="ft-caret">{isOpen ? '▾' : '▸'}</span>
             <span className="ft-dir-name">{node.name}</span>
@@ -97,12 +215,28 @@ export function FileTree(props: Props) {
         </div>
       );
     }
+    const cls = [
+      'ft-file',
+      props.currentPath === node.path ? 'active' : '',
+      dragging === node.path ? 'dragging' : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
     return (
       <div
         key={node.path}
-        className={`ft-file ${props.currentPath === node.path ? 'active' : ''}`}
+        className={cls}
         style={pad}
+        draggable={canDrag}
+        onDragStart={(e) => startDrag(e, node.path, false)}
+        onDragEnd={endDrag}
         onClick={() => props.onSelectFile(node.path)}
+        onContextMenu={(e) => {
+          if (!props.onContextMenu) return;
+          e.preventDefault();
+          e.stopPropagation();
+          props.onContextMenu(node, e.clientX, e.clientY);
+        }}
       >
         <span className="ft-file-name" title={node.path}>
           {displayName(node.name, true)}
@@ -122,7 +256,20 @@ export function FileTree(props: Props) {
     );
   };
 
-  return <>{props.nodes.map((n) => renderNode(n, 0))}</>;
+  // 外层同时是「库根」落区：拖到任何文件夹之外都等于移到根目录
+  return (
+    <div
+      className={`ft-root ${dropDir === '' ? 'drop-target' : ''}`}
+      data-testid="ft-root"
+      onDragOver={(e) => overDir(e, '', false)}
+      onDragLeave={() => {
+        if (dropDir === '') setDropDir(null);
+      }}
+      onDrop={(e) => dropInto(e, '')}
+    >
+      {props.nodes.map((n) => renderNode(n, 0))}
+    </div>
+  );
 }
 
 /** 折叠状态持久化 helper */

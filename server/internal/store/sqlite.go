@@ -96,6 +96,15 @@ var sqliteDDL = []string{
 		UNIQUE (device_id, client_change_id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_changes_vault ON changes (vault_id, id)`,
+	`CREATE TABLE IF NOT EXISTS mcp_tokens (
+		id           INTEGER PRIMARY KEY AUTOINCREMENT,
+		token_hash   TEXT NOT NULL UNIQUE,
+		user_id      INTEGER NOT NULL REFERENCES users(id),
+		name         TEXT NOT NULL DEFAULT '',
+		prefix       TEXT NOT NULL DEFAULT '',
+		created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+		last_used_at TEXT
+	)`,
 	`CREATE TABLE IF NOT EXISTS refresh_tokens (
 		token      TEXT PRIMARY KEY,
 		user_id    INTEGER NOT NULL REFERENCES users(id),
@@ -289,6 +298,87 @@ func (s *SQLiteStore) Pull(ctx context.Context, vaultID, cursor int64, limit int
 		next = c.ID
 	}
 	return out, next, rows.Err()
+}
+
+// ---------- MCP 长期令牌 ----------
+
+func (s *SQLiteStore) CreateMCPToken(ctx context.Context, hash string, userID int64, name string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO mcp_tokens(token_hash, user_id, name, prefix) VALUES(?,?,?,?)`,
+		hash, userID, name, mcpPrefix(hash))
+	return mapSQLErr(err)
+}
+
+func (s *SQLiteStore) GetMCPTokenUser(ctx context.Context, hash string) (int64, error) {
+	var uid int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT user_id FROM mcp_tokens WHERE token_hash=?`, hash).Scan(&uid)
+	if err != nil {
+		return 0, mapSQLErr(err)
+	}
+	// 记一次使用时间。失败不影响鉴权——它只是给用户看「这张票还在用吗」
+	_, _ = s.db.ExecContext(ctx,
+		`UPDATE mcp_tokens SET last_used_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE token_hash=?`, hash)
+	return uid, nil
+}
+
+func (s *SQLiteStore) ListMCPTokens(ctx context.Context, userID int64) ([]MCPToken, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, prefix, created_at, last_used_at FROM mcp_tokens WHERE user_id=? ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MCPToken{}
+	for rows.Next() {
+		var t MCPToken
+		var created string
+		var used sql.NullString
+		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &created, &used); err != nil {
+			return nil, err
+		}
+		if x, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			t.CreatedAt = x
+		}
+		if used.Valid {
+			if x, err := time.Parse(time.RFC3339Nano, used.String); err == nil {
+				t.LastUsedAt = &x
+			}
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) DeleteMCPToken(ctx context.Context, userID, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM mcp_tokens WHERE id=? AND user_id=?`, id, userID)
+	if err != nil {
+		return mapSQLErr(err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoRows
+	}
+	return nil
+}
+
+// ListHeads 存活路径（deleted=0 且有 blob）。
+func (s *SQLiteStore) ListHeads(ctx context.Context, vaultID int64) ([]Head, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT path, version, blob_hash FROM heads
+		 WHERE vault_id=? AND deleted=0 AND blob_hash IS NOT NULL ORDER BY path`, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Head{}
+	for rows.Next() {
+		h := Head{VaultID: vaultID}
+		if err := rows.Scan(&h.Path, &h.Version, &h.BlobHash); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // SQLiteTx 事务实现。

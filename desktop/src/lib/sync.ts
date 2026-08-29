@@ -88,23 +88,32 @@ export async function pushOnly(
     const content = await io.read(vaultPath, path);
     const known = meta.versions[path] !== undefined;
     const base = meta.bases[path] ?? '';
-    if (!known) {
-      toPush.push({
-        client_change_id: uuid(),
-        path,
-        op: 'upsert',
-        base_version: 0,
-      });
-      pushContents.set(path, content);
-    } else if (content !== base) {
-      toPush.push({
-        client_change_id: uuid(),
-        path,
-        op: 'upsert',
-        base_version: meta.versions[path],
-      });
-      pushContents.set(path, content);
+    if (known && content === base) continue;
+    /*
+     * **必须先上传 blob 再引用它的 sha256**（协议 §3.3：upsert 必须先传 blob）。
+     *
+     * 这里曾经是个 P0：`toPush` 只塞了 path/op/base_version，**没有 blob_hash、
+     * 也从不上传 blob**——带上传的 `pushUpsert` 只用在冲突合并那条支路上。
+     * 真服务端因此把每一条 upsert 都判成 rejected，而下面的循环只统计 accepted、
+     * 对 rejected「不处理」，于是表现成「同步成功、↑0、什么也没上去」。
+     * 从 v0.2.0 起就这样。
+     */
+    const bytes = new TextEncoder().encode(content);
+    const hash = await sha256HexOf(bytes);
+    try {
+      await client.putBlob(bytes);
+    } catch (e) {
+      report.errors.push(`${path} 内容上传失败：${msg(e)}`);
+      continue; // 这一篇传不上去就别推它的指针，避免服务端指向不存在的 blob
     }
+    toPush.push({
+      client_change_id: uuid(),
+      path,
+      op: 'upsert',
+      blob_hash: hash,
+      base_version: known ? meta.versions[path] : 0,
+    });
+    pushContents.set(path, content);
   }
   // 本地消失的已知文件 → 删除意图（墓碑已记录的跳过）
   for (const [path, ver] of Object.entries(meta.versions)) {
@@ -132,7 +141,13 @@ export async function pushOnly(
             delete meta.tombstones?.[change.path];
           }
         }
-        // conflict / rejected：不处理，等拉取阶段用服务端内容统一解决
+        else if (r.status === 'rejected') {
+          // 以前这里和 conflict 一样被静默吞掉，结果是「推不上去」永远看不见。
+          // conflict 确实该留给拉取阶段用服务端内容统一解决；rejected 不是——
+          // 它意味着这条请求本身有问题（路径非法 / blob 没传），必须让人看到。
+          const change = batch.find((c) => c.client_change_id === r.client_change_id);
+          report.errors.push(`${change?.path ?? '?'} 被服务端拒绝：${r.reason ?? '未说明原因'}`);
+        }
       }
     } catch (e) {
       report.errors.push(`推送失败：${msg(e)}`);
