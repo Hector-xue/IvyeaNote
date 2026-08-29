@@ -173,7 +173,7 @@ ivyea note/
   - 真实产物验证：移动到「项目」后，**焦点在编辑器里按 Ctrl+Z 文件不动**；焦点在侧栏按 Ctrl+Z 文件回到库根并提示「已撤销移动」；栈空后再按不报错。0 console error。
   - 门禁：oxlint 0 error / tsc OK / vitest **345/345** / vite build OK。
 
-- [x] v0.8.8 **P3 第一批：服务端 MCP endpoint**（方案 §6.1，2026-08-29）。方案说融合走 MCP、零改 agent 代码——这一批把服务端那半边做完了。
+- [x] v0.8.8 **P3 第一批：服务端 MCP endpoint**（方案 §6.1，2026-08-29）。⚠️ **这一批只动服务端**：桌面/移动端一行没改，所以 app 版本仍是 v0.8.7，升的是服务端自己的版本号（它此前一直停在 0.7.1）——同一个 app 换个号再发一遍是没有意义的。方案说融合走 MCP、零改 agent 代码——这一批把服务端那半边做完了。
   - **为什么挂在同步服务端而不是做个读 vault 目录的本地进程**：服务器上根本没有 `.md` 目录，笔记是内容寻址的 blob + heads 版本指针；而 agent 就跑在这台机器上。挂在这里，agent 读到的与手机/桌面是同一份真相，将来写进去的也顺着既有同步链路收敛到所有端，不需要任何新协议。
   - `POST /mcp`：JSON-RPC 2.0，暴露方案点名的四个只读工具 **`notes_list` / `notes_read` / `notes_search` / `notes_backlinks`**。协议按 `ivyea-agent/mcp_client.py` 的**实际期望**实现，不是照规范想当然——`notifications/initialized` 没有 id 所以不能回响应体（回 202）；`resources/list` 与 `prompts/list` 明确回空表而不是 `-32601`，否则 agent 启动时会记两次错误；工具级失败放进 `result.isError`，不是 JSON-RPC error（后者会让 agent 以为「连接坏了」）。
   - **长期令牌**（`mcp_tokens` 表 + 三个管理接口）。不复用 access token：它 15 分钟就过期而 MCP 客户端没有刷新逻辑，让机器拿短票的结果是「今天配好能用、明天悄悄不能用」，比一开始就拒绝更难查。明文不落库只存 sha256、只在创建时回显一次、随时可撤销、列表里给前 8 位哈希便于辨认。
