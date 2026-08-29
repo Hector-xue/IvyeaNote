@@ -1175,3 +1175,418 @@ button.report {
   cursor: pointer;
   padding: 0;
 }
+
+/* ============================================================ v0.10.0 视觉语言统一
+   目标：让界面「安静」。Obsidian 的侧栏从上到下只有库名、一行图标、文件树；
+   没有大色块按钮、没有说明散文、没有 emoji、没有原生控件。 */
+
+/* ---- 侧栏头：库名做成可点的下拉，替代原来的 select + ＋ ---- */
+.vault-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+.vault-btn:hover {
+  background: var(--panel-2);
+}
+.vault-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 图标操作条：紧贴文件树上方，低存在感 ---- */
+.side-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.side-actions .icon-btn {
+  color: var(--muted);
+  padding: 5px;
+  border-radius: 6px;
+}
+.side-actions .icon-btn:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+/* ---- 状态栏：同步降级到这里 ---- */
+.status-bar .st-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-bar .st-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.st-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+}
+button.st-item:hover {
+  color: var(--text);
+}
+.st-item.busy svg {
+  animation: st-spin 1s linear infinite;
+}
+@keyframes st-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.st-conflict {
+  color: #b3402f;
+}
+
+/* ---- 文件树的箭头改成线性图标后，要重新对齐 ---- */
+.ft-caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+.ft-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+.ft-actions button:hover {
+  color: var(--text);
+}
+
+/* ---- 侧栏选中态：Obsidian 是一层很淡的中性底，不是彩色块 ----
+   原来用的是 accent-weak + accent 文字 + 加粗，三个信号叠在一起，
+   一眼看过去整条侧栏最抢眼的就是"当前这篇"，喧宾夺主。 */
+.ft-file.active {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ---- 标签栏右端的窗格动作 ---- */
+.tabs-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+}
+.tabs-right .icon-btn {
+  color: var(--muted);
+  padding: 4px;
+}
+.tabs-right .icon-btn:hover {
+  color: var(--text);
+}
+.tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ============================================================ v0.10.0 移动端重做
+   照 Obsidian 移动端：顶栏面包屑、底部常驻导航、可展开格式条、
+   分组卡片式底部菜单、带层级引导线的文件树。 */
+
+.m-app { --m-top-h: 48px; --m-bottom-h: 52px; }
+
+/* ---- 顶栏 ---- */
+.m-top {
+  height: var(--m-top-h);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  padding-top: env(safe-area-inset-top);
+  height: calc(var(--m-top-h) + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.m-top-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+}
+.m-top-btn.on { color: var(--accent); }
+.m-crumb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  overflow: hidden;
+  font-size: 14px;
+}
+.m-crumb-dir, .m-crumb-sep { color: var(--muted); flex: 0 0 auto; }
+.m-crumb-name {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-crumb-sync {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  animation: m-pulse 1.2s ease-in-out infinite;
+}
+@keyframes m-pulse { 50% { opacity: 0.25; } }
+
+/* ---- 底部：格式条 + 导航 ---- */
+.m-bottom-wrap {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 40;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.m-format {
+  display: flex;
+  gap: 2px;
+  padding: 5px 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  /* 手机上工具多于屏宽是常态，横滚比换行好——换行会把正文顶上去 */
+  scrollbar-width: none;
+}
+.m-format::-webkit-scrollbar { display: none; }
+.m-format-btn {
+  flex: 0 0 auto;
+  width: 42px; height: 38px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 9px;
+  background: transparent; color: var(--text);
+}
+.m-format-btn:active { background: var(--panel-2); }
+.m-bottom {
+  height: var(--m-bottom-h);
+  display: flex;
+  align-items: stretch;
+}
+.m-nav-btn {
+  flex: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--muted);
+}
+.m-nav-btn.on { color: var(--accent); }
+.m-nav-btn:disabled { opacity: 0.32; }
+.m-main { padding-bottom: calc(var(--m-bottom-h) + env(safe-area-inset-bottom)); }
+
+/* ---- 底部菜单（分组卡片）---- */
+/* 底部菜单必须盖在抽屉之上：旧 .m-sheet-mask 的 z-index 是 20，
+   而新抽屉是 50——不提上来就会出现「菜单弹出来了，却被抽屉压在下面」 */
+.m-sheet-mask {
+  position: fixed;
+  z-index: 70;
+}
+.m-sheet2 {
+  position: fixed;
+  z-index: 71;
+  left: 8px; right: 8px; bottom: 8px;
+  max-height: 78vh;
+  display: flex; flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.m-sheet2-grip {
+  width: 40px; height: 4px; border-radius: 2px;
+  background: var(--border);
+  margin: 8px auto;
+}
+.m-sheet2-title {
+  padding: 2px 16px 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.m-sheet2-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.m-sheet2-group {
+  background: var(--panel);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.m-sheet2-item {
+  display: flex; align-items: center; gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  border: none; background: transparent;
+  color: var(--text); font: inherit; font-size: 15px;
+  text-align: left;
+}
+.m-sheet2-item + .m-sheet2-item { border-top: 1px solid var(--border); }
+.m-sheet2-item:active { background: var(--panel-2); }
+.m-sheet2-item:disabled { opacity: 0.4; }
+.m-sheet2-item.danger { color: #d95a4a; }
+.m-sheet2-ico { display: inline-flex; color: var(--muted); }
+.m-sheet2-item.danger .m-sheet2-ico { color: inherit; }
+.m-sheet2-label { flex: 1; min-width: 0; }
+.m-sheet2-check { color: var(--accent); display: inline-flex; }
+.m-rename-input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+/* ---- 抽屉：文件浏览器 ---- */
+.m-drawer2 {
+  position: fixed;
+  top: 0; bottom: 0; left: 0;
+  width: min(86vw, 340px);
+  z-index: 50;
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding-top: env(safe-area-inset-top);
+  transform: translateX(-102%);
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.m-drawer2.open { transform: none; }
+.m-dr-head {
+  display: flex; align-items: center; gap: 4px;
+  padding: 10px 8px 2px 12px;
+}
+.m-dr-vault {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 6px;
+  border: none; background: transparent;
+  color: var(--text); font: inherit;
+  font-size: 19px; font-weight: 650;
+  padding: 2px 0;
+}
+.m-dr-vault-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-dr-icon {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border: none; border-radius: 9px;
+  background: transparent; color: var(--muted);
+}
+.m-dr-icon:active { background: var(--panel-2); }
+.m-dr-count { padding: 0 12px 8px; color: var(--muted); font-size: 12px; }
+.m-dr-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.m-dr-search {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.m-dr-search input {
+  flex: 1; min-width: 0;
+  border: none; background: transparent;
+  color: var(--text); font: inherit; font-size: 14px;
+  outline: none;
+}
+.m-dr-clear { border: none; background: transparent; color: var(--muted); display: inline-flex; }
+.m-dr-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 16px; }
+.m-dr-hint { padding: 8px 12px 4px; color: var(--muted); font-size: 12px; }
+.m-dr-empty { padding: 16px 12px; color: var(--muted); font-size: 13px; }
+
+/* 层级引导线：嵌套关系一眼可见（Obsidian 就是这么画的） */
+.m-tree-node { position: relative; }
+.m-tree-node .m-tree-node::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  border-left: 1px solid var(--border);
+  margin-left: 18px;
+}
+.m-tree-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 10px 9px 0;
+  font-size: 15px;
+  color: var(--text);
+}
+.m-tree-row:active { background: var(--panel-2); }
+.m-tree-caret { display: inline-flex; color: var(--muted); }
+.m-tree-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-tree-dir .m-tree-name { color: var(--muted); }
+.m-tree-file.active { background: color-mix(in srgb, var(--text) 7%, transparent); font-weight: 500; }
+.m-tree-badge {
+  flex: 0 0 auto; margin-right: 10px;
+  font-size: 10px; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
+}
+
+/* toast 不该压在底部栏上——底部栏是常驻操作区，被挡住就点不到。
+   格式条展开时底部又高出一截，所以分两档。 */
+.m-app { --m-format-h: 0px; }
+.m-app.format-open { --m-format-h: 49px; }
+.m-app .m-toast {
+  bottom: calc(var(--m-bottom-h) + var(--m-format-h) + 14px + env(safe-area-inset-bottom));
+}
+.m-main {
+  padding-bottom: calc(var(--m-bottom-h) + var(--m-format-h) + env(safe-area-inset-bottom));
+}
+
+/* ---- 面板标签（左栏 文件/搜索、右栏 大纲/反向链接）----
+   Obsidian 的侧栏面板顶部就是这样一排低对比度的标签，选中的那个才有存在感。 */
+.side-tabs,
+.rp-tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+.side-tab,
+.rp-tab {
+  border: none;
+  background: transparent;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.side-tab:hover,
+.rp-tab:hover {
+  color: var(--text);
+}
+.side-tab.on,
+.rp-tab.on {
+  color: var(--text);
+  background: var(--panel-2);
+  font-weight: 500;
+}
+.side-tabs {
+  padding: 2px 0 4px;
+}
+.rp-head {
+  gap: 4px;
+}

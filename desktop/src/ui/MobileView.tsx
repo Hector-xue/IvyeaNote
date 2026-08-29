@@ -7,9 +7,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/logo.svg';
-import { buildFileTree, displayName, type TreeNode } from './FileTree';
-import { searchNotes, type SearchDoc } from '../lib/searchIndex';
+import type { SearchDoc } from '../lib/searchIndex';
+import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
+import { TopBar } from './mobile/TopBar';
+import { BottomBar, type FormatAction } from './mobile/BottomBar';
+import { Drawer } from './mobile/Drawer';
+import { Sheet, type SheetItem } from './mobile/Sheet';
 import { extractHeadings } from '../lib/headings';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
@@ -75,6 +79,20 @@ interface Props {
   resolveImage?: (rel: string) => Promise<string | null>;
 }
 
+/** 底部常驻格式条的按钮。与桌面编辑器共用同一批 key（见 MarkdownEditor 的 TOOLS） */
+const FORMATS: Omit<FormatAction, 'run'>[] = [
+  { key: 'h', icon: 'heading', title: '标题' },
+  { key: 'b', icon: 'bold', title: '加粗' },
+  { key: 'i', icon: 'italic', title: '斜体' },
+  { key: 'ul', icon: 'list-ul', title: '无序列表' },
+  { key: 'ol', icon: 'list-ol', title: '有序列表' },
+  { key: 'task', icon: 'task', title: '任务' },
+  { key: 'q', icon: 'quote', title: '引用' },
+  { key: 'code', icon: 'code', title: '代码' },
+  { key: 'link', icon: 'link', title: '链接' },
+  { key: 'image', icon: 'image', title: '插入图片' },
+];
+
 /** 文件/文件夹长按操作菜单状态 */
 interface SheetState {
   kind: 'file' | 'dir' | 'pdf';
@@ -84,6 +102,13 @@ interface SheetState {
 
 export function MobileView(props: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  /** v0.10.0：视图模式提到这里——顶栏要显示它，底部格式条要按它决定给不给 */
+  const [mode, setMode] = useState<'edit' | 'read'>('edit');
+  const [formatOpen, setFormatOpen] = useState(false);
+  /** 编辑器交出来的「按 key 施加格式」入口 */
+  const [applyFormat, setApplyFormat] = useState<((key: string) => void) | null>(null);
+  /** 当前打开的底部菜单：note=笔记动作 / app=应用与账号 / vault=库 / sort=排序 */
+  const [menu, setMenu] = useState<'note' | 'app' | 'vault' | 'sort' | null>(null);
   const [query, setQuery] = useState('');
   const [sheet, setSheet] = useState<SheetState | null>(null); // P1 长按菜单
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => {
@@ -108,17 +133,88 @@ export function MobileView(props: Props) {
     });
   };
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return props.files;
-    return props.files.filter((p) => p.toLowerCase().includes(q));
-  }, [props.files, query]);
+  /** 全部折叠：把树里出现过的目录一次性收起来 */
+  const collapseAll = () => {
+    const dirs = new Set<string>(props.emptyDirs ?? []);
+    for (const f of props.files) {
+      const parts = f.split('/');
+      for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+    }
+    setCollapsedDirs((cur) => {
+      const n = new Set(cur);
+      for (const d of dirs) n.add(d);
+      localStorage.setItem('ivnote.collapsed', JSON.stringify([...n]));
+      return n;
+    });
+  };
 
-  const filteredPdfs = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return props.pdfs;
-    return props.pdfs.filter((p) => p.toLowerCase().includes(q));
-  }, [props.pdfs, query]);
+  /**
+   * 四个底部菜单的内容。分组不是装饰——十几个动作平铺成一列时，
+   * 人根本扫不出哪些是一类（这正是我们旧「长按操作单」只有三行还显得乱的原因）。
+   */
+  const buildMenu = (which: 'note' | 'app' | 'vault' | 'sort'): SheetItem[][] => {
+    const cur = props.currentPath;
+    if (which === 'sort') {
+      return [[
+        { key: 'name', icon: 'sort', label: '按名称', checked: props.sortMode === 'name', onClick: () => props.onSortChange('name') },
+        { key: 'mtime', icon: 'sort', label: '按修改时间', checked: props.sortMode === 'mtime', onClick: () => props.onSortChange('mtime') },
+      ]];
+    }
+    if (which === 'vault') {
+      return [
+        [{ key: 'new-vault', icon: 'plus', label: '新建笔记库', onClick: props.onCreateVault }],
+        [{ key: 'tags', icon: 'tag', label: '标签', onClick: () => props.onOpenTags?.() }],
+      ];
+    }
+    if (which === 'app') {
+      const second: SheetItem[] = [];
+      if (props.onCheckUpdate) second.push({ key: 'update', icon: 'sync', label: '检查更新', onClick: props.onCheckUpdate });
+      second.push(
+        props.hasAccount
+          ? { key: 'logout', icon: 'close', label: '退出登录', onClick: props.onLogout }
+          : { key: 'login', icon: 'sync', label: '登录同步', onClick: props.onOpenLogin }
+      );
+      return [
+        [
+          {
+            key: 'sync',
+            icon: 'sync',
+            label: props.syncDisabled ? '登录后可同步' : '立即同步',
+            disabled: props.syncing,
+            onClick: props.syncDisabled ? props.onOpenLogin : props.onSync,
+          },
+          {
+            key: 'theme',
+            icon: props.theme === 'light' ? 'moon' : 'sun',
+            label: props.theme === 'light' ? '深色主题' : '浅色主题',
+            onClick: props.onToggleTheme,
+          },
+        ],
+        second,
+      ];
+    }
+    if (!cur) return [[{ key: 'new', icon: 'file-plus', label: '新建笔记', onClick: props.onCreateNote }]];
+    const fileActions: SheetItem[] = [
+      {
+        key: 'rename',
+        icon: 'edit',
+        label: '重命名',
+        onClick: () => setRenaming({ path: cur, value: cur.split('/').pop()?.replace(/\.(md|markdown)$/i, '') ?? '' }),
+      },
+    ];
+    if (props.onRequestMove) {
+      fileActions.push({ key: 'move', icon: 'move', label: '移动到…', onClick: () => props.onRequestMove?.(cur, false) });
+    }
+    fileActions.push({ key: 'del', icon: 'trash', label: '删除', danger: true, onClick: () => props.onDeleteFile(cur) });
+    return [
+      [
+        { key: 'read', icon: 'book', label: '阅读视图', checked: mode === 'read', onClick: () => setMode('read') },
+        { key: 'edit', icon: 'edit', label: '编辑视图', checked: mode === 'edit', onClick: () => setMode('edit') },
+      ],
+      [{ key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) }],
+      fileActions,
+    ];
+  };
 
   // 打开笔记后自动收起抽屉
   useEffect(() => {
@@ -165,23 +261,11 @@ export function MobileView(props: Props) {
     const dy = t.clientY - s.y;
     if (dx > 64 && Math.abs(dy) < 48 && s.x < 56) setDrawerOpen(true); // 左缘起手右滑
   };
-
-  const tree = useMemo(
-    () => buildFileTree(filtered, query.trim() ? [] : props.emptyDirs ?? []),
-    [filtered, query, props.emptyDirs]
-  );
   const report = props.lastReport;
   const hasError = report && report.errors.length > 0;
 
-  /**
-   * v0.8.3：抽屉里的搜索改走全文倒排索引。
-   * 标题命中也在索引里，所以这是原来「按文件名过滤」的严格超集。
-   */
-  const hits = useMemo(
-    () => (query.trim() && props.searchDocs ? searchNotes(props.searchDocs, query, 40) : []),
-    [props.searchDocs, query]
-  );
-  const searching = query.trim() !== '' && !!props.searchDocs;
+  /* v0.8.3 的全文搜索、v0.5.0 的文件树渲染，v0.10.0 起都搬进了 ui/mobile/Drawer。
+     这里只留状态（query / collapsedDirs），渲染归组件。 */
 
   // 外部灌词：填进搜索框并把抽屉推出来，否则用户点完标签什么也看不见
   const seedN = props.searchSeed?.n;
@@ -203,307 +287,102 @@ export function MobileView(props: Props) {
 
   /** P4：阅读模式里点击图片 → 全屏预览（事件委托在 MarkdownEditor 内 emit） */
 
-  const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
-    if (node.type === 'dir') {
-      const isOpen = !collapsedDirs.has(node.path);
-      return (
-        <div key={node.path} className="ft-node">
-          <div
-            className={`m-ft-dir ${isOpen ? 'open' : ''}`}
-            style={{ paddingLeft: `${12 + depth * 16}px` }}
-            onClick={() => toggleDir(node.path)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              setSheet({ kind: 'dir', path: node.path, name: node.name });
-            }}
-          >
-            <span className="ft-caret">{isOpen ? '▾' : '▸'}</span>
-            <span>{node.name}</span>
-          </div>
-          {isOpen && node.children?.map((c) => renderNode(c, depth + 1))}
-        </div>
-      );
-    }
-    return (
-      <div
-        key={node.path}
-        className={`m-file-row ${props.currentPath === node.path ? 'active' : ''}`}
-        style={{ paddingLeft: `${12 + depth * 16}px` }}
-        onClick={() => props.onSelect(node.path)}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          setSheet({ kind: 'file', path: node.path, name: displayName(node.name, true) });
-        }}
-      >
-        <span className="file-name" title={node.name}>
-          {displayName(node.name, true)}
-        </span>
-        <span className="m-file-chev">›</span>
-      </div>
-    );
-  };
+  /* 文件树渲染已搬进 ui/mobile/Drawer（带层级引导线）。 */
 
-  /** P1：底部操作单 */
-  const sheetEl = sheet ? (
-    <div className="m-sheet-mask" onClick={() => setSheet(null)}>
-      <div className="m-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="m-sheet-title">{sheet.name}</div>
-        {sheet.kind === 'file' && (
-          <>
-            <button
-              className="m-sheet-item"
-              onClick={() => {
-                setRenaming({ path: sheet.path, value: sheet.name });
-                setSheet(null);
-              }}
-            >
-              ✏️ 重命名
-            </button>
-            {props.onRequestMove && (
-              <button
-                className="m-sheet-item"
-                onClick={() => {
-                  const p = sheet.path;
-                  setSheet(null);
-                  props.onRequestMove?.(p, false);
-                }}
-              >
-                📂 移动到…
-              </button>
-            )}
-            <button
-              className="m-sheet-item danger"
-              onClick={() => {
-                setSheet(null);
-                props.onDeleteFile(sheet.path); // App 层已带回收站确认框
-              }}
-            >
-              🗑 删除
-            </button>
-          </>
-        )}
-        {sheet.kind === 'dir' && props.onCreateFolder && (
-          <button
-            className="m-sheet-item"
-            onClick={() => {
-              const p = sheet.path;
-              setSheet(null);
-              props.onCreateFolder?.(p);
-            }}
-          >
-            ⊞ 在此新建子文件夹
-          </button>
-        )}
-        {sheet.kind === 'pdf' && (
-          <button
-            className="m-sheet-item"
-            onClick={() => {
-              setSheet(null);
-              props.onOpenPdf(sheet.path);
-            }}
-          >
-            📄 打开 PDF
-          </button>
-        )}
-        {sheet.kind === 'dir' && (
-          <button
-            className="m-sheet-item"
-            onClick={() => {
-              setSheet(null);
-              toggleDir(sheet.path);
-            }}
-          >
-            📁 展开 / 收起
-          </button>
-        )}
-        <button className="m-sheet-item cancel" onClick={() => setSheet(null)}>
-          取消
-        </button>
-      </div>
-    </div>
-  ) : null;
+  /* 旧的 .m-sheet 长按操作单由 ui/mobile/Sheet 取代（分组卡片 + 图标）。 */
 
   const commitRename = () => {
     if (renaming && renaming.value.trim()) props.onRenameFile(renaming.path, renaming.value.trim());
     setRenaming(null);
   };
 
-  /** P1 重命名：内联输入行（WebView 禁用 window.prompt，血泪禁令） */
+  /** 重命名弹层。沿用 Sheet 的观感：从底部推上来的一张卡 */
   const renameEl = renaming ? (
     <div className="m-sheet-mask" onClick={() => setRenaming(null)}>
-      <div className="m-sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="m-sheet-title">重命名</div>
-        <input
-          className="m-search"
-          style={{ margin: '0 0 10px' }}
-          value={renaming.value}
-          autoFocus
-          onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
-          onKeyDown={(e) => e.key === 'Enter' && commitRename()}
-        />
-        <button className="m-sheet-item" onClick={commitRename}>
-          确定
-        </button>
-        <button className="m-sheet-item cancel" onClick={() => setRenaming(null)}>
-          取消
-        </button>
+      <div className="m-sheet2" onClick={(e) => e.stopPropagation()}>
+        <div className="m-sheet2-grip" aria-hidden="true" />
+        <div className="m-sheet2-title">重命名</div>
+        <div className="m-sheet2-group" style={{ padding: '10px 12px' }}>
+          <input
+            className="m-rename-input"
+            value={renaming.value}
+            autoFocus
+            onChange={(e) => setRenaming({ ...renaming, value: e.target.value })}
+            onKeyDown={(e) => e.key === 'Enter' && commitRename()}
+          />
+        </div>
+        <div className="m-sheet2-group">
+          <button className="m-sheet2-item" onClick={commitRename}>
+            <span className="m-sheet2-ico">
+              <RibbonIcon name="check" size={20} />
+            </span>
+            <span className="m-sheet2-label">确定</span>
+          </button>
+          <button className="m-sheet2-item" onClick={() => setRenaming(null)}>
+            <span className="m-sheet2-ico">
+              <RibbonIcon name="close" size={20} />
+            </span>
+            <span className="m-sheet2-label">取消</span>
+          </button>
+        </div>
       </div>
     </div>
   ) : null;
 
   return (
-    <div className={`m-app ${drawerOpen ? 'drawer-open' : ''}`}>
-      {/* 遮罩 */}
-      <div className="m-mask" onClick={() => setDrawerOpen(false)} />
-
-      {/* 抽屉 */}
-      <aside className="m-drawer">
-        <div className="m-drawer-head">
-          <img src={logoUrl} alt="" className="brand-logo" />
-          <span className="brand-name">Ivyea Note</span>
-          {props.onOpenTags && (
-            <button className="icon-btn" title="标签" aria-label="标签" onClick={props.onOpenTags}>
-              🏷
-            </button>
-          )}
-          <button className="icon-btn" onClick={props.onToggleTheme}>
-            {props.theme === 'light' ? '🌙' : '☀️'}
-          </button>
-        </div>
-
-        <div className="vault-row">{props.vaultSelector}</div>
-        {props.syncDisabled && (
-          <div className="login-hint">
-            本地模式：笔记只存在这台设备上，
-            <button onClick={props.onOpenLogin}>登录同步</button>
-            后可多端同步。
-          </div>
-        )}
-
-        <input
-          className="m-search"
-          type="search"
-          placeholder="🔍 搜索笔记…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-
-        <div className="m-sort-row">
-          <span>排序</span>
-          <select value={props.sortMode} onChange={(e) => props.onSortChange(e.target.value as SortMode)}>
-            <option value="name">按名称</option>
-            <option value="mtime">按修改时间</option>
-          </select>
-        </div>
-
-        <div className="m-file-list">
-          {searching ? (
-            hits.length === 0 ? (
-              <div className="empty">没有匹配的笔记</div>
-            ) : (
-              <>
-                <div className="m-hit-count">{hits.length} 篇匹配</div>
-                {hits.map((h) => (
-                  <button
-                    key={h.path}
-                    className={`m-hit ${props.currentPath === h.path ? 'active' : ''}`}
-                    onClick={() => props.onSelect(h.path)}
-                  >
-                    <span className="m-hit-title">{displayName(h.path.split('/').pop() ?? h.path, true)}</span>
-                    {h.path.includes('/') && (
-                      <span className="m-hit-dir">{h.path.slice(0, h.path.lastIndexOf('/'))}</span>
-                    )}
-                    {h.preview.map((p, i) => (
-                      <span key={i} className="m-hit-line">
-                        {p.text}
-                      </span>
-                    ))}
-                  </button>
-                ))}
-              </>
-            )
-          ) : (
-            tree.map((n) => renderNode(n, 0))
-          )}
-          {!searching && filteredPdfs.length > 0 && (
-            <div className="dir-group">
-              <div className="dir-label pdf-label">📄 PDF</div>
-              {filteredPdfs.map((p) => (
-                <div
-                  key={p}
-                  className="m-file-row pdf-file"
-                  onClick={() => props.onOpenPdf(p)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setSheet({ kind: 'pdf', path: p, name: p.split('/').pop() ?? p });
-                  }}
-                >
-                  <span className="file-name">{p.split('/').pop()}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {tree.length === 0 && filteredPdfs.length === 0 && (
-            <div className="empty">{query ? '没有匹配的笔记' : '还没有笔记，点下方 ＋ 新建'}</div>
-          )}
-        </div>
-
-        <div className="sidebar-foot">
-          <button onClick={props.onCreateNote}>＋ 新建笔记</button>
-          {props.onCreateFolder && (
-            <button onClick={() => props.onCreateFolder?.('')}>⊞ 新建文件夹</button>
-          )}
-          {props.onCheckUpdate && <button onClick={props.onCheckUpdate}>检查更新</button>}
-          <button onClick={props.onCreateVault}>＋ 新建笔记库</button>
-          {props.hasAccount ? (
-            <button onClick={props.onLogout}>退出登录</button>
-          ) : (
-            <button onClick={props.onOpenLogin}>登录同步</button>
-          )}
-        </div>
-      </aside>
+    <div className={`m-app ${drawerOpen ? 'drawer-open' : ''} ${formatOpen ? 'format-open' : ''}`}>
+      <Drawer
+        open={drawerOpen}
+        vaultName={props.vault.name}
+        files={props.files}
+        pdfs={props.pdfs}
+        emptyDirs={props.emptyDirs ?? []}
+        currentPath={props.currentPath}
+        collapsedDirs={collapsedDirs}
+        query={query}
+        searchDocs={props.searchDocs}
+        onQuery={setQuery}
+        onToggleDir={toggleDir}
+        onSelect={(p) => {
+          props.onSelect(p);
+          setDrawerOpen(false);
+        }}
+        onOpenPdf={(p) => {
+          props.onOpenPdf(p);
+          setDrawerOpen(false);
+        }}
+        onLongPress={(kind, path, name) => setSheet({ kind, path, name })}
+        onCreateNote={() => {
+          props.onCreateNote();
+          setDrawerOpen(false);
+        }}
+        onCreateFolder={() => props.onCreateFolder?.('')}
+        onSort={() => setMenu('sort')}
+        onCollapseAll={collapseAll}
+        onVaultMenu={() => setMenu('vault')}
+        onSettings={() => setMenu('app')}
+        onClose={() => setDrawerOpen(false)}
+      />
 
       {/* 主区 */}
       <main className="m-main" ref={mainRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        <header className="m-topbar">
-          <button className="icon-btn" onClick={() => setDrawerOpen(true)} aria-label="打开菜单">
-            ☰
-          </button>
-          <span className="m-title-small">
-            {props.currentPath ? props.currentPath.split('/').pop()?.replace(/\.(md|markdown)$/i, '') : props.vault.name}
-          </span>
-          {/* P6 大纲入口（仅编辑笔记时显示） */}
-          {props.currentPath != null && headings.length > 0 && (
-            <button className="icon-btn" onClick={() => setShowOutline(true)} aria-label="大纲">
-              ≡
-            </button>
-          )}
-          <button
-            className={`icon-btn m-sync ${props.syncing ? 'spin' : ''}`}
-            onClick={props.onSync}
-            disabled={props.syncing || props.syncDisabled}
-            title={props.syncDisabled ? '云同步需要登录后可用' : '同步'}
-            aria-label="同步"
-          >
-            ↻
-          </button>
-        </header>
-        {props.currentPath != null && (
-          <h1 className="m-large-title" aria-hidden="true">
-            <span>
-              {props.currentPath.split('/').pop()?.replace(/\.(md|markdown)$/i, '')}
-            </span>
-          </h1>
-        )}
-
+        <TopBar
+          path={props.currentPath}
+          vaultName={props.vault.name}
+          mode={mode}
+          syncing={props.syncing}
+          onOpenDrawer={() => setDrawerOpen(true)}
+          onToggleMode={() => setMode(mode === 'edit' ? 'read' : 'edit')}
+          onMore={() => setMenu('note')}
+        />
         {hasError && <div className="m-error">⚠ {report!.errors[0]}</div>}
 
         {props.currentPath == null ? (
           <div className="m-empty">
             <img src={logoUrl} alt="" className="login-logo" />
-            <p>从左上角 ☰ 选择一篇笔记</p>
+            <p>左上角打开文件列表，或新建一篇</p>
             <button className="btn primary" onClick={props.onCreateNote}>
-              ＋ 新建笔记
+              新建笔记
             </button>
           </div>
         ) : (
@@ -514,6 +393,9 @@ export function MobileView(props: Props) {
               onEdit={props.onEdit}
               currentPath={props.currentPath}
               theme={props.theme}
+              mode={mode}
+              onModeChange={setMode}
+              exposeFormat={(fn) => setApplyFormat(() => fn)}
               onInsertImage={props.onInsertImage}
               resolveImage={props.resolveImage}
             />
@@ -529,6 +411,29 @@ export function MobileView(props: Props) {
           </div>
         )}
       </main>
+
+      <BottomBar
+        canGoBack={props.currentPath != null}
+        formatOpen={formatOpen}
+        formatAvailable={props.currentPath != null && mode === 'edit' && !!applyFormat}
+        formats={FORMATS.map((f) => ({ ...f, run: () => applyFormat?.(f.key) }))}
+        onBack={() => setDrawerOpen(true)}
+        onSearch={() => {
+          setDrawerOpen(true);
+          // 抽屉一开就把焦点放进搜索框，少一次点击
+          window.setTimeout(() => document.querySelector<HTMLInputElement>('.m-dr-search input')?.focus(), 120);
+        }}
+        onCreate={props.onCreateNote}
+        onToggleFormat={() => setFormatOpen((v) => !v)}
+        onMore={() => setMenu('note')}
+      />
+
+      <Sheet
+        open={menu !== null}
+        groups={menu === null ? [] : buildMenu(menu)}
+        onClose={() => setMenu(null)}
+      />
+
 
       {/* P6：大纲浮层 */}
       {showOutline && (
@@ -554,7 +459,6 @@ export function MobileView(props: Props) {
 
       {/* P4：图片全屏预览（由 MarkdownEditor 内部打开，见 viewerImg 桥） */}
 
-      {sheetEl}
       {renameEl}
 
       {/* v0.7.3 P4：图片全屏预览（lightbox，点任意处关闭） */}
@@ -573,10 +477,13 @@ export function BacklinksSection(props: {
   if (props.backlinks.length === 0) return null;
   return (
     <div className="m-backlinks">
-      <div className="m-backlinks-title">🔗 {props.backlinks.length} 条反向链接</div>
+      <div className="m-backlinks-title">
+        <RibbonIcon name="backlink" size={15} />
+        {props.backlinks.length} 条反向链接
+      </div>
       {props.backlinks.map((p) => (
         <button key={p} className="m-backlink-item" onClick={() => props.onSelect(p)}>
-          {displayName(p.split('/').pop() ?? p, true)}
+          {(p.split('/').pop() ?? p).replace(/\.(md|markdown)$/i, '')}
           <span className="m-backlink-path">{p}</span>
         </button>
       ))}

@@ -7,7 +7,8 @@
  * 刻意保留 `.wp-row / .wp-label / .wp-link` 这套类名：集成测试断言的就是它们，
  * 换名字等于把「反链到底有没有真的渲染出来」那条用例弄哑。搬位置不该动契约。
  */
-import { useMemo } from 'react';
+import { RibbonIcon } from './Icons';
+import { useMemo, useState } from 'react';
 import { extractHeadings } from '../lib/headings';
 
 const COLLAPSE_KEY = 'ivnote.rightPanel.collapsed';
@@ -39,34 +40,57 @@ function titleOf(path: string): string {
 
 export function RightPanel(props: Props) {
   const headings = useMemo(() => extractHeadings(props.doc ?? ''), [props.doc]);
+  const out = props.wikiOut ?? [];
+  const back = props.wikiBack ?? [];
+  const [tab, setTab] = useState<'outline' | 'links'>('outline');
 
   if (props.collapsed) {
     return (
       <div className="right-rail">
         <button className="icon-btn" title="展开大纲与反链" onClick={props.onToggle}>
-          ‹
+          <RibbonIcon name="chevron-left" size={16} />
         </button>
       </div>
     );
   }
 
-  const out = props.wikiOut ?? [];
-  const back = props.wikiBack ?? [];
+
 
   return (
     <aside
       className="right-panel"
       style={props.width ? { width: props.width, minWidth: props.width, maxWidth: props.width } : undefined}
     >
+      {/* v0.10.0：右栏改成可切换的标签面板（Obsidian 的右栏就是「大纲 / 反向链接」
+          两个标签）。此前是「大纲在上、双链挤在下面」一路排下去——长文时大纲一长，
+          反链就被推出屏幕，等于没有。 */}
       <div className="rp-head">
-        <span className="rp-title">大纲</span>
+        <div className="rp-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={tab === 'outline'}
+            className={`rp-tab ${tab === 'outline' ? 'on' : ''}`}
+            onClick={() => setTab('outline')}
+          >
+            大纲
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'links'}
+            className={`rp-tab ${tab === 'links' ? 'on' : ''}`}
+            onClick={() => setTab('links')}
+          >
+            反向链接{back.length > 0 ? `（${back.length}）` : ''}
+          </button>
+        </div>
         <button className="icon-btn" title="收起" onClick={props.onToggle}>
-          ›
+          <RibbonIcon name="chevron-right" size={16} />
         </button>
       </div>
 
       <div className="rp-body">
-        {headings.length === 0 ? (
+        {tab === 'outline' &&
+          (headings.length === 0 ? (
           <p className="rp-empty">这篇还没有标题</p>
         ) : (
           <nav className="rp-outline">
@@ -84,9 +108,12 @@ export function RightPanel(props: Props) {
               </button>
             ))}
           </nav>
-        )}
+          ))}
 
-        {(out.length > 0 || back.length > 0) && (
+        {tab === 'links' && out.length === 0 && back.length === 0 && (
+          <p className="rp-empty">这篇还没有双链。在正文里写 [[笔记名]] 建立联系。</p>
+        )}
+        {tab === 'links' && (out.length > 0 || back.length > 0) && (
           <div className="wiki-panel rp-links">
             {out.length > 0 && (
               <div className="wp-row">

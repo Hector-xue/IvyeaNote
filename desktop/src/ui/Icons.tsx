@@ -2,9 +2,86 @@
  * v0.5.0 U5/U6：线性 SVG 图标（wireframe 风，stroke-width 1.6，fill none）。
  * 替代 emoji 图标，对齐 Obsidian 的克制视觉。
  */
-export type IconName = 'graph' | 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search' | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote' | 'code' | 'link' | 'image' | 'eye' | 'edit' | 'settings';
+export type IconName =
+  | 'graph' | 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search'
+  | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote'
+  | 'code' | 'link' | 'image' | 'eye' | 'edit' | 'settings'
+  // v0.10.0 移动端重做新增。移动端此前整套用 emoji（☰ ↻ ✏️ 🗑 📂 🏷），
+  // 与桌面 ribbon 的线性图标是两套语言——「没有 Obsidian 影子」有一半出在这里。
+  | 'sidebar' | 'more-vertical' | 'plus' | 'chevron-left' | 'chevron-right'
+  | 'chevron-down' | 'book' | 'sort' | 'collapse' | 'folder-plus' | 'file-plus'
+  | 'backlink' | 'outline' | 'sync' | 'close' | 'move' | 'check' | 'text-format';
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  // ---- v0.10.0 移动端 ----
+  /** 侧栏开关：Obsidian 移动端左上角那个「圆角矩形 + 左侧竖条」 */
+  sidebar: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2.5" />
+      <path d="M9 4v16" />
+    </>
+  ),
+  'more-vertical': (
+    <>
+      <circle cx="12" cy="5" r="1.2" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+      <circle cx="12" cy="19" r="1.2" fill="currentColor" />
+    </>
+  ),
+  plus: <path d="M12 5v14M5 12h14" />,
+  'chevron-left': <path d="M15 6l-6 6 6 6" />,
+  'chevron-right': <path d="M9 6l6 6-6 6" />,
+  'chevron-down': <path d="M6 9l6 6 6-6" />,
+  /** 阅读视图 */
+  /** 阅读视图：一本摊开的书。原来画成两个并排矩形，和 sidebar 图标撞脸 */
+  book: (
+    <>
+      <path d="M12 6.5C10.5 5.2 8.6 4.5 6 4.5H3v13h3c2.6 0 4.5.7 6 2 1.5-1.3 3.4-2 6-2h3v-13h-3c-2.6 0-4.5.7-6 2z" />
+      <path d="M12 6.5v13" />
+    </>
+  ),
+  sort: <path d="M4 6h13M4 12h9M4 18h5M17 14l3 3 3-3M20 17V8" />,
+  collapse: (
+    <>
+      <path d="M7 9l5-5 5 5M7 15l5 5 5-5" />
+    </>
+  ),
+  'folder-plus': (
+    <>
+      <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" />
+      <path d="M12 11v5M9.5 13.5h5" />
+    </>
+  ),
+  'file-plus': (
+    <>
+      <path d="M6 2h8l4 4v16H6V2zm8 0v4h4" />
+      <path d="M12 11v6M9 14h6" />
+    </>
+  ),
+  /** 反向链接：一条指回来的链 */
+  backlink: (
+    <>
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+    </>
+  ),
+  outline: <path d="M4 6h16M8 12h12M12 18h8" />,
+  sync: <path d="M20 11a8 8 0 0 0-13.7-5.7L4 7.5M4 4v3.5H7.5M4 13a8 8 0 0 0 13.7 5.7L20 16.5M20 20v-3.5h-3.5" />,
+  close: <path d="M6 6l12 12M18 6L6 18" />,
+  move: (
+    <>
+      <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" />
+      <path d="M9 14h6M13 11l3 3-3 3" />
+    </>
+  ),
+  check: <path d="M5 13l4 4L19 7" />,
+  'text-format': (
+    <>
+      <path d="M3 18L8 6l5 12M4.8 14h6.4" />
+      <path d="M20 18v-5.5a2.5 2.5 0 0 0-4.6-1.3M15.5 15.8c0 1.3 1 2.2 2.3 2.2 1.2 0 2.2-.8 2.2-2v-1.2h-2.3c-1.3 0-2.2.7-2.2 1.6z" />
+    </>
+  ),
+
   settings: (
     <>
       <circle cx="12" cy="12" r="3" />

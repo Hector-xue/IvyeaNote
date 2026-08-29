@@ -9,6 +9,7 @@
  *   不是按一下保存再看结果；
  * - 每一项都给**当前值**和**默认值**的提示，让人敢动——不敢动的设置等于没有。
  */
+import { RibbonIcon } from './Icons';
 import { useEffect } from 'react';
 import { DEFAULTS, LIMITS, type Appearance, type ReadFont, type ThemeMode } from '../lib/appearance';
 import { SHORTCUTS, type Prefs } from '../lib/prefs';
@@ -100,7 +101,7 @@ export function SettingsView(props: Props) {
         <div className="set-head">
           <h2 className="set-title">设置</h2>
           <button className="icon-btn" title="关闭" onClick={props.onClose}>
-            ✕
+            <RibbonIcon name="close" size={16} />
           </button>
         </div>
 

@@ -4,7 +4,7 @@
  * - 格式化工具栏：加粗/斜体/标题/列表/引用/代码/链接/插图（桌面顶部、移动底部）
  * - 阅读模式：marked + DOMPurify 渲染，图片按相对路径真实显示
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView,
@@ -13,11 +13,14 @@ import {
   drawSelection,
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language';
+import { HighlightStyle } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
+import { syntaxHighlighting, indentUnit } from '@codemirror/language';
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked } from 'marked';
+import { RibbonIcon, type IconName } from './Icons';
 import DOMPurify from 'dompurify';
 import {
   cycleHeading,
@@ -67,6 +70,19 @@ export interface MarkdownEditorProps {
   defaultView?: 'edit' | 'read';
   /** v0.8.6 E10：编辑态实时预览开关（默认 true＝此前的行为） */
   livePreviewOn?: boolean;
+  /**
+   * v0.10.0：视图模式**可受控**。移动端把「阅读/编辑」放在了顶栏，
+   * 而模式状态原本只存在编辑器内部——不受控就会出现「顶栏显示编辑、
+   * 编辑器其实在阅读态」这种两处不一致。
+   */
+  mode?: 'edit' | 'read';
+  onModeChange?(m: 'edit' | 'read'): void;
+  /**
+   * v0.10.0：把格式化能力交出去。移动端的常驻格式条在编辑器外面
+   * （底部导航之上），需要一个能按 key 施加格式的入口。
+   * 组件卸载时回传 null。
+   */
+  exposeFormat?(apply: ((key: string) => void) | null): void;
 }
 
 function cmExtensions(
@@ -86,7 +102,11 @@ function cmExtensions(
     history(),
     indentUnit.of('    '),
     markdown(),
-    ...(dark ? [oneDark] : [syntaxHighlighting(defaultHighlightStyle, { fallback: true })]),
+    // v0.10.0：**标题不要下划线**。CM6 的 defaultHighlightStyle 给 tags.heading
+    // 加了 text-decoration: underline，于是每个 # 标题都像一条链接——Obsidian
+    // 的标题只有字号和字重的差别。这里用自己的高亮表，深浅色共用。
+    ...(dark ? [oneDark] : []),
+    syntaxHighlighting(mdHighlight, { fallback: true }),
     highlightSelectionMatches(),
     // v0.7.9 E4：文内查找替换（Ctrl+F / Ctrl+H）。
     // @codemirror/search 早就装了、searchKeymap 也早就接了，但一直没显式加 search()——
@@ -159,28 +179,55 @@ export function renderMarkdown(md: string): string {
 
 interface ToolBtn {
   key: string;
-  label: string;
+  /** 线性图标名。移动端与桌面共用同一套图形语言（此前是 B/I/H/•/☑/❝ 混排） */
+  icon: IconName;
   title: string;
   run: (text: string, from: number, to: number) => EditResult;
 }
 
+/**
+ * 编辑器语法高亮。刻意只定义少数几条：Markdown 源码本来就该看起来像正文，
+ * 满屏彩色的是代码编辑器，不是笔记。
+ */
+const mdHighlight = HighlightStyle.define([
+  { tag: t.heading, fontWeight: '700' },
+  { tag: t.strong, fontWeight: '700' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.link, color: 'var(--accent)' },
+  { tag: t.url, color: 'var(--muted)' },
+  { tag: t.monospace, fontFamily: 'var(--font-mono, ui-monospace, monospace)' },
+  { tag: t.quote, color: 'var(--muted)' },
+  { tag: t.list, color: 'var(--muted)' },
+  { tag: t.comment, color: 'var(--muted)' },
+]);
+
 const TOOLS: ToolBtn[] = [
-  { key: 'b', label: 'B', title: '加粗', run: (t, f, to) => toggleInline(t, { from: f, to }, '**') },
-  { key: 'i', label: 'I', title: '斜体', run: (t, f, to) => toggleInline(t, { from: f, to }, '*') },
-  { key: 'h', label: 'H', title: '标题（循环 #/##/###）', run: (t, f, to) => cycleHeading(t, { from: f, to }) },
-  { key: 'ul', label: '•', title: '无序列表', run: (t, f, to) => toggleLinePrefix(t, { from: f, to }, '- ') },
-  { key: 'ol', label: '1.', title: '有序列表', run: (t, f, to) => toggleOrderedList(t, { from: f, to }) },
-  { key: 'task', label: '☑', title: '任务列表', run: (t, f, to) => toggleTaskList(t, { from: f, to }) },
-  { key: 'q', label: '❝', title: '引用', run: (t, f, to) => toggleLinePrefix(t, { from: f, to }, '> ') },
-  { key: 'code', label: '</>', title: '行内代码', run: (t, f, to) => toggleInline(t, { from: f, to }, '`') },
-  { key: 'link', label: '🔗', title: '插入链接', run: (t, f, to) => insertLink(t, { from: f, to }) },
+  { key: 'b', icon: 'bold', title: '加粗', run: (t, f, to) => toggleInline(t, { from: f, to }, '**') },
+  { key: 'i', icon: 'italic', title: '斜体', run: (t, f, to) => toggleInline(t, { from: f, to }, '*') },
+  { key: 'h', icon: 'heading', title: '标题（循环 #/##/###）', run: (t, f, to) => cycleHeading(t, { from: f, to }) },
+  { key: 'ul', icon: 'list-ul', title: '无序列表', run: (t, f, to) => toggleLinePrefix(t, { from: f, to }, '- ') },
+  { key: 'ol', icon: 'list-ol', title: '有序列表', run: (t, f, to) => toggleOrderedList(t, { from: f, to }) },
+  { key: 'task', icon: 'task', title: '任务列表', run: (t, f, to) => toggleTaskList(t, { from: f, to }) },
+  { key: 'q', icon: 'quote', title: '引用', run: (t, f, to) => toggleLinePrefix(t, { from: f, to }, '> ') },
+  { key: 'code', icon: 'code', title: '行内代码', run: (t, f, to) => toggleInline(t, { from: f, to }, '`') },
+  { key: 'link', icon: 'link', title: '插入链接', run: (t, f, to) => insertLink(t, { from: f, to }) },
 ];
 
 export function MarkdownEditor(props: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const [modeState, setMode] = useState<'edit' | 'read'>(props.defaultView ?? 'edit');
+  const [modeState, setModeState] = useState<'edit' | 'read'>(props.defaultView ?? 'edit');
+  const mode0 = props.readOnlyPreview ? 'read' : (props.mode ?? modeState);
+  const setMode = useCallback(
+    (next: 'edit' | 'read' | ((m: 'edit' | 'read') => 'edit' | 'read')) => {
+      const v = typeof next === 'function' ? next(mode0) : next;
+      if (props.onModeChange) props.onModeChange(v);
+      else setModeState(v);
+    },
+    // mode0 参与是为了函数式更新拿得到当前值
+    [mode0, props.onModeChange] // eslint-disable-line react-hooks/exhaustive-deps
+  );
   const rootRef = useRef<HTMLDivElement>(null);
   /**
    * onEdit 走 ref 而不是直接塞进扩展。
@@ -204,7 +251,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     onEditRef.current = props.onEdit;
     pathRef.current = props.currentPath;
   });
-  const mode = props.readOnlyPreview ? 'read' : modeState;
+  const mode = mode0;
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
   const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
@@ -255,7 +302,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         if (someoneFocused || all[0] !== host) return;
       }
       e.preventDefault();
-      setMode((m) => (m === 'edit' ? 'read' : 'edit'));
+      setMode((m: 'edit' | 'read') => (m === 'edit' ? 'read' : 'edit'));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -533,6 +580,29 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     view.focus();
   };
 
+  /**
+   * v0.10.0：把「按 key 施加格式」交给外面（移动端底部格式条在编辑器之外）。
+   * 用 ref 转发而不是每次渲染都回调一个新函数——后者会让消费方的 effect 反复触发。
+   */
+  // 插图的实现定义在后面，用 holder 转发避免 TDZ
+  const insertImageHolder = useRef<(() => Promise<void>) | null>(null);
+  const applyRef = useRef(applyFormat);
+  applyRef.current = applyFormat;
+
+  const { exposeFormat } = props;
+  useEffect(() => {
+    if (!exposeFormat) return;
+    exposeFormat((key: string) => {
+      if (key === 'image') {
+        void insertImageHolder.current?.();
+        return;
+      }
+      const btn = TOOLS.find((t) => t.key === key);
+      if (btn) applyRef.current(btn);
+    });
+    return () => exposeFormat(null);
+  }, [exposeFormat]);
+
   const doInsertImage = async () => {
     if (!props.onInsertImage || imgBusy) return;
     setImgBusy(true);
@@ -553,50 +623,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       setImgBusy(false);
     }
   };
+  insertImageHolder.current = doInsertImage;
 
-  const toolbar = useMemo(
-    () => (
-      <div className={`md-toolbar ${props.mobile ? 'md-toolbar-bottom' : ''}`}>
-        {TOOLS.map((b) => (
-          <button
-            key={b.key}
-            className={`md-tool ${b.key === 'b' ? 't-bold' : b.key === 'i' ? 't-italic' : ''}`}
-            title={b.title}
-            aria-label={b.title}
-            // 移动端用 onClick 即可；preventDefault 防止按钮抢焦点导致选区丢失
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => applyFormat(b)}
-          >
-            {b.label}
-          </button>
-        ))}
-        {props.onInsertImage && (
-          <button
-            className="md-tool"
-            title="插入图片"
-            aria-label="插入图片"
-            onPointerDown={(e) => e.preventDefault()}
-            disabled={imgBusy}
-            onClick={() => void doInsertImage()}
-          >
-            🖼
-          </button>
-        )}
-        <span className="md-toolbar-spacer" />
-        <button
-          className={`md-tool md-mode ${mode === 'read' ? 'active' : ''}`}
-          hidden={props.readOnlyPreview}
-          title={mode === 'edit' ? '切换到阅读模式' : '切换到编辑模式'}
-          aria-label="切换编辑/阅读"
-          onClick={() => setMode(mode === 'edit' ? 'read' : 'edit')}
-        >
-          {mode === 'edit' ? '👁' : '✎'}
-        </button>
-      </div>
-    ),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mode, imgBusy, props.mobile, props.onInsertImage]
-  );
+  /* 常驻格式条已不在编辑器内部：桌面端不要（Obsidian 也没有），
+     移动端由 MobileView 的底部栏统一拥有。选区气泡仍保留。 */
 
   return (
     <div
@@ -605,8 +635,19 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       }`}
       ref={rootRef}
     >
-      {/* 只读预览没有可编辑的编辑器，整条格式工具栏点了都不会有反应，直接不给 */}
-      {!props.mobile && !props.readOnlyPreview && toolbar}
+      {/*
+        v0.10.0：**桌面端不再有常驻格式工具栏**。
+        Obsidian 的编辑区上方只有标签页，然后直接是正文——那条 B/I/H 横条是
+        「通用 Markdown 编辑器」的标志，摆在这儿会让整个界面掉出 Obsidian 那一类。
+        格式化仍然齐全，走快捷键与命令面板；移动端另有底部常驻格式条（那是
+        Obsidian 移动端也有的）。
+      */}
+      {/*
+        v0.10.0：移动端的工具条**不再由编辑器自己渲染**。
+        它现在是 MobileView 底部常驻栏的一部分（导航之上、可展开），
+        编辑器只负责通过 exposeFormat 把「施加格式」这件事交出去。
+        否则会出现两条格式条上下打架——刚好是这次改到一半时的样子。
+      */}
       <div
         className="md-body"
         onPaste={(e) => {
@@ -649,34 +690,9 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
               onPointerDown={(e) => e.preventDefault()}
               onClick={() => bubbleFormat(b)}
             >
-              {b.label}
+              <RibbonIcon name={b.icon} size={17} />
             </button>
           ))}
-        </div>
-      )}
-      {props.mobile && (
-        <div className="md-insert-bar">
-          <button
-            className="md-tool"
-            title="插入图片"
-            aria-label="插入图片"
-            onPointerDown={(e) => e.preventDefault()}
-            disabled={imgBusy}
-            onClick={() => void doInsertImage()}
-          >
-            🖼
-          </button>
-          <span className="md-toolbar-spacer" />
-          <button
-            className={`md-tool md-mode ${mode === 'read' ? 'active' : ''}`}
-            hidden={props.readOnlyPreview}
-            title={mode === 'edit' ? '切换到阅读模式' : '切换到编辑模式'}
-            aria-label="切换编辑/阅读"
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => setMode(mode === 'edit' ? 'read' : 'edit')}
-          >
-            {mode === 'edit' ? '👁' : '✎'}
-          </button>
         </div>
       )}
       {/* v0.7.3 P4：图片全屏预览 */}

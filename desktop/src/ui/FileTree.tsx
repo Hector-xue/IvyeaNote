@@ -8,6 +8,7 @@
  *   悬停折叠文件夹 600ms 自动展开（Obsidian 的 spring-loaded 行为）
  */
 import { useMemo, useRef, useState } from 'react';
+import { RibbonIcon } from './Icons';
 
 export interface TreeNode {
   name: string;
@@ -188,7 +189,9 @@ export function FileTree(props: Props) {
               props.onContextMenu(node, e.clientX, e.clientY);
             }}
           >
-            <span className="ft-caret">{isOpen ? '▾' : '▸'}</span>
+            <span className="ft-caret">
+              <RibbonIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={14} />
+            </span>
             <span className="ft-dir-name">{node.name}</span>
             <span className="ft-actions">
               <button
@@ -198,7 +201,7 @@ export function FileTree(props: Props) {
                   props.onNewNoteIn(node.path);
                 }}
               >
-                ＋
+                <RibbonIcon name="file-plus" size={14} />
               </button>
               <button
                 title="在此新建子文件夹"
@@ -207,7 +210,7 @@ export function FileTree(props: Props) {
                   props.onNewFolderIn(node.path);
                 }}
               >
-                ⊞
+                <RibbonIcon name="folder-plus" size={14} />
               </button>
             </span>
           </div>
@@ -249,7 +252,7 @@ export function FileTree(props: Props) {
               props.onDeleteFile(node.path);
             }}
           >
-            ✕
+            <RibbonIcon name="close" size={14} />
           </button>
         </span>
       </div>

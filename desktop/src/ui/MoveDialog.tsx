@@ -1,3 +1,4 @@
+import { RibbonIcon } from './Icons';
 /**
  * 「移动到…」目录选择器（v0.8.3）。
  *
@@ -47,7 +48,10 @@ export function MoveDialog({ srcPath, isDir, dirs, onPick, onClose }: Props) {
                 disabled={isHere}
                 onClick={() => onPick(d)}
               >
-                <span className="move-item-name">{d === '' ? '📁 库根目录' : `📁 ${d}`}</span>
+                <span className="move-item-name">
+                  <RibbonIcon name="folder" size={15} />
+                  {d === '' ? '库根目录' : d}
+                </span>
                 {isHere && <span className="move-item-tag">当前位置</span>}
               </button>
             );

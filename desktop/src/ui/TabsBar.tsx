@@ -3,11 +3,15 @@
  * - 打开笔记即开标签；点击切换；× 关闭；当前标签高亮
  * - 标签列表由 App 管理（openTabs: 路径数组 + activeTab），本组件纯展示
  */
+import { RibbonIcon } from './Icons';
+
 export interface TabsBarProps {
   tabs: string[];
   active: string | null;
   onSelect(path: string): void;
   onClose(path: string): void;
+  /** 右端插槽：窗格动作（分栏等） */
+  right?: React.ReactNode;
 }
 
 /** 标签显示名：取 basename 并隐藏 md 后缀 */
@@ -39,10 +43,12 @@ export function TabsBar(props: TabsBarProps) {
               props.onClose(t);
             }}
           >
-            ×
+            <RibbonIcon name="close" size={13} />
           </button>
         </div>
       ))}
+      {/* 右端留给窗格动作（分栏）——Obsidian 也是把它放在标签栏这一行 */}
+      {props.right && <span className="tabs-right">{props.right}</span>}
     </div>
   );
 }

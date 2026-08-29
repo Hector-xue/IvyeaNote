@@ -172,6 +172,54 @@ export function MainView(props: Props) {
     label: '右栏',
   });
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
+
+  /**
+   * v0.10.0：从侧栏清走的东西没有消失，只是换了落点——
+   * 库切换/新建库/绑定文件夹进「库名」下拉，排序进图标条，同步进状态栏。
+   * 侧栏从上到下只剩：库名、一行图标、文件树（Obsidian 就是这样）。
+   */
+  const openVaultMenu = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    const items: MenuAnchor['items'] = [
+      { id: 'new-vault', label: '新建笔记库…', run: () => props.onCreateVault() },
+      { id: 'import', label: '从 Obsidian 导入…', run: () => props.onImportObsidian() },
+    ];
+    if (props.vault.localPath && !props.vault.localPath.startsWith('opfs://')) {
+      items.push({ id: 'unbind', label: `解绑文件夹（${props.vault.localPath}）`, run: () => props.onUnbindFolder() });
+    } else {
+      items.push({ id: 'bind', label: '绑定本地文件夹…', run: () => props.onBindFolder() });
+    }
+    setMenu({ x: r.left, y: r.bottom + 4, items });
+  };
+
+  const openSortMenu = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    setMenu({
+      x: r.left,
+      y: r.bottom + 4,
+      items: [
+        { id: 'name', label: props.sortMode === 'name' ? '✓ 按名称' : '按名称', run: () => props.onSortChange('name') },
+        { id: 'mtime', label: props.sortMode === 'mtime' ? '✓ 按修改时间' : '按修改时间', run: () => props.onSortChange('mtime') },
+      ],
+    });
+  };
+
+  /** 全部折叠：把树里所有目录塞进折叠集合 */
+  const collapseAll = () => {
+    if (!props.onToggleDir) return;
+    const dirs: string[] = [];
+    const walk = (ns: TreeNode[]) => {
+      for (const n of ns) {
+        if (n.type === 'dir') {
+          dirs.push(n.path);
+          walk(n.children ?? []);
+        }
+      }
+    };
+    walk(fileTree);
+    // 已折叠的跳过，否则会把它们又切回展开
+    for (const d of dirs) if (!props.collapsedDirs?.has(d)) props.onToggleDir(d);
+  };
   /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */
   const [sidebarTab, setSidebarTab] = useState<'files' | 'search'>('files');
 
@@ -272,72 +320,60 @@ export function MainView(props: Props) {
       >
         <div className="side-head">
           <img src={logoUrl} alt="" className="brand-logo" />
-          <span className="brand-name">Ivyea Note</span>
+          <button
+            className="vault-btn"
+            title="切换笔记库 / 绑定文件夹"
+            onClick={(e) => openVaultMenu(e.currentTarget)}
+          >
+            <span className="vault-name">{props.vault.name}</span>
+            <RibbonIcon name="chevron-down" size={14} />
+          </button>
+        </div>
+
+        {/* 左栏标签：文件 / 搜索。ribbon 上的图标与它是同一份状态——
+            Obsidian 也是两处联动（ribbon 切面板、面板顶部有标签） */}
+        <div className="side-tabs" role="tablist">
+          <button
+            role="tab"
+            aria-selected={sidebarTab === 'files'}
+            className={`side-tab ${sidebarTab === 'files' ? 'on' : ''}`}
+            onClick={() => setSidebarTab('files')}
+          >
+            文件
+          </button>
+          <button
+            role="tab"
+            aria-selected={sidebarTab === 'search'}
+            className={`side-tab ${sidebarTab === 'search' ? 'on' : ''}`}
+            onClick={() => setSidebarTab('search')}
+          >
+            搜索
+          </button>
+        </div>
+
+        {/* Obsidian 式图标操作条：新建笔记 / 新建文件夹 / 排序 / 全部折叠。
+            此前这些是侧栏底部的 2×2 emoji 按钮格，和文件树离得最远、还最抢眼 */}
+        {sidebarTab === 'files' && (
+        <div className="side-actions">
+          <button className="icon-btn" title="新建笔记" onClick={props.onCreateNote}>
+            <RibbonIcon name="file-plus" size={17} />
+          </button>
+          <button className="icon-btn" title="新建文件夹" onClick={() => props.onCreateFolder('')}>
+            <RibbonIcon name="folder-plus" size={17} />
+          </button>
           <button
             className="icon-btn"
-            title={props.theme === 'light' ? '切换深色' : '切换浅色'}
-            onClick={props.onToggleTheme}
+            title={props.sortMode === 'name' ? '排序：按名称' : '排序：按修改时间'}
+            onClick={(e) => openSortMenu(e.currentTarget)}
           >
-            {props.theme === 'light' ? '🌙' : '☀️'}
+            <RibbonIcon name="sort" size={17} />
+          </button>
+          <button className="icon-btn" title="全部折叠" onClick={collapseAll}>
+            <RibbonIcon name="collapse" size={17} />
           </button>
         </div>
-
-        <div className="vault-row">
-          {props.vaultSelector}
-          <button className="icon-btn" title="新建笔记库" onClick={props.onCreateVault}>
-            ＋
-          </button>
-        </div>
-
-        <div className="sync-row">
-          {/* v0.6.1 H7a：全自动同步——按钮收敛为一个（点一下=推+拉），平时自动触发 */}
-          <button
-            className={`btn primary ${props.syncing ? '' : 'auto-synced'}`}
-            onClick={props.onSyncNow ?? props.onUpload}
-            disabled={props.syncing || props.syncDisabled}
-            title={
-              props.syncDisabled
-                ? '登录后自动多端同步'
-                : props.syncing
-                  ? '同步中…'
-                  : '已自动同步；点击立即同步一次'
-            }
-          >
-            {props.syncing ? '⟳ 同步中…' : '⟳ 同步'}
-          </button>
-          {props.lastReport && !props.syncing && (props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (
-            <button className="conflict-entry" onClick={props.onOpenConflicts} title="点击处理冲突">
-              ⚠ {props.conflictCount} 个冲突待处理
-            </button>
-          )}
-          {props.lastReport && !props.syncing && (props.conflictCount ?? 0) === 0 && (
-            <span className="syncing-hint" title={`本次推送 ${props.lastReport.pushed} / 拉取 ${props.lastReport.pulled}`}>
-              已同步 · 刚刚
-            </span>
-          )}
-        </div>
-        {props.syncDisabled && (
-          <div className="login-hint">
-            本地模式：笔记只存在这台设备上。
-            <button onClick={props.onOpenLogin}>登录同步</button>
-            后可多端同步。
-          </div>
         )}
 
-        <div className="action-row">
-          <button className="btn ghost" onClick={props.onImportObsidian}>
-            导入 Obsidian
-          </button>
-          <select
-            className="sort-select"
-            value={props.sortMode}
-            title="排序方式"
-            onChange={(e) => props.onSortChange(e.target.value as SortMode)}
-          >
-            <option value="name">按名称</option>
-            <option value="mtime">按修改时间</option>
-          </select>
-        </div>
         {props.importProgress && (
           <div className="import-progress" title="正在导入 Obsidian 笔记">
             <div className="ip-bar">
@@ -357,16 +393,6 @@ export function MainView(props: Props) {
           </div>
         )}
 
-        {!props.vault.localPath ? (
-          <button className="bind" onClick={props.onBindFolder}>
-            绑定本地文件夹
-          </button>
-        ) : (
-          <div className="bound-path" title={props.vault.localPath}>
-            📁 {props.vault.localPath}
-            <button onClick={props.onUnbindFolder}>解绑</button>
-          </div>
-        )}
 
         <div className="file-list">
           {sidebarTab === 'search' ? (
@@ -394,7 +420,7 @@ export function MainView(props: Props) {
           {/* v0.3.4：PDF 列表 */}
           {props.pdfs.length > 0 && (
             <div className="dir-group">
-              <div className="dir-label pdf-label">📄 PDF</div>
+              <div className="dir-label pdf-label">PDF</div>
               {[...pdfTree.entries()].map(([, nodes]) =>
                 nodes.map((n) => (
                   <div
@@ -415,27 +441,6 @@ export function MainView(props: Props) {
           )}
         </div>
 
-        <div className="sidebar-foot">
-          <button onClick={props.onCreateNote}>＋ 新建笔记</button>
-          <button onClick={() => props.onCreateFolder('')} title="新建根文件夹">
-            ⊞ 新建文件夹
-          </button>
-          {props.onOpenTrash && (
-            <button onClick={props.onOpenTrash} title="回收站">
-              🗑 回收站{props.trashCount ? `（${props.trashCount}）` : ''}
-            </button>
-          )}
-          {props.hasAccount && props.onAddDevice && (
-            <button onClick={props.onAddDevice} disabled={props.addDeviceBusy} title="在新设备上免密码登录">
-              📱 添加设备
-            </button>
-          )}
-          {props.hasAccount ? (
-            <button onClick={props.onLogout}>退出登录</button>
-          ) : (
-            <button onClick={props.onOpenLogin}>登录同步</button>
-          )}
-        </div>
       </aside>
 
       <div className={`panel-resizer ${sideW.dragging ? 'dragging' : ''}`} {...sideW.handleProps} />
@@ -447,40 +452,32 @@ export function MainView(props: Props) {
             active={props.activeTab ?? props.currentPath}
             onSelect={props.onSelectTab}
             onClose={props.onCloseTab}
+            right={
+              props.onOpenSplit && !props.pdfView && props.currentPath ? (
+                <button
+                  className="icon-btn"
+                  title={props.splitPath ? '关闭分栏' : '左右分栏'}
+                  aria-label="左右分栏"
+                  onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
+                >
+                  <RibbonIcon name="sidebar" size={15} />
+                </button>
+              ) : null
+            }
           />
         )}
-        <div className="editor-head">
-          <span className="crumb">
-            {props.pdfView ? `📄 ${props.pdfView}` : (props.currentPath ?? '未选择笔记')}
-            {props.pdfView && (
+        {/* v0.10.0：删掉了编辑区上方那行文件名——标签栏已经说明是哪一篇，
+            再写一遍就是重复。PDF 预览时仍需要一行来放「关闭预览」。 */}
+        {props.pdfView && (
+          <div className="editor-head">
+            <span className="crumb">
+              {props.pdfView}
               <button className="link close-pdf" onClick={props.onClosePdf}>
                 关闭预览
               </button>
-            )}
-          </span>
-          {props.onOpenSplit && !props.pdfView && props.currentPath && (
-            <button
-              className="icon-btn split-toggle"
-              title={props.splitPath ? '关闭分栏' : '左右分栏（当前笔记的实时预览）'}
-              aria-label="左右分栏"
-              onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
-            >
-              ⫿
-            </button>
-          )}
-          {props.lastReport && (
-            <button
-              className={`report ${props.lastReport.errors.length > 0 ? 'has-error' : ''}`}
-              title="查看每篇笔记的同步状态"
-              onClick={props.onOpenSyncStatus}
-            >
-              ↑{props.lastReport.pushed} ↓{props.lastReport.pulled}
-              {props.lastReport.merged > 0 && ` · 合并${props.lastReport.merged}`}
-              {props.lastReport.conflicts.length > 0 && ` · 冲突${props.lastReport.conflicts.length}`}
-              {props.lastReport.errors.length > 0 && ` · ⚠ ${props.lastReport.errors[0]}`}
-            </button>
-          )}
-        </div>
+            </span>
+          </div>
+        )}
         {props.pdfView ? (
           <iframe className="pdf-frame" title={props.pdfView} src={props.pdfView} />
         ) : (
@@ -508,7 +505,7 @@ export function MainView(props: Props) {
                     {sameDoc ? '实时预览' : props.splitPath}
                   </span>
                   <button className="icon-btn" title="关闭右栏" onClick={props.onCloseSplit}>
-                    ✕
+                    <RibbonIcon name="close" size={14} />
                   </button>
                 </div>
                 <MarkdownEditor
@@ -528,10 +525,34 @@ export function MainView(props: Props) {
           </div>
         )}
         {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
+        {/* v0.10.0：同步从侧栏那个大绿按钮降级到这里。Obsidian 的同步状态就待在
+            右下角状态栏，安静、可点、不抢视线；侧栏留给文件树 */}
         <div className="status-bar">
-          <span>{props.currentPath ?? '未选择笔记'}</span>
+          {/* 左侧留空：文件名在标签栏已经有了，状态栏只放「状态」类信息 */}
+          <span className="st-path" />
           <span className="st-right">
-            {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
+            {(props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (
+              <button className="st-item st-conflict" onClick={props.onOpenConflicts}>
+                {props.conflictCount} 个冲突待处理
+              </button>
+            )}
+            <button
+              className={`st-item ${props.syncing ? 'busy' : ''}`}
+              onClick={props.syncDisabled ? props.onOpenLogin : (props.onSyncNow ?? props.onUpload)}
+              title={
+                props.syncDisabled
+                  ? '本地模式：笔记只存在这台设备上，点此登录后多端同步'
+                  : props.syncing
+                    ? '同步中…'
+                    : '已自动同步；点击立即同步一次'
+              }
+            >
+              <RibbonIcon name={props.syncDisabled ? 'file' : 'sync'} size={13} />
+              {props.syncDisabled ? '本地模式' : props.syncing ? '同步中' : '已同步'}
+            </button>
+            <span className="st-item st-count">
+              {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
+            </span>
           </span>
         </div>
       </main>

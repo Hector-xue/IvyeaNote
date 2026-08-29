@@ -142,7 +142,7 @@ describe('v0.4.0 T3：即时新建（Obsidian 式）', () => {
     const promptSpy = vi.spyOn(window, 'prompt');
     await renderMain();
 
-    fireEvent.click(screen.getByText('＋ 新建笔记'));
+    fireEvent.click(screen.getByTitle('新建笔记'));
 
     await waitFor(() => expect(memFiles.has('untitled.md')).toBe(true));
     expect(memFiles.get('untitled.md')).toContain('# untitled');
@@ -152,7 +152,7 @@ describe('v0.4.0 T3：即时新建（Obsidian 式）', () => {
   it('重名自动序号：再建一个变成 untitled 1', async () => {
     memFiles.set('untitled.md', '# untitled');
     await renderMain();
-    fireEvent.click(screen.getByText('＋ 新建笔记'));
+    fireEvent.click(screen.getByTitle('新建笔记'));
     await waitFor(() => expect(memFiles.has('untitled 1.md')).toBe(true));
   });
 });
@@ -176,7 +176,7 @@ describe('v0.4.0 T5：删除进回收站', () => {
     expect(memFiles.get(trashKey!)).toContain('# B');
 
     // 回收站面板：恢复
-    fireEvent.click(screen.getByText(/回收站/));
+    fireEvent.click(screen.getByLabelText('回收站'));
     fireEvent.click(await screen.findByText('恢复'));
     await waitFor(() => expect(memFiles.has('sub/b.md')).toBe(true));
   });
@@ -185,13 +185,17 @@ describe('v0.4.0 T5：删除进回收站', () => {
 describe('R2：无账号时同步按钮显式禁用并提示（不再静默 no-op）', () => {
   it('上传/拉取按钮禁用且带「登录后可用」提示', async () => {
     await renderMain();
-    // v0.6.1 H7a：按钮收敛为一个「⟳ 同步」
-    const gated = screen.getAllByTitle('登录后自动多端同步');
-    expect(gated.length).toBe(1);
-    for (const b of gated) expect((b as HTMLButtonElement).disabled).toBe(true);
-    // 本地模式提示条 + 登录入口
-    expect(screen.getAllByText('登录同步').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/本地模式/)).toBeTruthy();
+    /*
+     * v0.10.0：同步从侧栏那个大绿按钮降级到状态栏。未登录时它不再是一个
+     * 「禁用的同步按钮」，而是明确写着「本地模式」、点了直接去登录——
+     * 一个点不动的按钮解释不了自己为什么点不动。
+     */
+    const st = screen.getByTitle(/本地模式/);
+    expect(st.textContent).toContain('本地模式');
+    expect((st as HTMLButtonElement).disabled).toBe(false);
+    // 侧栏里不该再有同步按钮或那段说明散文
+    expect(document.querySelector('.sync-row')).toBeNull();
+    expect(document.querySelector('.login-hint')).toBeNull();
   });
 });
 
@@ -200,7 +204,7 @@ describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
     await renderMain();
 
     // 打开登录页（此前此操作直接崩白屏）
-    fireEvent.click(screen.getAllByText('登录同步')[0]);
+    fireEvent.click(screen.getByTitle(/本地模式/));
     expect(document.querySelector('.login-card')).toBeTruthy();
 
     // 返回主界面
