@@ -188,7 +188,12 @@ func TestDispatchToolsList(t *testing.T) {
 		t.Fatalf("tools/list 不该出错：%v", rerr)
 	}
 	tools := res.(map[string]any)["tools"].([]mcpTool)
-	want := map[string]bool{"notes_list": false, "notes_read": false, "notes_search": false, "notes_backlinks": false}
+	// 这张表是「工具集不能悄悄变」的闸门：加工具必须先改这里，
+	// 因为每多一个工具都是多给模型一份权力（notes_write 尤其）。
+	want := map[string]bool{
+		"notes_list": false, "notes_read": false, "notes_search": false,
+		"notes_backlinks": false, "notes_write": false,
+	}
 	for _, tl := range tools {
 		if _, ok := want[tl.Name]; !ok {
 			t.Fatalf("多了个没预期的工具：%s", tl.Name)
@@ -302,5 +307,84 @@ func TestArgHelpers(t *testing.T) {
 	}
 	if got := argInt(args, "missing"); got != 0 {
 		t.Fatalf("缺字段该给 0，得到 %d", got)
+	}
+}
+
+// ---------- 写入模式 ----------
+
+func TestMergeCreateRefusesToClobber(t *testing.T) {
+	// 默认模式绝不覆盖：一个跑飞的定时任务不该把用户的笔记洗掉
+	if _, err := mergeForMode("", "旧内容\n", true, "新内容"); err == nil {
+		t.Fatal("已存在时 create 必须报错")
+	}
+	if _, err := mergeForMode("create", "旧内容\n", true, "新内容"); err == nil {
+		t.Fatal("显式 create 同样必须报错")
+	}
+}
+
+func TestMergeCreateOnNewFile(t *testing.T) {
+	got, err := mergeForMode("", "", false, "新内容")
+	if err != nil || got != "新内容" {
+		t.Fatalf("不存在时 create 应直接写入，得到 %q %v", got, err)
+	}
+}
+
+func TestMergeOverwrite(t *testing.T) {
+	got, err := mergeForMode("overwrite", "旧内容\n", true, "新内容")
+	if err != nil || got != "新内容" {
+		t.Fatalf("overwrite 应整篇替换，得到 %q %v", got, err)
+	}
+}
+
+func TestMergeAppendAddsMissingNewline(t *testing.T) {
+	// 不补换行的话，两次追加会把上一段结尾和新内容黏成一行
+	got, err := mergeForMode("append", "第一段", true, "第二段")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "第一段\n第二段" {
+		t.Fatalf("追加应补上缺失的换行，得到 %q", got)
+	}
+}
+
+func TestMergeAppendKeepsExistingNewline(t *testing.T) {
+	got, _ := mergeForMode("append", "第一段\n", true, "第二段")
+	if got != "第一段\n第二段" {
+		t.Fatalf("已有换行不该再补一个，得到 %q", got)
+	}
+}
+
+func TestMergeAppendOnMissingFile(t *testing.T) {
+	got, err := mergeForMode("append", "", false, "内容")
+	if err != nil || got != "内容" {
+		t.Fatalf("追加到不存在的笔记应等同于创建，得到 %q %v", got, err)
+	}
+}
+
+func TestMergeUnknownMode(t *testing.T) {
+	if _, err := mergeForMode("delete", "", false, "x"); err == nil {
+		t.Fatal("未知 mode 必须报错，而不是按某个默认行为悄悄写下去")
+	}
+}
+
+func TestWriteToolIsDeclared(t *testing.T) {
+	s := &Server{}
+	res, _ := s.mcpDispatch(t.Context(), 1, rpcReq{Method: "tools/list", ID: json.RawMessage(`1`)})
+	for _, tl := range res.(map[string]any)["tools"].([]mcpTool) {
+		if tl.Name == "notes_write" {
+			return
+		}
+	}
+	t.Fatal("notes_write 没有出现在 tools/list 里")
+}
+
+func TestNewChangeIDIsUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		id := newChangeID()
+		if seen[id] {
+			t.Fatal("幂等键撞了——同一设备下重复的 client_change_id 会被当成重放而丢掉这次写入")
+		}
+		seen[id] = true
 	}
 }

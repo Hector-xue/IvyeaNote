@@ -16,6 +16,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +26,10 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ivyea/ivyea-note/server/internal/store"
+	ivsync "github.com/ivyea/ivyea-note/server/internal/sync"
 )
 
 // MCP 协议版本：与 mcp_client.py 的 initialize 请求保持一致
@@ -101,6 +106,22 @@ func mcpTools() []mcpTool {
 					"limit":    map[string]any{"type": "integer", "description": "最多返回几篇，默认 20"},
 				},
 				"required": []string{"query"},
+			},
+		},
+		{
+			Name: "notes_write",
+			Description: "把内容写进一篇笔记。写完会立刻广播给已连接的端，手机/桌面打开就能看到。\n" +
+				"mode：create（默认，已存在就报错，绝不覆盖）/ append（追加到末尾）/ overwrite（整篇替换）。\n" +
+				"把产出落到 Agent/ 目录下是推荐做法，例如 Agent/2026-08-29-周报.md。",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"vault_id": vaultProp,
+					"path":     strProp("库内相对路径，必须以 .md 结尾"),
+					"content":  strProp("Markdown 正文"),
+					"mode":     strProp("create（默认）/ append / overwrite"),
+				},
+				"required": []string{"path", "content"},
 			},
 		},
 		{
@@ -214,6 +235,13 @@ func argStr(args map[string]any, key string) string {
 		return strings.TrimSpace(v)
 	}
 	return ""
+}
+
+// argRaw 原样取字符串。**content 不能走 argStr**：那个会 trim，
+// 把用户正文首尾的空行/缩进吃掉——追加写时尤其明显。
+func argRaw(args map[string]any, key string) (string, bool) {
+	v, ok := args[key].(string)
+	return v, ok
 }
 
 func argInt(args map[string]any, key string) int64 {
@@ -347,6 +375,9 @@ func (s *Server) mcpCallTool(ctx context.Context, uid int64, name string, args m
 			}
 		}
 		return b.String(), nil
+
+	case "notes_write":
+		return s.notesWrite(ctx, uid, vaultID, args)
 
 	case "notes_backlinks":
 		path := argStr(args, "path")
@@ -524,3 +555,125 @@ func backlinks(docs []noteDoc, path string) (in []string, out []string) {
 
 // 让 store 包的类型在本文件里有名字可引用（避免 import 只用于签名时被判未使用）
 var _ = store.Head{}
+
+// ---------- 写入 ----------
+
+// maxNoteBytes 单篇上限。笔记不是文件柜，超过这个量级基本是程序跑飞了在灌日志。
+const maxNoteBytes = 2 << 20 // 2MB
+
+// mergeForMode 按写入模式算出最终正文。抽成纯函数是因为「追加要不要补换行」
+// 这类细节最容易漂：不补的话两次追加会把上一段的结尾和新内容黏成一行。
+func mergeForMode(mode, old string, exists bool, content string) (string, error) {
+	switch mode {
+	case "", "create":
+		if exists {
+			return "", fmt.Errorf("已存在同名笔记，不会覆盖。要接着写用 mode=append，要整篇替换用 mode=overwrite")
+		}
+		return content, nil
+	case "overwrite":
+		return content, nil
+	case "append":
+		if !exists || old == "" {
+			return content, nil
+		}
+		if !strings.HasSuffix(old, "\n") {
+			old += "\n"
+		}
+		return old + content, nil
+	}
+	return "", fmt.Errorf("mode 只能是 create / append / overwrite，收到 %q", mode)
+}
+
+func (s *Server) notesWrite(ctx context.Context, uid, vaultID int64, args map[string]any) (string, error) {
+	path := argStr(args, "path")
+	if path == "" {
+		return "", errors.New("缺少 path")
+	}
+	if err := ivsync.ValidatePath(path); err != nil {
+		return "", fmt.Errorf("路径不合法：%s", path)
+	}
+	if !isMarkdown(path) {
+		return "", fmt.Errorf("只能写 .md 笔记，收到：%s", path)
+	}
+	content, ok := argRaw(args, "content")
+	if !ok {
+		return "", errors.New("缺少 content")
+	}
+	if len(content) > maxNoteBytes {
+		return "", fmt.Errorf("正文超过 %d 字节上限", maxNoteBytes)
+	}
+
+	// 取当前版本与正文（append 要用旧正文；upsert 要用 base_version 做冲突判定）
+	var baseVersion int64
+	old, exists := "", false
+	heads, err := s.st.ListHeads(ctx, vaultID)
+	if err != nil {
+		return "", err
+	}
+	for _, h := range heads {
+		if h.Path == path {
+			exists, baseVersion = true, h.Version
+			if h.BlobHash != nil {
+				if b, err := s.st.GetBlob(ctx, *h.BlobHash, uid); err == nil {
+					old = string(b)
+				}
+			}
+			break
+		}
+	}
+
+	merged, err := mergeForMode(argStr(args, "mode"), old, exists, content)
+	if err != nil {
+		return "", err
+	}
+
+	body := []byte(merged)
+	sum := sha256.Sum256(body)
+	hash := hex.EncodeToString(sum[:])
+	if err := s.st.PutBlob(ctx, hash, uid, body); err != nil {
+		return "", fmt.Errorf("保存内容失败：%w", err)
+	}
+
+	// 走与客户端 push 完全相同的那条路：冲突判定、幂等、版本分配都由 ApplyPush 负责。
+	// 这里绝不另写一套写入语义——两套迟早对不上。
+	tx, err := s.st.BeginTx(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := ivsync.ApplyPush(ctx, tx, vaultID, uid, mcpDeviceID, ivsync.PushChange{
+		ClientChangeID: newChangeID(),
+		Path:           path,
+		Op:             "upsert",
+		BlobHash:       &hash,
+		BaseVersion:    baseVersion,
+	})
+	if err != nil {
+		return "", err
+	}
+	if res.Status != "accepted" {
+		return "", fmt.Errorf("写入未被接受（%s）：%s。可能有别的端刚改过这篇，重试一次", res.Status, res.Reason)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	// 广播「有新东西」，已连上的桌面/手机会立刻拉——这正是「agent 写完手机上就能看」
+	s.hub.BroadcastDirty(uid, vaultID, mcpDeviceID)
+
+	action := map[string]string{"": "创建", "create": "创建", "append": "追加到", "overwrite": "覆盖"}[argStr(args, "mode")]
+	return fmt.Sprintf("已%s %s（版本 %d，%d 字节）", action, path, res.Version, len(body)), nil
+}
+
+// mcpDeviceID 变更流里的来源标记。用固定值而不是随机值，
+// 这样在 pull 到的变更里一眼能看出「这条是 agent 写的」。
+const mcpDeviceID = "mcp"
+
+// newChangeID 幂等键。每次写都是新的一次意图，不做跨调用去重
+// ——同一个 agent 连着写两段本来就该产生两条变更。
+func newChangeID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("mcp-%d", time.Now().UnixNano())
+	}
+	return "mcp-" + hex.EncodeToString(buf)
+}

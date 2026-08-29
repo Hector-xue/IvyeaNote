@@ -183,6 +183,15 @@ ivyea note/
   - 门禁：`go build` / `go vet` / `go test` 全过（23 条）；前端未改动。
   - **未做（下一批）**：`notes_write`（agent 往笔记里写）与 agent 侧 `ivyea mcp add` 的接入配置。
 
+- [x] v0.8.9 **P3 第二批：`notes_write` —— Agent 往笔记里写**（方案 §6.3，2026-08-29）。⚠️ 同样只动服务端，app 版本仍是 v0.8.7。方案原话：「**「Note 是 Agent 的输出终端」比「Note 是 Agent 的记忆」快十倍见效**」——不需要 embedding、不需要语义检索、不需要新协议，就是往同步目录写个 md 文件。
+  - `notes_write(path, content, mode)`，**复用 `ivsync.ApplyPush`**，不另写一套写入语义——冲突判定、幂等去重、版本分配都还是客户端 push 走的那条路。两套写入迟早会对不上。
+  - `mode` 默认 **`create`：已存在就报错，绝不覆盖**。一个跑飞的定时任务不该洗掉用户的笔记。另有 `append`（补齐缺失的换行再接，否则两次追加会把上一段结尾和新内容黏成一行）与 `overwrite`。就算用了 overwrite 旧内容也还在——blob 内容寻址、变更流留着历史版本。
+  - 护栏：路径复用服务端既有的 `ValidatePath`（拒 `..` / 绝对路径 / 反斜杠 / 空段）、必须 `.md`、单篇 2MB 上限、未知 mode 直接报错而不是按某个默认行为悄悄写下去。
+  - 写完 `BroadcastDirty`，已连着 WS 的端立刻拉。**客户端一行没改**：它拉变更时只跳过自己设备的那些，来自 `device_id=mcp` 的走的是和别的设备完全一样的路（`sync.ts:171` 核对过）。
+  - 新增接入文档 `docs/Agent接入-MCP.md`：为什么挂服务端、五个工具、签发/撤销长期令牌、`ivyea mcp add` 的逐项答法与等价的 `mcp.json`，以及**关于 `trusted` 的提醒**（信任=免审批，会连 `notes_write` 一起免掉；不想让 agent 在无人看着时往笔记里写就别设）。
+  - 端到端实测（本地实例，不碰生产）：agent 写周报到 `Agent/2026-08-29-周报.md` → 再 create 被拒 → append 拼接正确 → **写完立刻能被 `notes_search` 搜到、成了「广告优化」的入链** → 以 `device_id=mcp` 出现在同步变更流里、按 blob 能取回正文。`../` 与 `.txt` 被拒。Go 测试 23 → **32 条**。
+  - **未做**：在生产 agent 上真正配这一条——那要用你的账号签发令牌、并改运行中的 `~/.ivyea/mcp.json`，等你点头。
+
 > **P2「高频体验」E1~E10 至此全部落地**（E4 的代码块高亮除外，见 v0.8.5 说明）。
 
 服务端本地运行：
