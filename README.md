@@ -173,6 +173,16 @@ ivyea note/
   - 真实产物验证：移动到「项目」后，**焦点在编辑器里按 Ctrl+Z 文件不动**；焦点在侧栏按 Ctrl+Z 文件回到库根并提示「已撤销移动」；栈空后再按不报错。0 console error。
   - 门禁：oxlint 0 error / tsc OK / vitest **345/345** / vite build OK。
 
+- [x] v0.8.8 **P3 第一批：服务端 MCP endpoint**（方案 §6.1，2026-08-29）。方案说融合走 MCP、零改 agent 代码——这一批把服务端那半边做完了。
+  - **为什么挂在同步服务端而不是做个读 vault 目录的本地进程**：服务器上根本没有 `.md` 目录，笔记是内容寻址的 blob + heads 版本指针；而 agent 就跑在这台机器上。挂在这里，agent 读到的与手机/桌面是同一份真相，将来写进去的也顺着既有同步链路收敛到所有端，不需要任何新协议。
+  - `POST /mcp`：JSON-RPC 2.0，暴露方案点名的四个只读工具 **`notes_list` / `notes_read` / `notes_search` / `notes_backlinks`**。协议按 `ivyea-agent/mcp_client.py` 的**实际期望**实现，不是照规范想当然——`notifications/initialized` 没有 id 所以不能回响应体（回 202）；`resources/list` 与 `prompts/list` 明确回空表而不是 `-32601`，否则 agent 启动时会记两次错误；工具级失败放进 `result.isError`，不是 JSON-RPC error（后者会让 agent 以为「连接坏了」）。
+  - **长期令牌**（`mcp_tokens` 表 + 三个管理接口）。不复用 access token：它 15 分钟就过期而 MCP 客户端没有刷新逻辑，让机器拿短票的结果是「今天配好能用、明天悄悄不能用」，比一开始就拒绝更难查。明文不落库只存 sha256、只在创建时回显一次、随时可撤销、列表里给前 8 位哈希便于辨认。
+  - `notes_search` **故意不复刻客户端那套 BM25 倒排索引**：服务端没有常驻索引，每次都要现读 blob；重写一遍只会得到两份各自漂移的实现。给模型用的检索，「哪几篇里有这些词、在第几行」已经够——它拿到路径会自己去 `notes_read`。
+  - **服务端第一批 Go 测试**（此前一个都没有，一致性全靠要 Docker 的 `conformance.sh`）：23 条，覆盖检索排序/稳定性、双链解析、JSON-RPC 分发形状、令牌哈希。
+  - **端到端实测**：本地起一个 SQLite 实例（不碰生产），造真实账号 / 库 / 三篇带 `[[双链]]` 的笔记，然后**用 agent 自己的 `MCPClient` 去连**——这是「零改 agent 即通」的唯一证据。四个工具全部正常。鉴权边界逐条验过：无令牌 401、错令牌 401、**拿 access token 冒充 401**、撤销后 401、通知回 202 且零字节、`last_used_at` 有记录；跨账号隔离用「有自己库的另一个账号去读别人的 vault_id=1」验的，返回「不存在或不属于当前账号」。
+  - 门禁：`go build` / `go vet` / `go test` 全过（23 条）；前端未改动。
+  - **未做（下一批）**：`notes_write`（agent 往笔记里写）与 agent 侧 `ivyea mcp add` 的接入配置。
+
 > **P2「高频体验」E1~E10 至此全部落地**（E4 的代码块高亮除外，见 v0.8.5 说明）。
 
 服务端本地运行：

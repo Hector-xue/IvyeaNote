@@ -100,11 +100,42 @@ type Store interface {
 	// UserBlobBytes: total blob bytes owned by user
 	UserBlobBytes(ctx context.Context, userID int64) (int64, error)
 
+	// ---------- MCP 长期令牌（P3 Agent 融合） ----------
+	// access token 只有 15 分钟，MCP 客户端没有刷新逻辑；机器访问需要一张
+	// 可撤销的长期票。令牌只存 sha256，明文只在创建时回显一次。
+	CreateMCPToken(ctx context.Context, hash string, userID int64, name string) error
+	// GetMCPTokenUser 按哈希查所属用户，并顺手记一次使用时间；不存在返回 ErrNoRows。
+	GetMCPTokenUser(ctx context.Context, hash string) (int64, error)
+	ListMCPTokens(ctx context.Context, userID int64) ([]MCPToken, error)
+	DeleteMCPToken(ctx context.Context, userID int64, id int64) error
+
+	// ---------- 笔记读取（MCP 工具用） ----------
+	// ListHeads 列出某库当前存活的全部路径（不含已删除）。
+	ListHeads(ctx context.Context, vaultID int64) ([]Head, error)
+
 	// ---------- 同步（heads + changes） ----------
 	// BeginTx 开启事务；返回的 Tx 传给 Sync 方法族。
 	BeginTx(ctx context.Context) (Tx, error)
 	// Pull 按游标增量拉取某库的变更流。
 	Pull(ctx context.Context, vaultID, cursor int64, limit int) ([]Change, int64, error)
+}
+
+// mcpPrefix 取哈希前 8 位做人眼可辨的标识。**不能存明文前缀**——
+// 令牌明文的任何一段都不该落库，否则「只存哈希」这件事就白做了。
+func mcpPrefix(hash string) string {
+	if len(hash) <= 8 {
+		return hash
+	}
+	return hash[:8]
+}
+
+// MCPToken 一张长期令牌的元信息。**明文不落库**，列表里只给前缀便于辨认。
+type MCPToken struct {
+	ID         int64
+	Name       string
+	Prefix     string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
 }
 
 // Tx 事务内操作（push 路径需要原子性）。

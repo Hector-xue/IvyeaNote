@@ -91,6 +91,15 @@ var pgDDL = []string{
 		UNIQUE (device_id, client_change_id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_changes_vault ON changes (vault_id, id)`,
+	`CREATE TABLE IF NOT EXISTS mcp_tokens (
+		id           BIGSERIAL PRIMARY KEY,
+		token_hash   TEXT NOT NULL UNIQUE,
+		user_id      BIGINT NOT NULL REFERENCES users(id),
+		name         TEXT NOT NULL DEFAULT '',
+		prefix       TEXT NOT NULL DEFAULT '',
+		created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+		last_used_at TIMESTAMPTZ
+	)`,
 	`CREATE TABLE IF NOT EXISTS refresh_tokens (
 		token      TEXT PRIMARY KEY,
 		user_id    BIGINT NOT NULL REFERENCES users(id),
@@ -262,6 +271,77 @@ func (s *PGStore) Pull(ctx context.Context, vaultID, cursor int64, limit int) ([
 		next = c.ID
 	}
 	return out, next, rows.Err()
+}
+
+// ---------- MCP 长期令牌 ----------
+
+func (s *PGStore) CreateMCPToken(ctx context.Context, hash string, userID int64, name string) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO mcp_tokens(token_hash, user_id, name, prefix) VALUES($1,$2,$3,$4)`,
+		hash, userID, name, mcpPrefix(hash))
+	return mapPGErr(err)
+}
+
+func (s *PGStore) GetMCPTokenUser(ctx context.Context, hash string) (int64, error) {
+	var uid int64
+	err := s.pool.QueryRow(ctx, `SELECT user_id FROM mcp_tokens WHERE token_hash=$1`, hash).Scan(&uid)
+	if err != nil {
+		return 0, mapPGErr(err)
+	}
+	// 记一次使用时间；失败不影响鉴权
+	_, _ = s.pool.Exec(ctx, `UPDATE mcp_tokens SET last_used_at=now() WHERE token_hash=$1`, hash)
+	return uid, nil
+}
+
+func (s *PGStore) ListMCPTokens(ctx context.Context, userID int64) ([]MCPToken, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, name, prefix, created_at, last_used_at FROM mcp_tokens WHERE user_id=$1 ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MCPToken{}
+	for rows.Next() {
+		var t MCPToken
+		var used *time.Time
+		if err := rows.Scan(&t.ID, &t.Name, &t.Prefix, &t.CreatedAt, &used); err != nil {
+			return nil, err
+		}
+		t.LastUsedAt = used
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *PGStore) DeleteMCPToken(ctx context.Context, userID, id int64) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM mcp_tokens WHERE id=$1 AND user_id=$2`, id, userID)
+	if err != nil {
+		return mapPGErr(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoRows
+	}
+	return nil
+}
+
+// ListHeads 存活路径（未删除且有 blob）。
+func (s *PGStore) ListHeads(ctx context.Context, vaultID int64) ([]Head, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT path, version, blob_hash FROM heads
+		 WHERE vault_id=$1 AND deleted=false AND blob_hash IS NOT NULL ORDER BY path`, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Head{}
+	for rows.Next() {
+		h := Head{VaultID: vaultID}
+		if err := rows.Scan(&h.Path, &h.Version, &h.BlobHash); err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // PGTx 事务实现。
