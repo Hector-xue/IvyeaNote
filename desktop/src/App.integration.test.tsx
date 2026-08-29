@@ -287,7 +287,8 @@ describe('右键上下文菜单（E3）', () => {
       expect(screen.getByRole('menu')).toBeTruthy();
     });
     const labels = [...screen.getAllByRole('menuitem')].map((b) => b.textContent);
-    expect(labels).toEqual(['打开', '重命名…', '复制路径', '删除']);
+    // v0.8.2 E9：新增「在右侧打开」——分栏里「两文档并排」的主要入口
+    expect(labels).toEqual(['打开', '在右侧打开', '重命名…', '复制路径', '删除']);
   });
 
   it('右键文件夹 → 出现文件夹动作集（不该有「删除笔记」）', async () => {

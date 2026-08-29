@@ -19,6 +19,7 @@ function makeActions(over: Partial<CommandActions> = {}): CommandActions {
     onImportObsidian: vi.fn(),
     onOpenDaily: vi.fn(),
     onOpenGraph: vi.fn(),
+    onToggleSplit: vi.fn(),
     onNewFromTemplate: vi.fn(),
     onToggleTheme: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -29,13 +30,21 @@ function makeActions(over: Partial<CommandActions> = {}): CommandActions {
   };
 }
 
-function setup(opts: { enabled?: boolean; actions?: CommandActions; theme?: 'light' | 'dark' } = {}) {
+function setup(
+  opts: {
+    enabled?: boolean;
+    actions?: CommandActions;
+    theme?: 'light' | 'dark';
+    splitOpen?: boolean;
+  } = {}
+) {
   const actions = opts.actions ?? makeActions();
   const r = renderHook(() =>
     useCommands({
       enabled: opts.enabled ?? true,
       theme: opts.theme ?? 'light',
       appVersion: '0.8.0',
+      splitOpen: opts.splitOpen,
       actions,
     })
   );
@@ -142,6 +151,7 @@ describe('命令表', () => {
     run('import-obsidian');
     run('daily');
     run('graph');
+    run('split');
     run('from-template');
     run('toggle-theme');
     run('settings');
@@ -153,6 +163,7 @@ describe('命令表', () => {
     expect(actions.onImportObsidian).toHaveBeenCalled();
     expect(actions.onOpenDaily).toHaveBeenCalled();
     expect(actions.onOpenGraph).toHaveBeenCalled();
+    expect(actions.onToggleSplit).toHaveBeenCalled();
     expect(actions.onNewFromTemplate).toHaveBeenCalled();
     expect(actions.onToggleTheme).toHaveBeenCalled();
     expect(actions.onOpenSettings).toHaveBeenCalled();
@@ -167,5 +178,16 @@ describe('命令表', () => {
     press(',');
     expect(actions.onOpenSettings).not.toHaveBeenCalled();
     expect(result.current.paletteMode).toBeNull();
+  });
+});
+
+describe('分栏命令（E9）', () => {
+  it('未分栏时文案是「开」，已分栏时变成「关」', () => {
+    const off = setup({ splitOpen: false });
+    expect(off.result.current.commands.find((c) => c.id === 'split')?.label).toBe(
+      '左右分栏（当前笔记的实时预览）'
+    );
+    const on = setup({ splitOpen: true });
+    expect(on.result.current.commands.find((c) => c.id === 'split')?.label).toBe('关闭左右分栏');
   });
 });

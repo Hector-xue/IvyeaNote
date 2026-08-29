@@ -42,6 +42,11 @@ interface Props {
   files: string[];
   /** 库内的空文件夹（只有 .keep 占位），不显式传就不会出现在树里 */
   emptyDirs?: string[];
+  /** v0.8.2 E9：右侧第二个窗格的路径（null = 没分栏） */
+  splitPath?: string | null;
+  splitDoc?: string | null;
+  onOpenSplit?(path?: string): void;
+  onCloseSplit?(): void;
   /** v0.3.4：PDF 文件列表 */
   pdfs: string[];
   currentPath: string | null;
@@ -171,6 +176,9 @@ export function MainView(props: Props) {
           ]
         : [
             { id: 'open', label: '打开', run: () => props.onSelect(node.path) },
+            ...(props.onOpenSplit
+              ? [{ id: 'split', label: '在右侧打开', run: () => props.onOpenSplit?.(node.path) }]
+              : []),
             { id: 'rename', label: '重命名…', run: () => props.onRequestRename?.(node.path) },
             { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
             { id: 'del', label: '删除', danger: true, run: () => props.onDeleteFile(node.path) },
@@ -178,6 +186,8 @@ export function MainView(props: Props) {
     setMenu({ x, y, items });
   };
   const pdfTree = buildTree(props.pdfs);
+  /** 分栏里两边是同一篇：右栏走只读实时预览（见下） */
+  const sameDoc = !!props.splitPath && props.splitPath === props.currentPath;
   /** v0.5.0 U4：字数统计 */
   const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
 
@@ -431,6 +441,16 @@ export function MainView(props: Props) {
               </button>
             )}
           </span>
+          {props.onOpenSplit && !props.pdfView && props.currentPath && (
+            <button
+              className="icon-btn split-toggle"
+              title={props.splitPath ? '关闭分栏' : '左右分栏（当前笔记的实时预览）'}
+              aria-label="左右分栏"
+              onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
+            >
+              ⫿
+            </button>
+          )}
           {props.lastReport && (
             <span className={`report ${props.lastReport.errors.length > 0 ? 'has-error' : ''}`}>
               ↑{props.lastReport.pushed} ↓{props.lastReport.pulled}
@@ -443,17 +463,44 @@ export function MainView(props: Props) {
         {props.pdfView ? (
           <iframe className="pdf-frame" title={props.pdfView} src={props.pdfView} />
         ) : (
-          <MarkdownEditor
-            doc={props.doc ?? ''}
-            onEdit={props.onEdit}
-            currentPath={props.currentPath}
-            theme={props.theme}
-            onInsertImage={props.onInsertImage}
-            resolveImage={props.resolveImage}
-            onOpenWiki={props.onOpenWiki}
-            wikiTitles={props.wikiTitles}
-            onPasteImage={props.onPasteImage}
-          />
+          <div className={`editor-split ${props.splitPath ? 'on' : ''}`}>
+            <div className="editor-col">
+              <MarkdownEditor
+                doc={props.doc ?? ''}
+                onEdit={props.onEdit}
+                currentPath={props.currentPath}
+                theme={props.theme}
+                onInsertImage={props.onInsertImage}
+                resolveImage={props.resolveImage}
+                onOpenWiki={props.onOpenWiki}
+                wikiTitles={props.wikiTitles}
+                onPasteImage={props.onPasteImage}
+              />
+            </div>
+            {props.splitPath && (
+              <div className="editor-col split">
+                <div className="split-head">
+                  <span className="split-title" title={props.splitPath}>
+                    {sameDoc ? '实时预览' : props.splitPath}
+                  </span>
+                  <button className="icon-btn" title="关闭右栏" onClick={props.onCloseSplit}>
+                    ✕
+                  </button>
+                </div>
+                <MarkdownEditor
+                  /* 同一篇文章开两个可编辑视图会各写各的、互相覆盖，所以同文档时右栏只读 */
+                  doc={(sameDoc ? props.doc : props.splitDoc) ?? ''}
+                  onEdit={props.onEdit}
+                  currentPath={props.splitPath}
+                  theme={props.theme}
+                  resolveImage={props.resolveImage}
+                  onOpenWiki={props.onOpenWiki}
+                  wikiTitles={props.wikiTitles}
+                  readOnlyPreview={sameDoc}
+                />
+              </div>
+            )}
+          </div>
         )}
         {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
         <div className="status-bar">

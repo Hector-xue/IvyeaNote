@@ -90,6 +90,12 @@ export default function App() {
   const currentPathRef = useRef<string | null>(null);
   currentPathRef.current = currentPath;
   const [doc, setDoc] = useState<string | null>(null);
+  /**
+   * v0.8.2 E9：编辑区左右分栏。第二个窗格自带路径与内容——
+   * `splitPath === currentPath` 就是「同文档双视图」，不同则是「两文档并排」。
+   */
+  const [splitPath, setSplitPath] = useState<string | null>(null);
+  const [splitDoc, setSplitDoc] = useState<string | null>(null);
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
   const [showLogin, setShowLogin] = useState(false);
@@ -132,7 +138,12 @@ export default function App() {
   /** 轻提示：替代 window.alert（安卓 WebView 里 alert 阻塞且割裂） */
   const { toast, toastEl } = useToast();
   /** 编辑防抖计时器：替代旧的「函数对象挂属性」写法（重构即坏、类型不安全） */
-  const saveTimer = useRef<number | undefined>(undefined);
+  /**
+   * 落盘防抖定时器，**按路径分桶**。
+   * 原来是单个 timer：分栏后左右两栏编辑不同文件时，后一次编辑会 clearTimeout 掉
+   * 前一个文件还没落盘的那次写入——直接丢内容。
+   */
+  const saveTimers = useRef<Map<string, number>>(new Map());
 
   // ---- 应用内更新（v0.7.8：整块搬进 hooks/useUpdater） ----
   /** 当前版本：构建时由 vite define 注入（取自 tauri.conf.json），兜底 0.0.0 */
@@ -409,7 +420,12 @@ export default function App() {
   }, [client, doSync]);
 
   // 卸载时清理编辑防抖计时器
-  useEffect(() => () => window.clearTimeout(saveTimer.current), []);
+  useEffect(
+    () => () => {
+      for (const t of saveTimers.current.values()) window.clearTimeout(t);
+    },
+    []
+  );
 
   /**
    * v0.7.5 1.3：文件系统监听。
@@ -480,6 +496,33 @@ export default function App() {
     [vault, io, toast, onClosePdf]
   );
 
+  /** E9：在右侧窗格打开一篇笔记（不传则复制当前这篇，即「同文档双视图」） */
+  const openSplit = useCallback(
+    async (path?: string) => {
+      if (!vault) return;
+      const target = path ?? currentPath;
+      if (!target) return;
+      try {
+        const text = await io.read(vault.localPath ?? '', target);
+        setSplitPath(target);
+        setSplitDoc(text);
+      } catch (e) {
+        toast(`右侧打开失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, currentPath, toast]
+  );
+  const closeSplit = useCallback(() => {
+    setSplitPath(null);
+    setSplitDoc(null);
+  }, []);
+  /** 右栏那篇被改名/移动了：跟着换路径，否则右栏会指向一个已不存在的文件 */
+  const remapSplit = useCallback((ops: readonly { from: string; to: string }[]) => {
+    if (ops.length === 0) return;
+    const map = new Map(ops.map((o) => [o.from, o.to]));
+    setSplitPath((cur) => (cur ? (map.get(cur) ?? cur) : cur));
+  }, []);
+
   /** 改名/移动后同步 recent —— 与 remapTabs 成对出现，漏一个就留下死路径 */
   const remapRecentPaths = useCallback((ops: { from: string; to: string }[]) => {
     setRecent((cur) => {
@@ -519,6 +562,7 @@ export default function App() {
         // 标签里存的还是旧路径，不改就会指向一个已经不存在的文件
         remapTabs([{ from: path, to: target }]);
         remapRecentPaths([{ from: path, to: target }]);
+        remapSplit([{ from: path, to: target }]);
         setDoc(text);
         await refreshFiles();
         toast(`已按标题重命名：${path.split('/').pop()} → ${target.split('/').pop()}`, 'ok');
@@ -527,16 +571,21 @@ export default function App() {
         // 改名失败不影响编辑主流程
       }
     },
-    [vault, io, refreshFiles, doSync, toast, remapTabs, remapRecentPaths]
+    [vault, io, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
   );
 
   const onEdit = useCallback(
     (path: string, text: string) => {
-      if (!vault || path !== currentPath) return;
-      setDoc(text);
+      if (!vault) return;
+      // 只接受当前正在编辑的两个窗格之一发来的改动；别的都是已经换掉的旧编辑器
+      const isMain = path === currentPath;
+      const isSplit = path === splitPath;
+      if (!isMain && !isSplit) return;
+      if (isMain) setDoc(text);
+      if (isSplit) setSplitDoc(text);
       // 防抖写盘；真正的推送发生在下一轮 syncVault 扫描（content !== base）
-      window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(async () => {
+      window.clearTimeout(saveTimers.current.get(path));
+      saveTimers.current.set(path, window.setTimeout(async () => {
         try {
           await io.write(vault.localPath ?? '', path, text);
           // v0.7.5：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
@@ -547,10 +596,12 @@ export default function App() {
           void maybeRenameToH1(path, text);
         } catch (e) {
           console.error('写盘失败', e);
+        } finally {
+          saveTimers.current.delete(path);
         }
-      }, 800);
+      }, 800));
     },
-    [vault, io, currentPath, doSync, maybeRenameToH1, noteIndex]
+    [vault, io, currentPath, splitPath, doSync, maybeRenameToH1, noteIndex]
   );
 
   /**
@@ -643,6 +694,7 @@ export default function App() {
         if (currentPath === path) setCurrentPath(final);
         remapTabs([{ from: path, to: final }]);
         remapRecentPaths([{ from: path, to: final }]);
+        remapSplit([{ from: path, to: final }]);
         await refreshFiles();
         void doSync();
         toast(`已重命名：${titleOfPath(path)} → ${titleOfPath(final)}`, 'ok');
@@ -650,7 +702,7 @@ export default function App() {
         toast(`重命名失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, refreshFiles, doSync, toast, remapTabs, remapRecentPaths]
+    [vault, io, currentPath, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
   );
 
   /**
@@ -683,6 +735,7 @@ export default function App() {
         setCurrentPath((cur) => remapPath(cur, ops));
         remapTabs(ops);
         remapRecentPaths(ops);
+        remapSplit(ops);
         await refreshFiles();
         void doSync();
         const label = destDir || '库根目录';
@@ -697,7 +750,7 @@ export default function App() {
         await refreshFiles();
       }
     },
-    [vault, io, allPaths, refreshFiles, doSync, toast, remapTabs, remapRecentPaths]
+    [vault, io, allPaths, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
   );
 
   /**
@@ -758,13 +811,15 @@ export default function App() {
           setCurrentPath(null);
           setDoc(null);
         }
+        // 右栏开的正是这篇：关掉，否则会停在一个已经进回收站的文件上
+        if (splitPath === path) closeSplit();
         await refreshFiles();
         void doSync();
       } catch (e) {
         toast(`删除失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, refreshFiles, doSync, confirm, toast]
+    [vault, io, currentPath, splitPath, closeSplit, refreshFiles, doSync, confirm, toast]
   );
 
   /**
@@ -974,6 +1029,7 @@ export default function App() {
       onImportObsidian: () => void onImportObsidian(),
       onOpenDaily: () => void openDailyNote(),
       onOpenGraph: () => setShowGraph(true),
+      onToggleSplit: () => (splitPath ? closeSplit() : void openSplit()),
       onNewFromTemplate: () => void newFromTemplate(),
       onToggleTheme: toggleTheme,
       onOpenSettings: () => setShowSettings(true),
@@ -988,6 +1044,9 @@ export default function App() {
       openDailyNote,
       newFromTemplate,
       toggleTheme,
+      splitPath,
+      closeSplit,
+      openSplit,
       checkUpdateNow,
       showPairCode,
       trash,
@@ -997,6 +1056,7 @@ export default function App() {
   );
   const { paletteMode, openPalette, closePalette, commands } = useCommands({
     enabled: !!vault,
+    splitOpen: !!splitPath,
     theme,
     appVersion,
     actions: commandActions,
@@ -1170,6 +1230,10 @@ export default function App() {
         vault={vault}
         files={files}
         emptyDirs={emptyDirs}
+        splitPath={splitPath}
+        splitDoc={splitDoc}
+        onOpenSplit={(p) => void openSplit(p)}
+        onCloseSplit={closeSplit}
         pdfs={pdfs}
         currentPath={currentPath}
         doc={doc}

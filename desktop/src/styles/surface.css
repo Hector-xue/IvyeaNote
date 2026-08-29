@@ -745,3 +745,41 @@ body:has(.panel-resizer.dragging) {
   user-select: none;
   cursor: col-resize;
 }
+
+/* ------------------------------------------------------------ 编辑区分栏
+   方案 §4.5 E9。两栏各占一半：`同文档双视图` 时右栏是只读实时预览，
+   `两文档并排` 时两边各自可编辑。分栏本身不做调宽——两个编辑区的相对宽度
+   远不如侧栏宽度那么需要个性化，先不给这个旋钮。 */
+.editor-split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.editor-split > .editor-col {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.editor-split > .editor-col.split {
+  border-left: 1px solid var(--border);
+}
+.split-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+.split-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.split-toggle {
+  margin-left: auto;
+}

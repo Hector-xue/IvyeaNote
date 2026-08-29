@@ -51,6 +51,12 @@ export interface MarkdownEditorProps {
   wikiTitles?: { path: string; title: string }[];
   /** v0.7.1 F7：粘贴/拖拽图片落盘，返回要插入的相对路径 */
   onPasteImage?: (file: File) => Promise<string | null>;
+  /**
+   * v0.8.2 E9：锁死为阅读模式（不给切换按钮）。
+   * 分栏里「同文档双视图」用它——同一个文件开两个可编辑视图会各写各的，
+   * 两份防抖落盘互相覆盖就是静默丢字。所以右栏只读、跟着左栏实时重渲染。
+   */
+  readOnlyPreview?: boolean;
 }
 
 function cmExtensions(
@@ -130,7 +136,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const [mode, setMode] = useState<'edit' | 'read'>('edit');
+  const [modeState, setMode] = useState<'edit' | 'read'>('edit');
+  const mode = props.readOnlyPreview ? 'read' : modeState;
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
   const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
@@ -418,6 +425,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         <span className="md-toolbar-spacer" />
         <button
           className={`md-tool md-mode ${mode === 'read' ? 'active' : ''}`}
+          hidden={props.readOnlyPreview}
           title={mode === 'edit' ? '切换到阅读模式' : '切换到编辑模式'}
           aria-label="切换编辑/阅读"
           onClick={() => setMode(mode === 'edit' ? 'read' : 'edit')}
@@ -432,7 +440,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
 
   return (
     <div className={`md-editor ${props.mobile ? 'md-editor-mobile' : ''}`}>
-      {!props.mobile && toolbar}
+      {/* 只读预览没有可编辑的编辑器，整条格式工具栏点了都不会有反应，直接不给 */}
+      {!props.mobile && !props.readOnlyPreview && toolbar}
       <div
         className="md-body"
         onPaste={(e) => {
@@ -495,6 +504,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           <span className="md-toolbar-spacer" />
           <button
             className={`md-tool md-mode ${mode === 'read' ? 'active' : ''}`}
+            hidden={props.readOnlyPreview}
             title={mode === 'edit' ? '切换到阅读模式' : '切换到编辑模式'}
             aria-label="切换编辑/阅读"
             onPointerDown={(e) => e.preventDefault()}

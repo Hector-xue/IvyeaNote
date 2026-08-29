@@ -19,6 +19,8 @@ export interface CommandActions {
   onImportObsidian(): void;
   onOpenDaily(): void;
   onOpenGraph(): void;
+  /** E9：开/关编辑区分栏 */
+  onToggleSplit(): void;
   onNewFromTemplate(): void;
   onToggleTheme(): void;
   onOpenSettings(): void;
@@ -30,6 +32,8 @@ export interface CommandActions {
 }
 
 export interface CommandsDeps {
+  /** 分栏是否已打开——只影响命令文案 */
+  splitOpen?: boolean;
   /** 没有笔记库时，三个面板都不该弹出来（但 Ctrl+, 的设置照常可用） */
   enabled: boolean;
   theme: 'light' | 'dark';
@@ -45,7 +49,7 @@ export interface Commands {
 }
 
 export function useCommands(deps: CommandsDeps): Commands {
-  const { enabled, theme, appVersion, actions } = deps;
+  const { enabled, theme, appVersion, actions, splitOpen } = deps;
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
 
   const openPalette = useCallback(
@@ -92,6 +96,11 @@ export function useCommands(deps: CommandsDeps): Commands {
         { id: 'import-obsidian', label: '从 Obsidian 导入', run: actions.onImportObsidian },
         { id: 'daily', label: '打开今日笔记', run: actions.onOpenDaily },
         { id: 'graph', label: '打开图谱视图', run: actions.onOpenGraph },
+        {
+          id: 'split',
+          label: splitOpen ? '关闭左右分栏' : '左右分栏（当前笔记的实时预览）',
+          run: actions.onToggleSplit,
+        },
         { id: 'from-template', label: '从模板新建笔记', run: actions.onNewFromTemplate },
         {
           id: 'toggle-theme',
@@ -108,7 +117,7 @@ export function useCommands(deps: CommandsDeps): Commands {
         // v0.7.2：应用内更新入口（手动检查）
         { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: actions.onCheckUpdate },
       ].filter((c): c is CommandItem => c !== null),
-    [actions, theme, appVersion]
+    [actions, theme, appVersion, splitOpen]
   );
 
   return { paletteMode, openPalette, closePalette, commands };
