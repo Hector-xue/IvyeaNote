@@ -145,8 +145,14 @@ describe('v0.4.0 T3：即时新建（Obsidian 式）', () => {
     fireEvent.click(screen.getByTitle('新建笔记'));
 
     await waitFor(() => expect(memFiles.has('untitled.md')).toBe(true));
-    expect(memFiles.get('untitled.md')).toContain('# untitled');
+    /*
+     * v0.10.1：**正文是空的**。标题由内联标题承担（文件名即标题，Obsidian 同款），
+     * 正文再写一行 `# untitled` 就是同一个标题出现两遍，而且光标落上去会露出 `#`。
+     */
+    expect(memFiles.get('untitled.md')).toBe('');
     expect(promptSpy).not.toHaveBeenCalled();
+    // 标题在内联标题里，且它就是文件名
+    expect(document.querySelector<HTMLTextAreaElement>('.inline-title')?.value).toBe('untitled');
   });
 
   it('重名自动序号：再建一个变成 untitled 1', async () => {

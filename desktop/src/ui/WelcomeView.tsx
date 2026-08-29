@@ -5,7 +5,7 @@
  */
 import { RibbonIcon, type IconName } from './Icons';
 import { useCallback, useState } from 'react';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 
 export interface WelcomeActions {
   onOpenFolder(): void;

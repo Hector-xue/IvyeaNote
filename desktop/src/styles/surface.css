@@ -1590,3 +1590,31 @@ button.st-item:hover {
 .rp-head {
   gap: 4px;
 }
+
+/* ---- 文件树的层级引导线（Obsidian 同款）----
+   缩进由嵌套的左内边距产生，那条竖线就是这一层的左边框。
+   靠 depth 算 paddingLeft 是做不出多条线的（一个元素只有一个 ::before）。 */
+.ft-children {
+  margin-left: 16px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+/* 悬停某个文件夹时，它那条引导线提亮——一眼看清「这些是它的孩子」 */
+.ft-node:hover > .ft-children {
+  border-left-color: color-mix(in srgb, var(--text) 22%, transparent);
+}
+.ft-dir,
+.ft-file {
+  padding-left: 6px;
+}
+/* hover 才出操作按钮：常显会让当前选中那行一直挂着一个 ✕ */
+.ft-actions {
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.ft-dir:hover .ft-actions,
+.ft-file:hover .ft-actions,
+.ft-dir:focus-within .ft-actions,
+.ft-file:focus-within .ft-actions {
+  opacity: 1;
+}

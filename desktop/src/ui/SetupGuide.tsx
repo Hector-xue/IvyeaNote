@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 
 interface Props {
   onBack: () => void;

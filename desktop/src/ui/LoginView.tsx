@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { probeServer, normalizeServerUrl, isInsecurePublic } from '../lib/serverConn';
 import { claimPairCode } from '../lib/pairing';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 
 interface Props {
   onLogin: (serverUrl: string, email: string, password: string) => Promise<void>;

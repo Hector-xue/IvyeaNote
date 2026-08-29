@@ -148,9 +148,15 @@ function cmExtensions(
  * 在**净化之后**的 HTML 上做，且只动 class 与去掉那段字面量文本，不注入任何标签。
  */
 export function decorateCallouts(html: string): string {
+  // `[!type] 标题` 之后到该行结束的部分是标题，剩下的是正文。
+  // marked 把两者放进同一个 <p>，中间只有一个换行——不拆开就黏成一句。
   return html.replace(
-    /<blockquote>\s*<p>\s*\[!([a-zA-Z]+)\]\s*/g,
-    (_m, type: string) => `<blockquote class="callout callout-${type.toLowerCase()}"><p>`
+    /<blockquote>\s*<p>\s*\[!([a-zA-Z]+)\]([^\n<]*)/g,
+    (_m, type: string, title: string) => {
+      const t = title.trim();
+      const head = t ? `<span class="callout-title">${t}</span>` : '';
+      return `<blockquote class="callout callout-${type.toLowerCase()}"><p>${head}`;
+    }
   );
 }
 

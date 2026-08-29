@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 import { MarkdownEditor } from './MarkdownEditor';
 import { FileTree, buildFileTree } from './FileTree';
 import { TabsBar } from './TabsBar';
 import { RibbonIcon } from './Icons';
+import { InlineTitle } from './InlineTitle';
 import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
 import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
@@ -72,6 +73,8 @@ interface Props {
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
   /** v0.7.9 E3：右键菜单里的「重命名」——由 App 弹输入框后再执行 */
   onRequestRename?(path: string): void;
+  /** 直接改名（内联标题用：拿到新名字就改，不弹框） */
+  onRenameFile?(path: string, nextName: string): void;
   /** v0.7.9 E3：右键菜单里的「复制路径」 */
   onCopyPath?(path: string): void;
   /** v0.6.1 H7a：立即同步一次（推+拉）；未传时退回 onUpload */
@@ -483,6 +486,13 @@ export function MainView(props: Props) {
         ) : (
           <div className={`editor-split ${props.splitPath ? 'on' : ''}`}>
             <div className="editor-col">
+              {/* 内联标题：文件名即标题，改它就是改文件名（Obsidian 同款） */}
+              {props.onRenameFile && (
+                <InlineTitle
+                  path={props.currentPath}
+                  onRename={(p, name) => props.onRenameFile?.(p, name)}
+                />
+              )}
               <MarkdownEditor
                 doc={props.doc ?? ''}
                 onEdit={props.onEdit}

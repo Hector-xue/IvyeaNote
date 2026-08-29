@@ -6,10 +6,11 @@
  * - 主区：CodeMirror 编辑器 + 选区气泡工具栏 + 大纲浮层 + 图片全屏预览 + 反链区块
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
 import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
+import { InlineTitle } from './InlineTitle';
 import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
 import { Drawer } from './mobile/Drawer';
@@ -387,6 +388,7 @@ export function MobileView(props: Props) {
           </div>
         ) : (
           <>
+            <InlineTitle path={props.currentPath} onRename={props.onRenameFile} />
             <MarkdownEditor
               mobile
               doc={props.doc ?? ''}

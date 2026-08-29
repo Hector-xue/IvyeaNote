@@ -45,10 +45,19 @@ describe('阅读态 callout（v0.8.5 E5）', () => {
     expect(html).not.toContain('callout');
   });
 
-  it('只改 class 和去掉标记，不注入新标签', () => {
-    const before = '<blockquote>\n<p>[!tip] 小贴士</p>\n</blockquote>';
+  it('标题独占一行：包成 span 并加重，正文留在后面', () => {
+    // v0.10.1：marked 把 `[!tip] 标题` 和正文塞进同一个 <p>，不拆开就黏成一句。
+    // 这里只包一层 span（唯一注入的标签），其余仍然只改 class、去标记。
+    const before = '<blockquote>\n<p>[!tip] 小贴士\n正文一行</p>\n</blockquote>';
     expect(decorateCallouts(before)).toBe(
-      '<blockquote class="callout callout-tip"><p>小贴士</p>\n</blockquote>'
+      '<blockquote class="callout callout-tip"><p><span class="callout-title">小贴士</span>\n正文一行</p>\n</blockquote>'
+    );
+  });
+
+  it('没有标题时不产生空的 span', () => {
+    const before = '<blockquote>\n<p>[!note]\n只有正文</p>\n</blockquote>';
+    expect(decorateCallouts(before)).toBe(
+      '<blockquote class="callout callout-note"><p>\n只有正文</p>\n</blockquote>'
     );
   });
 
