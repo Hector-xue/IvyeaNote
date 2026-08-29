@@ -482,6 +482,9 @@
 
 .settings-card {
   width: min(560px, calc(100vw - 32px));
+  /* 必须显式盖掉 .dlg-card 的 max-width:380px——同为类选择器，只写 width 压不住它，
+     结果是设计的 560px 被腰斩成 380px，字号/宽度/行高的「样张」小到失去参考意义 */
+  max-width: min(560px, calc(100vw - 32px));
   max-height: min(680px, calc(100vh - 64px));
   display: flex;
   flex-direction: column;

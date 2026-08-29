@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { orderByRecent, pushRecent } from './recent';
+import { orderByRecent, pushRecent, remapRecent } from './recent';
 
 describe('pushRecent', () => {
   it('新打开的置顶', () => {
@@ -30,5 +30,46 @@ describe('orderByRecent', () => {
   });
   it('空 recent 等于不排序', () => {
     expect(orderByRecent(docs, [], p).map(p)).toEqual(['a.md', 'b.md', 'c.md']);
+  });
+});
+
+describe('remapRecent（改名/移动后修路径）', () => {
+  it('把旧路径换成新路径，保持顺序', () => {
+    const list = ['b.md', 'a.md', 'c.md'];
+    expect(remapRecent(list, [{ from: 'a.md', to: '广告优化.md' }])).toEqual([
+      'b.md',
+      '广告优化.md',
+      'c.md',
+    ]);
+  });
+
+  it('标题跟随的真实场景：untitled.md 改名后不再留死路径', () => {
+    const afterOpen = pushRecent([], 'untitled.md');
+    const afterRename = remapRecent(afterOpen, [{ from: 'untitled.md', to: '广告优化.md' }]);
+    // 紧接着新建第二篇，同样先叫 untitled.md
+    const afterOpen2 = pushRecent(afterRename, 'untitled.md');
+    const afterRename2 = remapRecent(afterOpen2, [{ from: 'untitled.md', to: '关键词研究.md' }]);
+    expect(afterRename2).toEqual(['关键词研究.md', '广告优化.md']);
+  });
+
+  it('改名撞上历史里已有的同名条目时去重，保留靠前的位置', () => {
+    expect(remapRecent(['a.md', 'b.md'], [{ from: 'a.md', to: 'b.md' }])).toEqual(['b.md']);
+  });
+
+  it('批量移动整个文件夹：子路径一起带走', () => {
+    const list = ['日记/一.md', 'x.md', '日记/二.md'];
+    const ops = [
+      { from: '日记/一.md', to: '归档/日记/一.md' },
+      { from: '日记/二.md', to: '归档/日记/二.md' },
+    ];
+    expect(remapRecent(list, ops)).toEqual(['归档/日记/一.md', 'x.md', '归档/日记/二.md']);
+  });
+
+  it('空 ops 原样返回（不改引用之外的行为）', () => {
+    expect(remapRecent(['a.md'], [])).toEqual(['a.md']);
+  });
+
+  it('不在 recent 里的改名不产生新条目', () => {
+    expect(remapRecent(['a.md'], [{ from: 'z.md', to: 'y.md' }])).toEqual(['a.md']);
   });
 });

@@ -27,7 +27,7 @@ import {
   type Appearance,
 } from './lib/appearance';
 import { SettingsView } from './ui/SettingsView';
-import { loadRecent, pushRecent, saveRecent } from './lib/recent';
+import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import { buildTagIndex } from './lib/tags';
@@ -458,6 +458,15 @@ export default function App() {
     [vault, io, toast]
   );
 
+  /** 改名/移动后同步 recent —— 与 remapTabs 成对出现，漏一个就留下死路径 */
+  const remapRecentPaths = useCallback((ops: { from: string; to: string }[]) => {
+    setRecent((cur) => {
+      const next = remapRecent(cur, ops);
+      saveRecent(next);
+      return next;
+    });
+  }, []);
+
   /** 多标签页（v0.7.8：整块搬进 hooks/useTabs） */
   const onTabsEmpty = useCallback(() => {
     setCurrentPath(null);
@@ -487,6 +496,7 @@ export default function App() {
         setCurrentPath(target);
         // 标签里存的还是旧路径，不改就会指向一个已经不存在的文件
         remapTabs([{ from: path, to: target }]);
+        remapRecentPaths([{ from: path, to: target }]);
         setDoc(text);
         await refreshFiles();
         toast(`已按标题重命名：${path.split('/').pop()} → ${target.split('/').pop()}`, 'ok');
@@ -495,7 +505,7 @@ export default function App() {
         // 改名失败不影响编辑主流程
       }
     },
-    [vault, io, refreshFiles, doSync, toast, remapTabs]
+    [vault, io, refreshFiles, doSync, toast, remapTabs, remapRecentPaths]
   );
 
   const onEdit = useCallback(
@@ -610,6 +620,7 @@ export default function App() {
         await io.remove(vault.localPath ?? '', path);
         if (currentPath === path) setCurrentPath(final);
         remapTabs([{ from: path, to: final }]);
+        remapRecentPaths([{ from: path, to: final }]);
         await refreshFiles();
         void doSync();
         toast(`已重命名：${titleOfPath(path)} → ${titleOfPath(final)}`, 'ok');
@@ -617,7 +628,7 @@ export default function App() {
         toast(`重命名失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, refreshFiles, doSync, toast, remapTabs]
+    [vault, io, currentPath, refreshFiles, doSync, toast, remapTabs, remapRecentPaths]
   );
 
   /**
@@ -649,6 +660,7 @@ export default function App() {
         // 正在打开的文件被移走了：标签页与编辑区必须跟着换路径
         setCurrentPath((cur) => remapPath(cur, ops));
         remapTabs(ops);
+        remapRecentPaths(ops);
         await refreshFiles();
         void doSync();
         const label = destDir || '库根目录';
@@ -663,7 +675,7 @@ export default function App() {
         await refreshFiles();
       }
     },
-    [vault, io, allPaths, refreshFiles, doSync, toast]
+    [vault, io, allPaths, refreshFiles, doSync, toast, remapTabs, remapRecentPaths]
   );
 
   /**

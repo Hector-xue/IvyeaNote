@@ -535,20 +535,29 @@ button {
   text-align: center;
 }
 
+/* 两列网格而不是单行 flex：侧栏默认 264px，四五个按钮平分成一行只剩 53px，
+   「新建笔记」会被折成「新建/笔记」两行。网格保证任何按钮数下都不折行。 */
 .sidebar-foot {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
   border-top: 1px solid var(--border);
   padding-top: 10px;
 }
+/* 奇数个时最后一个独占整行，不留半行空档 */
+.sidebar-foot button:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
 .sidebar-foot button {
-  flex: 1;
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 7px 0;
+  padding: 7px 4px;
   border-radius: 8px;
   font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sidebar-foot button:hover {
   background: var(--panel-2);
