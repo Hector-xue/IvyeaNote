@@ -110,6 +110,19 @@ export function mergeLocalIntoCloud(local: VaultMeta, cloud: VaultMeta): VaultMe
   };
 }
 
+/**
+ * 新建一个 vault 的本地元信息。
+ *
+ * **`localPath` 必须有默认值**：同步引擎拿 `vault.localPath ?? ''` 判空，
+ * 空串直接报「该 vault 未绑定本地文件夹」并 return——也就是说，只要云端库
+ * 的 meta 少了这个字段，**登录之后同步就是死的，而且只在同步报告的角落里
+ * 留一行错误，不会有任何弹窗**。此前登录建出来的云端库正是这样（本地库有
+ * `opfs://local`，云端库什么都没有）。
+ *
+ * 默认指向 OPFS 里属于这个库的那块（`opfsVaultRoot` 按 `vault-<id>` 取目录，
+ * 登录时的 `migrateFiles` 也正是往那儿搬的）。桌面端用户之后可以「绑定文件夹」
+ * 覆盖成磁盘真实路径，那条路不受影响。
+ */
 export function newVaultMeta(id: number, name: string): VaultMeta {
-  return { id, name, cursor: 0, versions: {}, bases: {} };
+  return { id, name, cursor: 0, versions: {}, bases: {}, localPath: `opfs://${id}` };
 }

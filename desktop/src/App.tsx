@@ -329,12 +329,9 @@ export default function App() {
           // 云端还是空的：把本地库直接升级为云端第一个库（笔记复制过去）
           try {
             const created = await c.createVault(LOCAL_VAULT_NAME);
+            // 走 newVaultMeta 而不是手拼字面量：漏掉 localPath 会让同步静默失效
             merged[String(created.id)] = {
-              id: created.id,
-              name: LOCAL_VAULT_NAME,
-              cursor: 0,
-              versions: {},
-              bases: {},
+              ...newVaultMeta(created.id, LOCAL_VAULT_NAME),
               tombstones: {},
             };
             await migrateFiles(srcIo, srcPath, opfsIO(() => merged[String(created.id)]!), '');

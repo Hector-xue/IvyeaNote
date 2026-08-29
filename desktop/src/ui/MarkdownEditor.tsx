@@ -134,6 +134,24 @@ export function decorateCallouts(html: string): string {
   );
 }
 
+/**
+ * 外部改动要不要灌进编辑器。
+ *
+ * 三种情况必须分开：
+ * - `incoming === lastEmitted`：这是**我们自己**那次编辑绕了一圈回来的回声。
+ *   绝不能应用——快速输入时 props 会滞后一帧，用它覆盖当前内容等于把刚敲的字吃掉。
+ * - `incoming === current`：已经一致，动它只会白白挪光标。
+ * - 其余：真的外部改动（同步拉取 / 撤销移动 / 模板写入），必须应用，
+ *   否则屏幕停在旧内容，用户接着打字就会把远端改动覆盖掉。
+ */
+export function shouldApplyExternalDoc(
+  incoming: string,
+  current: string,
+  lastEmitted: string | null
+): boolean {
+  return incoming !== lastEmitted && incoming !== current;
+}
+
 export function renderMarkdown(md: string): string {
   const raw = marked.parse(md, { async: false }) as string;
   return decorateCallouts(DOMPurify.sanitize(raw));
@@ -173,6 +191,13 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
    * 文件名」开关就是这么失灵的：设置里关掉了，编辑器仍在用开着的那份闭包改名。
    * （EditorState 只在 currentPath / theme 变化时重建，平时不重建。）
    */
+  /**
+   * 最后一次由**本编辑器自己**发出去的内容。
+   * 外部 doc 变化要不要回灌进 CodeMirror，全靠它区分：
+   * 等于它 = 我们自己那次编辑绕了一圈回来，不能动（否则快速输入时会用滞后
+   * 一帧的 props.doc 把刚敲的字吃掉）；不等于 = 真的外部改动，必须换掉。
+   */
+  const lastEmitted = useRef<string | null>(null);
   const onEditRef = useRef(props.onEdit);
   const pathRef = useRef(props.currentPath);
   useEffect(() => {
@@ -236,6 +261,31 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [props.readOnlyPreview]);
 
+  /**
+   * v0.9.1：外部改动回灌。
+   *
+   * CodeMirror 的内容只在 `currentPath` / 主题变化时整体重建，`doc` 变了它不认。
+   * 于是「另一台设备改了你正开着的这篇」时：同步确实拉下来了、磁盘上也是新的，
+   * **但屏幕上还是旧的**；你接着打字，旧内容会被当成最新版写回去，
+   * 直接把远端的改动覆盖掉——是丢数据，不只是显示不同步。
+   *
+   * 只回灌**不是自己发出去**的那些（见 lastEmitted），并尽量保住光标位置。
+   */
+  useEffect(() => {
+    const v = viewRef.current;
+    // state 取不到就当没这回事：编辑器坏掉不该连累整页渲染（jsdom 里的桩也走这条）
+    if (!v?.state?.doc || mode !== 'edit') return;
+    const incoming = props.doc ?? '';
+    const cur = v.state.doc.toString();
+    if (!shouldApplyExternalDoc(incoming, cur, lastEmitted.current)) return;
+    const anchor = Math.min(v.state.selection.main.head, incoming.length);
+    v.dispatch({
+      changes: { from: 0, to: cur.length, insert: incoming },
+      selection: { anchor },
+    });
+    lastEmitted.current = incoming;
+  }, [props.doc, mode]);
+
   // v0.8.4 E7：跳到指定行（只有显示着那个文件的实例才响应）
   useEffect(() => {
     const j = props.jumpTo;
@@ -284,7 +334,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       EditorState.create({
         doc: props.doc ?? '',
         extensions: cmExtensions(
-          (text: string) => onEditRef.current(pathRef.current ?? '', text),
+          (text: string) => {
+            lastEmitted.current = text;
+            onEditRef.current(pathRef.current ?? '', text);
+          },
           props.theme === 'dark',
           () => props.wikiTitles ?? [],
           props.livePreviewOn ?? true
