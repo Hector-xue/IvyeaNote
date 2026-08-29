@@ -43,7 +43,7 @@ interface Props {
   onCreateNote(): void;
   onNewFolderNote(folder: string): void;
   onDeleteFile(path: string): void;
-  /** v0.8.0 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
+  /** v0.7.5 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
   /** v0.6.1 H7a：立即同步一次（推+拉）；未传时退回 onUpload */
   onSyncNow?(): void;

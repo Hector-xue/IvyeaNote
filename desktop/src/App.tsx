@@ -77,7 +77,7 @@ export default function App() {
   /** v0.3.4：PDF 列表与元数据（排序） */
   const [pdfs, setPdfs] = useState<string[]>([]);
   const metasRef = useRef<Map<string, FileMeta>>(new Map());
-  /** v0.8.0：可索引文件的指纹快照。由 refreshFiles 统一更新，驱动全库正文索引。 */
+  /** v0.7.5：可索引文件的指纹快照。由 refreshFiles 统一更新，驱动全库正文索引。 */
   const [mdStamps, setMdStamps] = useState<FileStamp[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [currentPath, setCurrentPath] = useState<string | null>(null);
@@ -258,7 +258,7 @@ export default function App() {
       const all = metas.map((m) => m.path).filter((p) => !p.startsWith('.trash/'));
       setFiles(applySort(all.filter((p) => /\.md$/i.test(p))));
       setPdfs(applySort(all.filter((p) => /\.pdf$/i.test(p))));
-      // v0.8.0 P0：索引挂在这个咽喉上——新建/删除/重命名/移动/导入/回收站/同步拉取
+      // v0.7.5 P0：索引挂在这个咽喉上——新建/删除/重命名/移动/导入/回收站/同步拉取
       // 每条路径最后都会走到 refreshFiles，索引因此自动跟上，不会再出现「线没接上」。
       setMdStamps(
         metas
@@ -271,7 +271,7 @@ export default function App() {
   }, [vault, io, applySort]);
 
   /**
-   * v0.8.0 P0：全库正文索引。
+   * v0.7.5 P0：全库正文索引。
    *
    * 旧实现是 `searchDocs` state + `openPalettePreload`：只在打开命令面板时建**一次**，
    * 且开头 `if (searchDocs.length > 0) return` 保证此后永不更新。后果——
@@ -550,7 +550,7 @@ export default function App() {
       saveTimer.current = window.setTimeout(async () => {
         try {
           await io.write(vault.localPath ?? '', path, text);
-          // v0.8.0：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
+          // v0.7.5：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
           // 不触发 refreshFiles，光靠咽喉对账的话离线写作时反链/搜索会滞后一拍。
           noteIndex.touch(path, text);
           void doSync();
@@ -711,7 +711,7 @@ export default function App() {
   );
 
   /**
-   * v0.8.0 E1：侧栏拖拽移动文件 / 文件夹。
+   * v0.7.5 E1：侧栏拖拽移动文件 / 文件夹。
    *
    * 路径计算全部放在 `lib/movePath` 的纯函数里——移动是破坏性操作，算错落点
    * 就是把用户的笔记搬丢，这类逻辑必须可单测。这里只负责按结果做 IO。

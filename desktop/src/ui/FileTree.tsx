@@ -4,7 +4,7 @@
  * - 文件名隐藏 .md 后缀
  * - hover 浮现操作按钮
  * - 文件夹折叠（持久化到 localStorage）
- * - v0.8.0 E1：**拖拽移动**——拖文件/文件夹到目标文件夹即移动，拖到空白处移到库根；
+ * - v0.7.5 E1：**拖拽移动**——拖文件/文件夹到目标文件夹即移动，拖到空白处移到库根；
  *   悬停折叠文件夹 600ms 自动展开（Obsidian 的 spring-loaded 行为）
  */
 import { useMemo, useRef, useState } from 'react';
@@ -65,7 +65,7 @@ interface Props {
   onNewNoteIn(folder: string): void;
   onNewFolderIn(folder: string): void;
   onDeleteFile(path: string): void;
-  /** v0.8.0 E1：把 src 移动到 destDir（'' = 库根）。未传则整棵树不可拖。 */
+  /** v0.7.5 E1：把 src 移动到 destDir（'' = 库根）。未传则整棵树不可拖。 */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
 }
 
