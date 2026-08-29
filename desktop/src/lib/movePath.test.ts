@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeDir, planMove, remapPath } from './movePath';
+import { normalizeDir, planMove, remapPath, invertMoveOps } from './movePath';
 
 const FILES = ['a.md', 'AI/agent.md', 'AI/llm.md', 'AI/子目录/x.md', '日记/2026-08-29.md'];
 
@@ -124,5 +124,39 @@ describe('回收站路径', () => {
 
   it('根目录文件反解后不带前导斜杠', () => {
     expect(originalPathOf(trashPathFor('a.md', at))).toBe('a.md');
+  });
+});
+
+describe('invertMoveOps（撤销移动）', () => {
+  it('首尾对调', () => {
+    expect(invertMoveOps([{ from: 'a.md', to: '归档/a.md' }])).toEqual([
+      { from: '归档/a.md', to: 'a.md' },
+    ]);
+  });
+
+  it('顺序也倒过来——批次里可能有先后依赖，撤销必须后进先出', () => {
+    const ops = [
+      { from: '一.md', to: '归档/一.md' },
+      { from: '二.md', to: '归档/二.md' },
+    ];
+    expect(invertMoveOps(ops).map((o) => o.from)).toEqual(['归档/二.md', '归档/一.md']);
+  });
+
+  it('反转两次回到原样', () => {
+    const ops = [
+      { from: '日记/一.md', to: '归档/日记/一.md' },
+      { from: '日记/二.md', to: '归档/日记/二.md' },
+    ];
+    expect(invertMoveOps(invertMoveOps(ops))).toEqual(ops);
+  });
+
+  it('不改原数组', () => {
+    const ops = [{ from: 'a.md', to: 'b/a.md' }];
+    invertMoveOps(ops);
+    expect(ops).toEqual([{ from: 'a.md', to: 'b/a.md' }]);
+  });
+
+  it('空批次返回空', () => {
+    expect(invertMoveOps([])).toEqual([]);
   });
 });

@@ -35,7 +35,7 @@ import {
 import { loadPrefs, savePrefs, type Prefs } from './lib/prefs';
 import { SettingsView } from './ui/SettingsView';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
-import { planMove, remapPath } from './lib/movePath';
+import { invertMoveOps, planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import {
   loadState,
@@ -532,7 +532,7 @@ export default function App() {
   }, []);
 
   /** 改名/移动后同步 recent —— 与 remapTabs 成对出现，漏一个就留下死路径 */
-  const remapRecentPaths = useCallback((ops: { from: string; to: string }[]) => {
+  const remapRecentPaths = useCallback((ops: readonly { from: string; to: string }[]) => {
     setRecent((cur) => {
       const next = remapRecent(cur, ops);
       saveRecent(next);
@@ -725,32 +725,52 @@ export default function App() {
    * 同步语义：表达为「新路径 upsert + 旧路径 delete」，与 v0.4.0 标题跟随改名一致，
    * 多端自然收敛。
    */
+  /**
+   * 真正搬文件的那一步。移动与「撤销移动」共用它——撤销就是把 ops 反过来再走一遍，
+   * 两条路必须共用同一份实现，否则撤销迟早和移动对不上。
+   *
+   * 用二进制读写而不是文本：库里除了 .md 还有 Attachments/ 下的图片和 PDF。
+   */
+  const applyMoveOps = useCallback(
+    async (ops: readonly { from: string; to: string }[]) => {
+      if (!vault) return;
+      const root = vault.localPath ?? '';
+      for (const op of ops) {
+        const data = await io.readBinary(root, op.from);
+        await io.writeBinary(root, op.to, data);
+        await io.remove(root, op.from);
+      }
+      // 正在打开的文件被移走了：编辑区、标签、最近打开、右栏都得跟着换路径
+      setCurrentPath((cur) => remapPath(cur, ops));
+      remapTabs(ops);
+      remapRecentPaths(ops);
+      remapSplit(ops);
+      await refreshFiles();
+      void doSync();
+    },
+    [vault, io, refreshFiles, doSync, remapTabs, remapRecentPaths, remapSplit]
+  );
+
+  /**
+   * v0.8.7 E1：移动的撤销栈。
+   * 方案点名要 Ctrl+Z——移动是破坏性操作，搬错地方却退不回来是很吓人的。
+   * 只存路径对，不存内容，所以栈本身几乎不占东西。
+   */
+  const [moveUndo, setMoveUndo] = useState<{ from: string; to: string }[][]>([]);
+
   const onMovePath = useCallback(
     async (src: string, destDir: string, isDir: boolean) => {
       if (!vault) return;
-      const root = vault.localPath ?? '';
       // 重名消解要看**全部**已知路径（.md / .pdf / .keep / 附件），只看 files 会漏判
-      const all = allPaths();
-      const ops = planMove(src, destDir, all, isDir);
+      const ops = planMove(src, destDir, allPaths(), isDir);
       if (!ops) return;
       try {
-        for (const op of ops) {
-          const data = await io.readBinary(root, op.from);
-          await io.writeBinary(root, op.to, data);
-          await io.remove(root, op.from);
-        }
-        // 正在打开的文件被移走了：标签页与编辑区必须跟着换路径
-        setCurrentPath((cur) => remapPath(cur, ops));
-        remapTabs(ops);
-        remapRecentPaths(ops);
-        remapSplit(ops);
-        await refreshFiles();
-        void doSync();
+        await applyMoveOps(ops);
+        setMoveUndo((st) => [...st.slice(-9), ops]); // 最多留 10 步
         const label = destDir || '库根目录';
         toast(
-          ops.length === 1
-            ? `已移动到「${label}」`
-            : `已移动 ${ops.length} 个文件到「${label}」`,
+          (ops.length === 1 ? `已移动到「${label}」` : `已移动 ${ops.length} 个文件到「${label}」`) +
+            '，Ctrl+Z 可撤销',
           'ok'
         );
       } catch (e) {
@@ -758,8 +778,39 @@ export default function App() {
         await refreshFiles();
       }
     },
-    [vault, io, allPaths, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
+    [vault, allPaths, applyMoveOps, refreshFiles, toast]
   );
+
+  /** 撤销上一次移动：把 ops 首尾对调再走一遍 */
+  const undoLastMove = useCallback(async () => {
+    const last = moveUndo[moveUndo.length - 1];
+    if (!last) return;
+    setMoveUndo((st) => st.slice(0, -1));
+    try {
+      await applyMoveOps(invertMoveOps(last));
+      toast(last.length === 1 ? '已撤销移动' : `已撤销移动（${last.length} 个文件）`, 'ok');
+    } catch (e) {
+      toast(`撤销失败：${errText(e)}`, 'error');
+      await refreshFiles();
+    }
+  }, [moveUndo, applyMoveOps, refreshFiles, toast]);
+
+  /**
+   * Ctrl+Z 撤销移动。**只在焦点不在编辑器里时接管**——编辑器里的 Ctrl+Z 是
+   * CodeMirror 的文本撤销，抢过来会让人写字时突然把文件搬回去，那是灾难。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
+      const el = document.activeElement;
+      if (el && el.closest('.md-editor, input, textarea')) return;
+      if (moveUndo.length === 0) return;
+      e.preventDefault();
+      void undoLastMove();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [moveUndo.length, undoLastMove]);
 
   /**
    * v0.7.9 E3：右键菜单里的「重命名」。

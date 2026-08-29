@@ -104,3 +104,15 @@ export function remapPath(path: string | null, ops: readonly MoveOp[]): string |
   const hit = ops.find((o) => o.from === path);
   return hit ? hit.to : path;
 }
+
+/**
+ * 把一批移动反过来（v0.8.7 E1 撤销用）。
+ *
+ * 顺序也要倒过来：批次里可能存在「先搬 A 再搬 B」这种先后依赖，
+ * 撤销时必须后进先出，否则中间态会撞名。
+ */
+export function invertMoveOps(
+  ops: readonly { from: string; to: string }[]
+): { from: string; to: string }[] {
+  return [...ops].reverse().map((o) => ({ from: o.to, to: o.from }));
+}
