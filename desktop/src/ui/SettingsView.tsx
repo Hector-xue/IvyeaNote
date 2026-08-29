@@ -30,6 +30,8 @@ interface Props {
     syncing: boolean;
     onSyncNow(): void;
   };
+  /** v0.9.0 P3：Agent 接入区块（令牌管理），由 App 注入以免这里去碰 SyncClient */
+  agentSection?: React.ReactNode;
 }
 
 /** 开关行：一句标题 + 一句「关掉会怎样」。说不清后果的开关没人敢动 */
@@ -277,6 +279,13 @@ export function SettingsView(props: Props) {
               </p>
             )}
           </section>
+
+          {props.agentSection && (
+            <section className="set-section">
+              <h3 className="set-h">Agent 接入</h3>
+              {props.agentSection}
+            </section>
+          )}
 
           <section className="set-section">
             <h3 className="set-h">快捷键</h3>

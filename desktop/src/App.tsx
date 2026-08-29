@@ -34,6 +34,7 @@ import {
 } from './lib/appearance';
 import { loadPrefs, savePrefs, type Prefs } from './lib/prefs';
 import { SettingsView } from './ui/SettingsView';
+import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { invertMoveOps, planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
@@ -1547,6 +1548,14 @@ export default function App() {
             syncing,
             onSyncNow: () => void doSync(),
           }}
+          agentSection={
+            <AgentSection
+              client={client}
+              serverUrl={state.account?.serverUrl ?? null}
+              toast={toast}
+              errText={errText}
+            />
+          }
         />
       )}
       {trash.open && (

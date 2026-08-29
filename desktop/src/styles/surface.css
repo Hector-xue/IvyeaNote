@@ -980,3 +980,79 @@ body:has(.panel-resizer.dragging) {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ------------------------------------------------------------ Agent 接入（P3）
+   令牌明文只出现一次，所以刚签发的那块必须是这里最显眼的东西——
+   用强调色边框把它从常规设置行里拎出来。 */
+.token-fresh {
+  margin: 8px 0 4px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.token-fresh-head {
+  font-size: 13px;
+}
+.token-value {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  /* 令牌很长又不能截断——用户要能整串选中 */
+  word-break: break-all;
+  user-select: all;
+}
+.token-fresh-actions {
+  display: flex;
+  gap: 8px;
+}
+.token-new {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.set-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.token-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.token-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.token-name {
+  font-weight: 500;
+}
+.token-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn.danger {
+  color: #d95a4a;
+}
