@@ -28,11 +28,18 @@ export interface SearchDoc {
   content: string;
 }
 
+/** 命中行预览：带行号，界面点它可以直接跳到那一行（E7） */
+export interface PreviewLine {
+  /** 1 起的行号 */
+  line: number;
+  text: string;
+}
+
 export interface SearchHit {
   path: string;
   score: number;
   /** 命中行预览（最多 2 行） */
-  preview: string[];
+  preview: PreviewLine[];
 }
 
 export interface SearchQuery {
@@ -231,12 +238,14 @@ function intersect(a: Set<number>, b: Set<number>): Set<number> {
 }
 
 /** 命中行预览（最多 2 行）。按原始子串找，CJK 二元组本身就是正文的子串。 */
-function previewLines(content: string, terms: string[], phrase?: string): string[] {
-  const out: string[] = [];
-  for (const line of content.split('\n')) {
-    const ll = line.toLowerCase();
+function previewLines(content: string, terms: string[], phrase?: string): PreviewLine[] {
+  const out: PreviewLine[] = [];
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const ll = lines[i].toLowerCase();
     if (terms.some((t) => t && ll.includes(t)) || (phrase && ll.includes(phrase))) {
-      out.push(line.trim().slice(0, 80));
+      // 行号 1 起，与编辑器一致
+      out.push({ line: i + 1, text: lines[i].trim().slice(0, 80) });
       if (out.length >= 2) break;
     }
   }

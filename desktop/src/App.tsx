@@ -847,6 +847,8 @@ export default function App() {
   const [showTagPanel, setShowTagPanel] = useState(false);
   /** 移动端点标签后要搜的词（命令面板在手机上不渲染，得走抽屉里的全文搜索） */
   const [mobileSearchSeed, setMobileSearchSeed] = useState<{ text: string; n: number } | null>(null);
+  /** v0.8.4 E7：待跳转的行（打开某篇 + 定位）。带序号，连点同一行也要重新跳 */
+  const [jumpTo, setJumpTo] = useState<{ path: string; line: number; n: number } | null>(null);
   /** 「移动到…」选择器：桌面右键与移动端长按共用 */
   const [moving, setMoving] = useState<{ path: string; isDir: boolean } | null>(null);
   /** v0.7.1 F8: graph view */
@@ -1297,6 +1299,11 @@ export default function App() {
         splitDoc={splitDoc}
         onOpenSplit={(p) => void openSplit(p)}
         onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
+        jumpTo={jumpTo}
+        onOpenAt={(p, line) => {
+          void openFileInTab(p);
+          setJumpTo((cur) => ({ path: p, line, n: (cur?.n ?? 0) + 1 }));
+        }}
         onCloseSplit={closeSplit}
         pdfs={pdfs}
         currentPath={currentPath}

@@ -361,11 +361,32 @@ describe('侧栏搜索（E7）', () => {
       expect(hits.length).toBe(2); // agent.md 与 日记，llm.md 不该出现
     });
 
-    const first = document.querySelector<HTMLElement>('.sp-hit')!;
-    fireEvent.click(first);
+    // v0.8.4 E7：结果块内部拆成了「标题」和若干「命中行」两种按钮，
+    // 点标题＝打开，点命中行＝打开并跳到那一行
+    const head = document.querySelector<HTMLElement>('.sp-hit-head')!;
+    fireEvent.click(head);
     // 点开后编辑区状态栏应指向被点的那篇
     await waitFor(() => {
       expect(document.querySelector('.status-bar')?.textContent).toMatch(/\.md/);
+    });
+  });
+
+  it('命中行是可点的，并标出行号（E7 点击定位到行）', async () => {
+    await renderApp({ 'AI/agent.md': '# Agent\n\n多智能体协作与编排\n' });
+    fireEvent.click(ribbon('搜索'));
+    const input = await screen.findByPlaceholderText('搜索全部笔记…');
+    fireEvent.change(input, { target: { value: '多智能体' } });
+
+    const line = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.sp-line');
+      if (!el) throw new Error('没有命中行');
+      return el;
+    });
+    expect(line.tagName).toBe('BUTTON');
+    expect(line.querySelector('.sp-line-no')?.textContent).toBe('3');
+    fireEvent.click(line);
+    await waitFor(() => {
+      expect(document.querySelector('.status-bar')?.textContent).toMatch(/agent\.md/);
     });
   });
 

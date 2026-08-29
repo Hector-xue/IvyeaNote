@@ -413,9 +413,9 @@ export function MobileView(props: Props) {
                     {h.path.includes('/') && (
                       <span className="m-hit-dir">{h.path.slice(0, h.path.lastIndexOf('/'))}</span>
                     )}
-                    {h.preview.map((line, i) => (
+                    {h.preview.map((p, i) => (
                       <span key={i} className="m-hit-line">
-                        {line}
+                        {p.text}
                       </span>
                     ))}
                   </button>

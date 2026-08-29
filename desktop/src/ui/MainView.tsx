@@ -48,6 +48,9 @@ interface Props {
   onOpenSplit?(path?: string): void;
   /** E3：「移动到…」——右键菜单本来就点名要它，此前只有拖拽一条路 */
   onRequestMove?(path: string, isDir: boolean): void;
+  /** v0.8.4 E7：侧栏搜索点命中行 → 打开并跳到那一行 */
+  onOpenAt?(path: string, line: number): void;
+  jumpTo?: { path: string; line: number; n: number } | null;
   onCloseSplit?(): void;
   /** v0.3.4：PDF 文件列表 */
   pdfs: string[];
@@ -366,6 +369,7 @@ export function MainView(props: Props) {
               docs={props.searchDocs ?? []}
               currentPath={props.currentPath}
               onOpen={props.onSelect}
+              onOpenAt={props.onOpenAt}
             />
           ) : (
           <>
@@ -477,6 +481,7 @@ export function MainView(props: Props) {
                 doc={props.doc ?? ''}
                 onEdit={props.onEdit}
                 currentPath={props.currentPath}
+                jumpTo={props.jumpTo}
                 theme={props.theme}
                 onInsertImage={props.onInsertImage}
                 resolveImage={props.resolveImage}

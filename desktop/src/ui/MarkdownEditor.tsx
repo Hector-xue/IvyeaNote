@@ -57,6 +57,12 @@ export interface MarkdownEditorProps {
    * 两份防抖落盘互相覆盖就是静默丢字。所以右栏只读、跟着左栏实时重渲染。
    */
   readOnlyPreview?: boolean;
+  /**
+   * v0.8.4 E7：跳到某一行。带 path 是因为分栏后有两个编辑器实例——
+   * 原来的 `ivnote-jump` 是全局事件，两边会一起跳。`n` 是序号，
+   * 连点同一条命中行两次也要重新跳（只看 line 会被判定没变）。
+   */
+  jumpTo?: { path: string; line: number; n: number } | null;
 }
 
 function cmExtensions(
@@ -167,6 +173,22 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     window.addEventListener('ivnote-jump', onJump);
     return () => window.removeEventListener('ivnote-jump', onJump);
   }, []);
+
+  // v0.8.4 E7：跳到指定行（只有显示着那个文件的实例才响应）
+  useEffect(() => {
+    const j = props.jumpTo;
+    if (!j || j.path !== props.currentPath) return;
+    setMode('edit');
+    requestAnimationFrame(() => {
+      const v = viewRef.current;
+      if (!v) return;
+      const lineNo = Math.min(Math.max(1, j.line), v.state.doc.lines);
+      const pos = v.state.doc.line(lineNo).from;
+      v.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+      v.focus();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.jumpTo, props.currentPath]);
 
   // 创建 CodeMirror 实例（一次）
   useEffect(() => {

@@ -860,3 +860,64 @@ body:has(.panel-resizer.dragging) {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ------------------------------------------------------------ 命中行可点（E7）
+   命中行从一段死文字变成按钮：点它直接跳到那一行。行号用等宽压在最左，
+   避免不同行号长度把正文推来推去。 */
+.sp-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+.sp-hit-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+  width: 100%;
+}
+.sp-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sp-line:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.sp-line-no {
+  flex: 0 0 auto;
+  min-width: 2.2em;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  opacity: 0.6;
+}
+.sp-line-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 模糊匹配高亮（E6）：没有高亮的模糊匹配很吓人——用户看不出凭什么给这些结果 */
+.pi-hit {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}

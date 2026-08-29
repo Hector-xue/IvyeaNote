@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { searchNotes, type SearchDoc, type SearchHit } from '../lib/searchIndex';
 import { orderByRecent } from '../lib/recent';
+import { fuzzyMatch, splitByRanges, type FuzzyResult } from '../lib/fuzzy';
 
 export type PaletteMode = 'search' | 'switcher' | 'commands';
 
@@ -53,21 +54,39 @@ export function Palette(props: PaletteProps) {
     if (props.mode === 'commands') {
       const q = query.toLowerCase();
       return props.commands
-        .filter((c) => c.label.toLowerCase().includes(q))
-        .map((c) => ({ key: c.id, title: c.label, preview: [] as string[], run: c.run }));
+        .map((c) => ({ c, m: fuzzyMatch(c.label, q) }))
+        .filter((x): x is { c: CommandItem; m: FuzzyResult } => x.m !== null)
+        .sort((a, b) => b.m.score - a.m.score)
+        .map(({ c, m }) => ({
+          key: c.id,
+          title: c.label,
+          ranges: m.ranges,
+          preview: [] as string[],
+          run: c.run,
+        }));
     }
     if (props.mode === 'switcher') {
-      const q = query.toLowerCase();
-      // v0.7.10 E6：按最近打开排序。此前是文件名字母序——而人找的几乎总是「刚才那几篇」。
-      const matched = props.docs.filter((d) => titleOf(d.path).toLowerCase().includes(q));
-      return orderByRecent(matched, props.recent ?? [], (d) => d.path)
-        .slice(0, 30)
-        .map((d) => ({
-          key: d.path,
-          title: titleOf(d.path),
-          preview: (props.recent ?? []).includes(d.path) && !q ? ['最近打开'] : [],
-          run: () => props.onOpenNote(d.path),
-        }));
+      const q = query.trim();
+      /*
+       * v0.7.10 E6：按最近打开排序（人找的几乎总是「刚才那几篇」）。
+       * v0.8.4 E6：改子串匹配为模糊匹配——想开「亚马逊/广告优化」原来得完整敲出
+       * 连续的一段，而人记住的往往是零散几个字。
+       *
+       * 没输入时仍然完全按最近打开排；一旦输入，模糊分数是主序、最近打开是次序
+       * ——否则「最近打开过但匹配很差」的项会压在头上。
+       */
+      const matched = props.docs
+        .map((d) => ({ d, m: fuzzyMatch(titleOf(d.path), q) }))
+        .filter((x): x is { d: SearchDoc; m: FuzzyResult } => x.m !== null);
+      const byRecent = orderByRecent(matched, props.recent ?? [], (x) => x.d.path);
+      const ordered = q === '' ? byRecent : [...byRecent].sort((a, b) => b.m.score - a.m.score);
+      return ordered.slice(0, 30).map(({ d, m }) => ({
+        key: d.path,
+        title: titleOf(d.path),
+        ranges: m.ranges,
+        preview: (props.recent ?? []).includes(d.path) && !q ? ['最近打开'] : [],
+        run: () => props.onOpenNote(d.path),
+      }));
     }
     // search：正文搜索
     const hits: SearchHit[] = query.trim()
@@ -76,7 +95,8 @@ export function Palette(props: PaletteProps) {
     return hits.map((h) => ({
       key: h.path,
       title: titleOf(h.path),
-      preview: h.preview,
+      ranges: [] as readonly [number, number][],
+      preview: h.preview.map((p) => p.text),
       run: () => props.onOpenNote(h.path),
     }));
   }, [props.mode, props.docs, props.commands, props.recent, query]);
@@ -133,7 +153,17 @@ export function Palette(props: PaletteProps) {
               onMouseEnter={() => setSel(i)}
               onClick={() => pick(i)}
             >
-              <span className="pi-title">{r.title}</span>
+              <span className="pi-title">
+                {splitByRanges(r.title, r.ranges).map((seg, k) =>
+                  seg.hit ? (
+                    <mark key={k} className="pi-hit">
+                      {seg.text}
+                    </mark>
+                  ) : (
+                    <span key={k}>{seg.text}</span>
+                  )
+                )}
+              </span>
               {r.preview.map((p, j) => (
                 <span key={j} className="pi-preview">
                   {p}

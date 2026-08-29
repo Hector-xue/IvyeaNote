@@ -13,7 +13,10 @@ import { searchNotes, type SearchDoc } from '../lib/searchIndex';
 interface Props {
   docs: SearchDoc[];
   currentPath: string | null;
+  /** 点标题：打开这篇 */
   onOpen(path: string): void;
+  /** v0.8.4 E7：点命中行——打开并跳到那一行。不传则退化为只打开 */
+  onOpenAt?(path: string, line: number): void;
 }
 
 function titleOf(path: string): string {
@@ -58,20 +61,29 @@ export function SearchPanel(props: Props) {
           <p className="sp-count">{hits.length} 篇匹配</p>
           <div className="sp-list">
             {hits.map((h) => (
-              <button
+              <div
                 key={h.path}
                 className={`sp-hit ${props.currentPath === h.path ? 'active' : ''}`}
-                onClick={() => props.onOpen(h.path)}
                 title={h.path}
               >
-                <span className="sp-title">{titleOf(h.path)}</span>
-                {dirOf(h.path) && <span className="sp-dir">{dirOf(h.path)}</span>}
-                {h.preview.map((line, i) => (
-                  <span key={i} className="sp-line">
-                    {line}
-                  </span>
+                <button className="sp-hit-head" onClick={() => props.onOpen(h.path)}>
+                  <span className="sp-title">{titleOf(h.path)}</span>
+                  {dirOf(h.path) && <span className="sp-dir">{dirOf(h.path)}</span>}
+                </button>
+                {h.preview.map((p, i) => (
+                  <button
+                    key={i}
+                    className="sp-line"
+                    title={`跳到第 ${p.line} 行`}
+                    onClick={() =>
+                      props.onOpenAt ? props.onOpenAt(h.path, p.line) : props.onOpen(h.path)
+                    }
+                  >
+                    <span className="sp-line-no">{p.line}</span>
+                    <span className="sp-line-text">{p.text}</span>
+                  </button>
                 ))}
-              </button>
+              </div>
             ))}
           </div>
         </>

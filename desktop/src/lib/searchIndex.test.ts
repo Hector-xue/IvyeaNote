@@ -43,7 +43,14 @@ describe('searchNotes', () => {
   });
   it('预览行包含命中内容', () => {
     const hits = searchNotes(docs, '引流');
-    expect(hits[0].preview[0]).toContain('引流');
+    expect(hits[0].preview[0].text).toContain('引流');
+  });
+  it('预览行带 1 起的行号——侧栏搜索点它要能跳到那一行（E7）', () => {
+    const hits = searchNotes(
+      [{ path: 'a.md', content: '# 标题\n无关\n这里有引流\n' }],
+      '引流'
+    );
+    expect(hits[0].preview[0].line).toBe(3);
   });
   it('空查询返回空', () => {
     expect(searchNotes(docs, '')).toEqual([]);
