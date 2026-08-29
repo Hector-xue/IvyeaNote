@@ -114,9 +114,23 @@ function cmExtensions(
 }
 
 /** 渲染 Markdown 为安全 HTML（同步部分）；图片异步替换由组件完成 */
+/**
+ * v0.8.5 E5：把 `> [!note] …` 变成有类型的 callout。
+ * marked 只会把它渲染成普通 blockquote，第一行留着字面量 `[!note]`——
+ * 编辑态已经按类型上了色，阅读态却露出语法，两边对不上。
+ *
+ * 在**净化之后**的 HTML 上做，且只动 class 与去掉那段字面量文本，不注入任何标签。
+ */
+export function decorateCallouts(html: string): string {
+  return html.replace(
+    /<blockquote>\s*<p>\s*\[!([a-zA-Z]+)\]\s*/g,
+    (_m, type: string) => `<blockquote class="callout callout-${type.toLowerCase()}"><p>`
+  );
+}
+
 export function renderMarkdown(md: string): string {
   const raw = marked.parse(md, { async: false }) as string;
-  return DOMPurify.sanitize(raw);
+  return decorateCallouts(DOMPurify.sanitize(raw));
 }
 
 interface ToolBtn {
@@ -143,6 +157,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const previewRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const [modeState, setMode] = useState<'edit' | 'read'>('edit');
+  const rootRef = useRef<HTMLDivElement>(null);
   const mode = props.readOnlyPreview ? 'read' : modeState;
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
@@ -173,6 +188,32 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     window.addEventListener('ivnote-jump', onJump);
     return () => window.removeEventListener('ivnote-jump', onJump);
   }, []);
+
+  /**
+   * v0.8.5 E5：Ctrl+E 切换编辑 / 阅读。此前只有工具栏按钮——而这是个高频动作，
+   * 各家（Obsidian / Typora）都给了快捷键。
+   * 只读预览的实例不响应：它压根没有编辑态可切。
+   */
+  useEffect(() => {
+    if (props.readOnlyPreview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'e') return;
+      const host = rootRef.current;
+      if (!host) return;
+      if (!host.contains(document.activeElement)) {
+        // 分栏后有两个实例，谁持有焦点谁响应。
+        // 但阅读态里没有任何可聚焦元素——若按「焦点在我这儿」硬判，切过去就再也
+        // 切不回来了。所以：没有任何编辑器持有焦点时，交给页面上第一个可编辑实例。
+        const all = [...document.querySelectorAll('.md-editor:not(.md-editor-readonly)')];
+        const someoneFocused = all.some((el) => el.contains(document.activeElement));
+        if (someoneFocused || all[0] !== host) return;
+      }
+      e.preventDefault();
+      setMode((m) => (m === 'edit' ? 'read' : 'edit'));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [props.readOnlyPreview]);
 
   // v0.8.4 E7：跳到指定行（只有显示着那个文件的实例才响应）
   useEffect(() => {
@@ -461,7 +502,12 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   );
 
   return (
-    <div className={`md-editor ${props.mobile ? 'md-editor-mobile' : ''}`}>
+    <div
+      className={`md-editor ${props.mobile ? 'md-editor-mobile' : ''}${
+        props.readOnlyPreview ? ' md-editor-readonly' : ''
+      }`}
+      ref={rootRef}
+    >
       {/* 只读预览没有可编辑的编辑器，整条格式工具栏点了都不会有反应，直接不给 */}
       {!props.mobile && !props.readOnlyPreview && toolbar}
       <div

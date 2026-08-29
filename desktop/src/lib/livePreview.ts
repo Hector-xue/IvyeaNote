@@ -5,6 +5,14 @@
  * - **加粗** / *斜体* / `代码` → 对应样式，标记符光标不在其中时隐藏
  * - > 引用 → 左边线 + 灰字
  * - - [ ] / - [x] 任务 → 渲染为可点击复选框（点击切换源码）
+ *
+ * v0.8.5（E4）补齐方案点名的四类，都是纯装饰、零新增依赖：
+ * - `---` / `***` / `___` 分隔线 → 画成一条真的线
+ * - 表格 → 等宽对齐、表头加重、`|---|` 分隔行淡出
+ * - `> [!note]` callout → 按类型上色，`[!type]` 标记本身隐藏
+ * - `[^1]` 脚注引用与 `[^1]:` 脚注定义 → 上标样式 + 定义行缩进
+ *
+ * 一律遵守既有规则：**光标靠近时显示源码**，否则显示渲染样式。
  */
 import {
   ViewPlugin,
@@ -31,6 +39,36 @@ export const livePreviewTheme = {
     background: 'rgba(127,127,127,0.14)',
     borderRadius: '4px',
     padding: '1px 4px',
+  },
+  // 分隔线：把整行画成一条线，源码本身由 cm-live-marker 隐掉
+  '.cm-live-hr': {
+    borderBottom: '1px solid var(--border, #ccc)',
+    height: '0.9em',
+    margin: '0.5em 0',
+  },
+  // 表格：等宽才对得齐；表头加重，|---| 分隔行淡出（它是语法不是内容）
+  '.cm-live-table': {
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+    fontSize: '0.92em',
+  },
+  '.cm-live-table-head': { fontWeight: '650' },
+  '.cm-live-table-div': { opacity: '0.4' },
+  // callout：只用左边线的颜色区分类型，不做底色——底色在正文里太吵
+  '.cm-live-callout': { borderLeftWidth: '3px' },
+  '.cm-callout-note, .cm-callout-info': { borderLeftColor: '#4a90d9' },
+  '.cm-callout-tip, .cm-callout-success': { borderLeftColor: '#3fa45b' },
+  '.cm-callout-warning, .cm-callout-caution': { borderLeftColor: '#d99a2b' },
+  '.cm-callout-danger, .cm-callout-error, .cm-callout-bug': { borderLeftColor: '#d95a4a' },
+  // 脚注：引用做成上标，定义行整体缩小并缩进
+  '.cm-live-footnote-ref': {
+    verticalAlign: 'super',
+    fontSize: '0.75em',
+    color: 'var(--accent, #3fa45b)',
+  },
+  '.cm-live-footnote-def': {
+    fontSize: '0.9em',
+    color: 'var(--muted, #888)',
+    paddingLeft: '1.2em',
   },
   '.cm-live-quote': {
     color: 'var(--muted, #888)',
@@ -85,6 +123,48 @@ export function parseTaskLine(
     textFrom: lineFrom + m[0].length,
     checked: m[3].toLowerCase() === 'x',
   };
+}
+
+/** 分隔线：整行只有 3 个以上的 - * _（允许其间有空格）。返回 true 表示这行是 hr */
+export function isHorizontalRule(lineText: string): boolean {
+  const t = lineText.trim();
+  if (t.length < 3) return false;
+  // setext 二级标题也是 ---，但它必须紧跟在正文行后面；这里只认「整行同一种符号」
+  return /^(-{3,}|\*{3,}|_{3,})$/.test(t.replace(/\s+/g, ''));
+}
+
+/** 表格行：以 | 开头（允许前导空白）。Markdown 表格在 CM 里就是一行行的文本 */
+export function isTableRow(lineText: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(lineText) && lineText.trim().length > 1;
+}
+
+/** 表格分隔行：|---|:--:|---:| 这种，只由 | - : 空格组成且含至少一个 - */
+export function isTableDivider(lineText: string): boolean {
+  return isTableRow(lineText) && /^[\s|:-]+$/.test(lineText) && lineText.includes('-');
+}
+
+/** Obsidian 风格 callout：`> [!note] 可选标题`。返回类型与标记区间（相对行首） */
+export function parseCallout(
+  lineText: string
+): { type: string; markStart: number; markEnd: number } | null {
+  const m = lineText.match(/^(\s*>\s?)(\[!([a-zA-Z]+)\]\s?)/);
+  if (!m) return null;
+  return { type: m[3].toLowerCase(), markStart: m[1].length, markEnd: m[1].length + m[2].length };
+}
+
+/** 脚注定义行：`[^1]: 正文`。返回标记结束位置（相对行首） */
+export function parseFootnoteDef(lineText: string): { label: string; markEnd: number } | null {
+  const m = lineText.match(/^\s*\[\^([^\]]+)\]:\s?/);
+  return m ? { label: m[1], markEnd: m[0].length } : null;
+}
+
+/** 行内脚注引用 `[^1]`，返回全部区间（相对行首） */
+export function findFootnoteRefs(lineText: string): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  const re = /\[\^([^\]\s]+)\](?!:)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(lineText))) out.push({ from: m.index, to: m.index + m[0].length });
+  return out;
 }
 
 class TaskWidget extends WidgetType {
@@ -148,6 +228,34 @@ export const livePreview = ViewPlugin.fromClass(
           const line = view.state.doc.lineAt(pos);
           const t = line.text;
 
+          // ---- 分隔线（E4）----
+          if (isHorizontalRule(t)) {
+            decos.push(Decoration.line({ class: 'cm-live-hr' }).range(line.from));
+            if (!cursorNear(sel, line.from, line.to)) {
+              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(line.from, line.to));
+            }
+            pos = line.to + 1;
+            continue;
+          }
+
+          // ---- 表格（E4）----
+          if (isTableRow(t)) {
+            const divider = isTableDivider(t);
+            // 表头 = 紧跟在分隔行之前的那一行
+            const nextIsDivider =
+              line.number < view.state.doc.lines &&
+              isTableDivider(view.state.doc.line(line.number + 1).text);
+            decos.push(
+              Decoration.line({
+                class: `cm-live-table${divider ? ' cm-live-table-div' : ''}${
+                  nextIsDivider ? ' cm-live-table-head' : ''
+                }`,
+              }).range(line.from)
+            );
+            pos = line.to + 1;
+            continue;
+          }
+
           // ---- 标题 ----
           const h = t.match(/^(#{1,6})\s+(.*)$/);
           if (h) {
@@ -160,10 +268,29 @@ export const livePreview = ViewPlugin.fromClass(
             // ---- 引用 ----
             const gm = t.match(/^\s*>\s?/);
             if (gm) {
-              decos.push(Decoration.line({ class: 'cm-live-quote' }).range(line.from));
-              const markTo = line.from + gm[0].length;
+              // callout（E4）：`> [!note] 标题` —— 按类型上色，标记本身隐藏
+              const call = parseCallout(t);
+              decos.push(
+                Decoration.line({
+                  class: call ? `cm-live-quote cm-live-callout cm-callout-${call.type}` : 'cm-live-quote',
+                }).range(line.from)
+              );
+              const markTo = line.from + (call ? call.markEnd : gm[0].length);
               if (!cursorNear(sel, line.from, markTo)) {
                 decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(line.from, markTo));
+              }
+            }
+
+            // ---- 脚注（E4）----
+            const fdef = parseFootnoteDef(t);
+            if (fdef) {
+              decos.push(Decoration.line({ class: 'cm-live-footnote-def' }).range(line.from));
+            }
+            for (const r of findFootnoteRefs(t)) {
+              const fs = line.from + r.from;
+              const fe = line.from + r.to;
+              if (!cursorNear(sel, fs, fe)) {
+                decos.push(Decoration.mark({ class: 'cm-live-footnote-ref' }).range(fs, fe));
               }
             }
 

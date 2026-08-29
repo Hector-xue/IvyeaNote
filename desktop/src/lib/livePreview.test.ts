@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskLine } from './livePreview';
+import {
+  findFootnoteRefs,
+  isHorizontalRule,
+  isTableDivider,
+  isTableRow,
+  parseCallout,
+  parseFootnoteDef,
+  parseTaskLine,
+} from './livePreview';
 
 describe('parseTaskLine', () => {
   it('解析未完成任务', () => {
@@ -27,5 +35,82 @@ describe('parseTaskLine', () => {
     const r = parseTaskLine(line, 50)!;
     expect(line.slice(r.boxFrom - 50, r.boxTo - 50)).toBe('[x]');
     expect(line.slice(r.textFrom - 50)).toBe('缩进任务');
+  });
+});
+
+/* ---- v0.8.5 E4：方案点名要扩的四类 ---- */
+
+describe('分隔线', () => {
+  it('三种写法都认', () => {
+    expect(isHorizontalRule('---')).toBe(true);
+    expect(isHorizontalRule('***')).toBe(true);
+    expect(isHorizontalRule('___')).toBe(true);
+  });
+  it('更长的也认，前后空白无所谓', () => {
+    expect(isHorizontalRule('  ------  ')).toBe(true);
+  });
+  it('不足三个不算', () => {
+    expect(isHorizontalRule('--')).toBe(false);
+  });
+  it('带正文的不算——「--- 说明」不是分隔线', () => {
+    expect(isHorizontalRule('--- 说明')).toBe(false);
+  });
+  it('列表项 `- 买牛奶` 不能被当成分隔线', () => {
+    expect(isHorizontalRule('- 买牛奶')).toBe(false);
+  });
+});
+
+describe('表格', () => {
+  it('两端有竖线的是表格行', () => {
+    expect(isTableRow('| 站点 | 广告费 |')).toBe(true);
+  });
+  it('正文里出现一个竖线不算表格', () => {
+    expect(isTableRow('管道 a | b 只是普通句子')).toBe(false);
+  });
+  it('分隔行识别（含对齐冒号）', () => {
+    expect(isTableDivider('|---|:--:|---:|')).toBe(true);
+    expect(isTableDivider('| --- | --- |')).toBe(true);
+  });
+  it('有内容的表格行不是分隔行', () => {
+    expect(isTableDivider('| 站点 | 广告费 |')).toBe(false);
+  });
+  it('全是竖线没有横线的不算分隔行', () => {
+    expect(isTableDivider('|   |   |')).toBe(false);
+  });
+});
+
+describe('callout', () => {
+  it('解析类型并给出标记区间', () => {
+    const r = parseCallout('> [!warning] 注意');
+    expect(r).not.toBeNull();
+    expect(r!.type).toBe('warning');
+    // 标记结束后就是标题文字
+    expect('> [!warning] 注意'.slice(r!.markEnd)).toBe('注意');
+  });
+  it('类型大小写归一', () => {
+    expect(parseCallout('> [!NOTE] x')!.type).toBe('note');
+  });
+  it('普通引用不是 callout', () => {
+    expect(parseCallout('> 只是引用')).toBeNull();
+  });
+  it('不带 > 的方括号不是 callout', () => {
+    expect(parseCallout('[!note] 这不是引用')).toBeNull();
+  });
+});
+
+describe('脚注', () => {
+  it('定义行给出标记长度', () => {
+    const r = parseFootnoteDef('[^1]: 数据来自领星');
+    expect(r!.label).toBe('1');
+    expect('[^1]: 数据来自领星'.slice(r!.markEnd)).toBe('数据来自领星');
+  });
+  it('行内引用能找全', () => {
+    expect(findFootnoteRefs('见脚注[^1]与[^note]。')).toHaveLength(2);
+  });
+  it('定义行开头的 [^1]: 不该被当成行内引用', () => {
+    expect(findFootnoteRefs('[^1]: 定义')).toHaveLength(0);
+  });
+  it('普通链接不是脚注', () => {
+    expect(findFootnoteRefs('[标题](https://x)')).toHaveLength(0);
   });
 });

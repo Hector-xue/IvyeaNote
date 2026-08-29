@@ -236,3 +236,32 @@ body {
     font-size: 16px;
   }
 }
+
+/* ---- v0.8.5 E5：阅读态收尾 ---- */
+
+/* 表格斑马线：方案 §4.5 E5 点名要的，之前只做了表头与边框 */
+.md-preview tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+/* callout：与编辑态同一套配色，只用左边线区分类型，不铺底色 */
+.md-preview blockquote.callout {
+  border-left-width: 3px;
+}
+.md-preview blockquote.callout-note,
+.md-preview blockquote.callout-info {
+  border-left-color: #4a90d9;
+}
+.md-preview blockquote.callout-tip,
+.md-preview blockquote.callout-success {
+  border-left-color: #3fa45b;
+}
+.md-preview blockquote.callout-warning,
+.md-preview blockquote.callout-caution {
+  border-left-color: #d99a2b;
+}
+.md-preview blockquote.callout-danger,
+.md-preview blockquote.callout-error,
+.md-preview blockquote.callout-bug {
+  border-left-color: #d95a4a;
+}
