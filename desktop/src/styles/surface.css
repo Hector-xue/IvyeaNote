@@ -476,3 +476,135 @@
 .ctx-item.danger.active {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
+
+/* ------------------------------------------------------------ 设置面板
+   一列到底，不做左侧分类导航——设置项少的时候，导航本身就是多余的一层。 */
+
+.settings-card {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.set-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-4) var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.set-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--fs-lead);
+  font-weight: var(--fw-bold);
+}
+.set-body {
+  overflow-y: auto;
+  padding: var(--sp-4) var(--sp-5) var(--sp-5);
+}
+.set-section + .set-section {
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+.set-h {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.set-row + .set-row {
+  margin-top: var(--sp-4);
+}
+.set-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  margin-bottom: var(--sp-2);
+}
+.set-val {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums; /* 拖滑块时数字不要左右跳 */
+}
+.set-def {
+  margin-left: var(--sp-2);
+  font-style: normal;
+  color: var(--n-4);
+}
+.set-hint {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.6;
+}
+.set-row input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.set-about {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.set-about .set-label {
+  margin: 0;
+  flex: 1;
+}
+.set-reset {
+  margin-top: var(--sp-4);
+}
+
+/* 分段控件：一整条里选一个，比三个单选框省地方也更像原生 */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--panel-2);
+  border-radius: var(--r-1);
+  gap: 2px;
+}
+.seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  padding: 5px var(--sp-3);
+  border-radius: calc(var(--r-1) - 1px);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.seg-btn:hover {
+  color: var(--text);
+}
+.seg-btn.on {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: var(--fw-bold);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* 实时样张：用真的 .md-preview 规则渲染，所见即所得 */
+.set-preview {
+  /* .md-preview 带 flex:1/overflow:auto，是给编辑区那个容器用的；
+     嵌进设置卡片里要解掉，否则会跟卡片自身的滚动打架 */
+  flex: none;
+  overflow: hidden;
+  margin-top: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+  max-width: none; /* 样张要填满卡片，不受 --measure 约束 */
+  background: var(--panel-2);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+.set-preview h2 {
+  margin-top: 0;
+}

@@ -10,6 +10,10 @@ import './styles/tokens.css';
 import './index.css';
 import './styles/surface.css';
 import './styles/typography.css';
+import { applyAppearance } from './lib/appearance';
+
+// 必须在 render 之前应用：否则会先按默认值画一帧再跳成用户设置，那一下闪烁很廉价
+applyAppearance();
 
 // 不用 StrictMode：避免开发模式双挂载导致重复同步/WS 连接，行为更接近生产
 // ErrorBoundary（v0.3.3）：渲染异常时显示友好错误页，不再整页白屏

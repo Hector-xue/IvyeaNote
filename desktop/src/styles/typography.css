@@ -30,7 +30,7 @@ body {
 .editor-host .cm-scroller {
   /* 旧规则在这里设了 monospace，导致 gutter 和内容字体打架 */
   font-family: var(--font-read);
-  line-height: 1.75;
+  line-height: var(--lh-body);
 }
 
 .editor-host .cm-content {
@@ -39,7 +39,7 @@ body {
   padding: var(--sp-5) var(--sp-5) 40vh;
   font-family: var(--font-read);
   font-size: var(--fs-body);
-  line-height: 1.75;
+  line-height: var(--lh-body);
   color: var(--text);
   caret-color: var(--accent);
 }
@@ -98,7 +98,7 @@ body {
   padding: var(--sp-5) var(--sp-5) var(--sp-7);
   font-family: var(--font-read);
   font-size: var(--fs-body);
-  line-height: 1.75;
+  line-height: var(--lh-body);
   color: var(--text);
 }
 

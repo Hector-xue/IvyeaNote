@@ -115,6 +115,7 @@ interface Props {
   onOpenGraph?(): void;
   /** v0.7.0 F4: tags panel */
   onOpenTags?(): void;
+  onOpenSettings?(): void;
   wikiOut?: string[];
   wikiBack?: string[];
   onOpenWikiPath?(path: string): void;
@@ -180,6 +181,16 @@ export function MainView(props: Props) {
           </button>
         )}
         <span className="ribbon-spacer" />
+        {props.onOpenSettings && (
+          <button
+            className="ribbon-btn"
+            title="设置（Ctrl+,）"
+            aria-label="设置"
+            onClick={props.onOpenSettings}
+          >
+            <RibbonIcon name="settings" />
+          </button>
+        )}
         <button
           className="ribbon-btn"
           title={props.theme === 'light' ? '切换深色' : '切换浅色'}

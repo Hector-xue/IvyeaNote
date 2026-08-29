@@ -7,6 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { searchNotes, type SearchDoc, type SearchHit } from '../lib/searchIndex';
+import { orderByRecent } from '../lib/recent';
 
 export type PaletteMode = 'search' | 'switcher' | 'commands';
 
@@ -19,6 +20,8 @@ export interface CommandItem {
 export interface PaletteProps {
   mode: PaletteMode;
   docs: SearchDoc[];
+  /** 最近打开的路径，最近的在前（快速切换器排序用） */
+  recent?: string[];
   commands: CommandItem[];
   onOpenNote(path: string): void;
   onClose(): void;
@@ -55,13 +58,14 @@ export function Palette(props: PaletteProps) {
     }
     if (props.mode === 'switcher') {
       const q = query.toLowerCase();
-      return props.docs
-        .filter((d) => titleOf(d.path).toLowerCase().includes(q))
+      // v0.7.10 E6：按最近打开排序。此前是文件名字母序——而人找的几乎总是「刚才那几篇」。
+      const matched = props.docs.filter((d) => titleOf(d.path).toLowerCase().includes(q));
+      return orderByRecent(matched, props.recent ?? [], (d) => d.path)
         .slice(0, 30)
         .map((d) => ({
           key: d.path,
           title: titleOf(d.path),
-          preview: [],
+          preview: (props.recent ?? []).includes(d.path) && !q ? ['最近打开'] : [],
           run: () => props.onOpenNote(d.path),
         }));
     }
@@ -75,7 +79,7 @@ export function Palette(props: PaletteProps) {
       preview: h.preview,
       run: () => props.onOpenNote(h.path),
     }));
-  }, [props.mode, props.docs, props.commands, query]);
+  }, [props.mode, props.docs, props.commands, props.recent, query]);
 
   const pick = (i: number) => {
     const r = results[i];

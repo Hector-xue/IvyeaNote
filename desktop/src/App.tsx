@@ -19,6 +19,15 @@ import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette, type PaletteMode, type CommandItem } from './ui/Palette';
 import { GraphView } from './ui/GraphView';
 import { useNoteIndex } from './lib/noteIndex';
+import {
+  applyAppearance,
+  loadAppearance,
+  resolveTheme,
+  saveAppearance,
+  type Appearance,
+} from './lib/appearance';
+import { SettingsView } from './ui/SettingsView';
+import { loadRecent, pushRecent, saveRecent } from './lib/recent';
 import { planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import { buildTagIndex } from './lib/tags';
@@ -85,9 +94,32 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
   /** v0.4.0 T2：首启引导（仅未登录且首次启动显示） */
   const [showWelcome, setShowWelcome] = useState(() => !isWelcomed());
-  const [theme, setTheme] = useState<'light' | 'dark'>(
-    () => (localStorage.getItem('ivnote.theme') as 'light' | 'dark') || 'light'
-  );
+  /**
+   * v0.7.10 E10：外观设置（主题 / 正文字号 / 宽度 / 行高 / 字体）。
+   * 旧的 `ivnote.theme` 只存深浅；现在统一进 appearance，并支持「跟随系统」。
+   * 迁移：loadAppearance 读不到新键时用默认值，老用户最多是主题回到浅色一次。
+   */
+  const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
+  const [showSettings, setShowSettings] = useState(false);
+  const theme = resolveTheme(appearance.theme);
+
+  const updateAppearance = useCallback((next: Appearance) => {
+    setAppearance(next);
+    saveAppearance(next);
+    applyAppearance(next); // 改即生效，没有「保存」按钮
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setAppearance((cur) => {
+      const next: Appearance = {
+        ...cur,
+        theme: resolveTheme(cur.theme) === 'light' ? 'dark' : 'light',
+      };
+      saveAppearance(next);
+      applyAppearance(next);
+      return next;
+    });
+  }, []);
   /** v0.3.4：桌面端 PDF 内嵌预览（object URL） */
   const [pdfView, setPdfView] = useState<string | null>(null);
   const pdfUrlRef = useRef<string | null>(null);
@@ -319,11 +351,15 @@ export default function App() {
     void refreshFiles();
   }, [vault, refreshFiles]);
 
-  // 主题切换：html data-theme 属性驱动 CSS 变量
+  // 选了「跟随系统」时，系统深浅色一变就要跟着换
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem('ivnote.theme', theme);
-  }, [theme]);
+    if (appearance.theme !== 'system') return;
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
+    if (!mq) return;
+    const on = () => applyAppearance(appearance);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, [appearance]);
 
   // 免登录本地模式：确保本地库存在并落盘（老用户首次升级也生效）
   useEffect(() => {
@@ -399,6 +435,9 @@ export default function App() {
 
   // ---------- 文件操作 ----------
 
+  /** v0.7.10 E6：最近打开，供快速切换器排序 */
+  const [recent, setRecent] = useState<string[]>(loadRecent);
+
   const openFile = useCallback(
     async (path: string) => {
       if (!vault) return;
@@ -407,6 +446,11 @@ export default function App() {
         setPdfView(null);
         setCurrentPath(path);
         setDoc(text);
+        setRecent((cur) => {
+          const next = pushRecent(cur, path);
+          saveRecent(next);
+          return next;
+        });
       } catch (e) {
         toast(`打开失败：${errText(e)}`, 'error');
       }
@@ -743,6 +787,10 @@ export default function App() {
       } else if (k === 'o') {
         e.preventDefault();
         openPalette('switcher');
+      } else if (e.key === ',') {
+        // Ctrl+, 是各家设置的通用快捷键（macOS 是 Cmd+,）
+        e.preventDefault();
+        setShowSettings(true);
       } else if (k === 'p') {
         e.preventDefault();
         openPalette('commands');
@@ -1209,9 +1257,10 @@ export default function App() {
         {
           id: 'toggle-theme',
           label: theme === 'light' ? '切换到深色主题' : '切换到浅色主题',
-          run: () => setTheme(theme === 'light' ? 'dark' : 'light'),
+          run: toggleTheme,
         },
         hasAccountFlag ? { id: 'add-device', label: '添加设备（配对码）', run: () => void showPairCode() } : null,
+        { id: 'settings', label: '设置', run: () => setShowSettings(true) },
         onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void trash.reload() } : null,
         // v0.7.2：应用内更新入口（手动检查）
         { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: checkUpdateNow },
@@ -1305,7 +1354,7 @@ export default function App() {
           onSync={() => void doSync()}
           onCreateVault={createVault}
           theme={theme}
-          onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          onToggleTheme={toggleTheme}
           onLogout={onLogout}
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
@@ -1342,7 +1391,7 @@ export default function App() {
           onDownload={() => undefined}
           onImportObsidian={() => undefined}
           theme={theme}
-          onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          onToggleTheme={toggleTheme}
           onBindFolder={() => undefined}
           onUnbindFolder={() => undefined}
           onLogout={onLogout}
@@ -1407,7 +1456,7 @@ export default function App() {
         onSelectTab={(p) => void openFileInTab(p)}
         onCloseTab={closeTab}
         theme={theme}
-        onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+        onToggleTheme={toggleTheme}
         onBindFolder={() => void onBindFolder()}
         onUnbindFolder={onUnbindFolder}
         onLogout={onLogout}
@@ -1429,6 +1478,7 @@ export default function App() {
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
         conflictCount={conflictFiles.length}
         onOpenTags={() => void openTagPanel()}
+        onOpenSettings={() => setShowSettings(true)}
         onPasteImage={onPasteImage}
         onOpenGraph={() => {
           setShowGraph(true);
@@ -1463,6 +1513,7 @@ export default function App() {
         <Palette
           mode={paletteMode}
           docs={searchDocs}
+          recent={recent}
           commands={commands}
           onOpenNote={(p) => void openFileInTab(p)}
           onClose={() => setPaletteMode(null)}
@@ -1581,6 +1632,15 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {showSettings && (
+        <SettingsView
+          value={appearance}
+          onChange={updateAppearance}
+          onClose={() => setShowSettings(false)}
+          appVersion={appVersion}
+          onCheckUpdate={checkUpdateNow}
+        />
       )}
       {trash.open && (
         <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && trash.setOpen(false)}>
