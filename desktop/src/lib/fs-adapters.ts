@@ -126,6 +126,31 @@ async function opfsWalkMeta(
   }
 }
 
+/**
+ * 把库内相对路径解析成「所在目录句柄 + 文件名」。
+ *
+ * OPFS 的 `getFileHandle` / `removeEntry` 只收**一段**名字，塞进 `日记/2026-08-29.md`
+ * 这种带斜杠的路径会直接抛 `Name is not allowed`。原来只有 write/writeBinary 记得
+ * 逐段走目录，read/readBinary/remove/exists 四个都是直接把整条路径递进去——于是在
+ * 本地模式（opfs://）下，**任何子目录里的笔记都打不开、删不掉，exists 还恒为 false**
+ * （改名的「不抢名」判断、日记的「今天已经有了」判断都建立在 exists 上）。
+ *
+ * @param create true 时逐段建目录（写入路径用）；false 时目录不存在直接抛（读取路径用）
+ */
+async function opfsLocate(
+  rootDir: DirHandle,
+  relPath: string,
+  create: boolean
+): Promise<{ dir: DirHandle; name: string }> {
+  const parts = relPath.split('/').filter(Boolean);
+  if (parts.length === 0) throw new Error(`空路径：${relPath}`);
+  let dir = rootDir;
+  for (const seg of parts.slice(0, -1)) {
+    dir = (await dir.getDirectoryHandle(seg, { create })) as DirHandle;
+  }
+  return { dir, name: parts[parts.length - 1] };
+}
+
 export function opfsIO(getMeta: () => VaultMeta): FileIO {
   const root = () => opfsVaultRoot(getMeta());
   return {
@@ -140,43 +165,39 @@ export function opfsIO(getMeta: () => VaultMeta): FileIO {
       return out;
     },
     async read(_vp, relPath) {
-      const fh = await (await root()).getFileHandle(relPath, { create: false });
+      const { dir, name } = await opfsLocate(await root(), relPath, false);
+      const fh = await dir.getFileHandle(name, { create: false });
       return fh.getFile().then((f) => f.text());
     },
     async write(_vp, relPath, content) {
-      const parts = relPath.split('/');
-      let dir = await root();
-      for (const seg of parts.slice(0, -1)) {
-        dir = (await dir.getDirectoryHandle(seg, { create: true })) as DirHandle;
-      }
-      const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+      const { dir, name } = await opfsLocate(await root(), relPath, true);
+      const fh = await dir.getFileHandle(name, { create: true });
       const writable = await fh.createWritable();
       await writable.write(content);
       await writable.close();
     },
     async readBinary(_vp, relPath) {
-      const fh = await (await root()).getFileHandle(relPath, { create: false });
+      const { dir, name } = await opfsLocate(await root(), relPath, false);
+      const fh = await dir.getFileHandle(name, { create: false });
       const buf = await fh.getFile().then((f) => f.arrayBuffer());
       return new Uint8Array(buf);
     },
     async writeBinary(_vp, relPath, data) {
-      const parts = relPath.split('/');
-      let dir = await root();
-      for (const seg of parts.slice(0, -1)) {
-        dir = (await dir.getDirectoryHandle(seg, { create: true })) as DirHandle;
-      }
-      const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+      const { dir, name } = await opfsLocate(await root(), relPath, true);
+      const fh = await dir.getFileHandle(name, { create: true });
       const writable = await fh.createWritable();
       // 拷贝到 ArrayBuffer 视图，满足 FileSystemWriteChunkType 的严格泛型
       await writable.write(new Uint8Array(data));
       await writable.close();
     },
     async remove(_vp, relPath) {
-      await (await root()).removeEntry(relPath);
+      const { dir, name } = await opfsLocate(await root(), relPath, false);
+      await dir.removeEntry(name);
     },
     async exists(_vp, relPath) {
       try {
-        await (await root()).getFileHandle(relPath, { create: false });
+        const { dir, name } = await opfsLocate(await root(), relPath, false);
+        await dir.getFileHandle(name, { create: false });
         return true;
       } catch {
         return false;

@@ -20,6 +20,8 @@ export type SortMode = 'name' | 'mtime';
 const SORT_KEY = 'ivnote.sort';
 /** 回收站不进主列表 */
 const HIDDEN_PREFIXES = ['.trash/', '.ivyea/'];
+/** 空文件夹的占位文件（新建文件夹时写入） */
+const KEEP = '/.keep';
 
 export function loadSortMode(): SortMode {
   return localStorage.getItem(SORT_KEY) === 'mtime' ? 'mtime' : 'name';
@@ -32,6 +34,8 @@ export interface VaultFiles {
   pdfs: string[];
   /** 可索引文件的指纹快照，驱动全库正文索引的增量对账 */
   mdStamps: FileStamp[];
+  /** 只有 .keep 占位的空文件夹，供侧栏建树 */
+  emptyDirs: string[];
   /** 库内全部已知路径（含附件、.keep），重名消解与移动计算要用 */
   allPaths(): string[];
   metaOf(path: string): FileMeta | undefined;
@@ -47,6 +51,7 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
   const [rawMd, setRawMd] = useState<string[]>([]);
   const [rawPdf, setRawPdf] = useState<string[]>([]);
   const [mdStamps, setMdStamps] = useState<FileStamp[]>([]);
+  const [emptyDirs, setEmptyDirs] = useState<string[]>([]);
   const [sortMode, setSortModeState] = useState<SortMode>(loadSortMode);
   const metasRef = useRef<Map<string, FileMeta>>(new Map());
 
@@ -65,6 +70,12 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
         metas
           .filter((m) => isIndexable(m.path))
           .map((m) => ({ path: m.path, mtime: m.mtime, size: m.size }))
+      );
+      // 空文件夹靠 .keep 占位标记。侧栏的树是从 .md 路径推导的，推不出空目录——
+      // 不在这儿单独算一份，「新建文件夹」在用户眼里就是「点了没反应」。
+      // （不能在 App 里用 allPaths 算：那是个读 ref 的稳定回调，放进 useMemo 依赖永不重算。）
+      setEmptyDirs(
+        visible.filter((p) => p.endsWith(KEEP)).map((p) => p.slice(0, -KEEP.length))
       );
     } catch (e) {
       console.error('列出文件失败', e);
@@ -102,7 +113,7 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
   const metaOf = useCallback((path: string) => metasRef.current.get(path), []);
 
   return useMemo(
-    () => ({ files, pdfs, mdStamps, allPaths, metaOf, sortMode, setSortMode, refresh }),
-    [files, pdfs, mdStamps, allPaths, metaOf, sortMode, setSortMode, refresh]
+    () => ({ files, pdfs, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh }),
+    [files, pdfs, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh]
   );
 }

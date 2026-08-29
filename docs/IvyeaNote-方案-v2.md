@@ -219,15 +219,15 @@ v1 方案写的"双链跳转/反链准确率 100%（vitest 覆盖解析器）"�
 | 0.3 文档对齐 | README 去掉未实现的勾；技术方案改掉 Flutter；删空目录 `mobile/`；旧优化方案标注"已被 v2 取代" |
 | 0.4 图标修复 | 见 §7（现行图标是透明底 + 元素堆叠，两个问题都修） |
 
-### P1 地基 —— v0.8.0（此阶段完成前不做新 UI 功能）
+### P1 地基 —— v0.8.0 ✅ **已完成（2026-08-29）**
 
 | 任务 | 内容 |
 |---|---|
 | 1.1 ~~SQLite 索引层~~ → **TS 倒排索引 + 快照持久化**（已完成 v0.7.5） | **决策已变更，理由见下方框**。实现：`lib/searchIndex.ts` 倒排索引 + BM25 排序；`lib/noteIndex.ts` 把正文快照落到 `.ivyea/cache/content.json`，启动只读 1 个文件再按 mtime+size 对账，不再逐个重读全库。快照是可丢弃缓存：过期/损坏/被删都只是「这次多读几个文件」 |
 | 1.2 中文分词（已完成 v0.7.5） | `lib/tokenize.ts`：**CJK 切二元组 + 拉丁按词**，索引与查询同一套切法。⚠️ 诚实边界：二元组**不解决词边界**（搜「告优」仍会命中「广告优化」），要真词边界得上词典分词，是另一个量级的依赖，本阶段不做。这次拿到的是速度与排序质量 |
 | 1.3 文件 watcher（已完成 v0.7.5） | 用 `@tauri-apps/plugin-fs` **自带的** `watch`（无需新增 Rust 依赖，只加 `fs:allow-watch` 权限），800ms 去抖；事件只作「该看一眼了」的信号，变更判定仍由索引层按 mtime+size 对账。过滤掉 `.ivyea/` 自身写入，避免自己触发自己 |
-| 1.4 结构重构 | App.tsx 拆为 `useVault / useSync / useIndex / useTabs / useCommands` 等 hook；UI 组件只吃 hook；桌面与移动**共用同一份数据流**——从结构上杜绝"移动端功能是空的" |
-| 1.5 设计系统落地 | 按 §4 重写 token 与基础组件；`index.css` 从"版本累加"改为"分层"（token → 基础元素 → 组件 → 布局） |
+| 1.4 结构重构（**已完成 v0.7.8 + v0.8.0**） | App.tsx 1817 → **1417 行**。已抽出 `useVaultFiles / useSyncEngine / useNoteIndex / useTabs / useTrash / useUpdater / useCommands / useAttachments / useObsidianImport / useTemplates`。抽的过程本身就是在找漏线：这次搬出附件与导入两块时，发现附件取名有两份实现、导入的进度计数有两种算法、换库时图片缓存不清 |
+| 1.5 设计系统落地（已完成 v0.7.7） | 按 §4 重写 token 与基础组件；`index.css` 从"版本累加"改为"分层"（token → 基础元素 → 组件 → 布局） |
 
 
 > **决策变更：不引入 `tauri-plugin-sql`（2026-08-29）**

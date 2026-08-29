@@ -33,6 +33,8 @@ interface Props {
   onRenameFile(path: string, newName: string): void;
   /** v0.7.3 P5：当前笔记的反向链接（App 层基于 searchDocs 计算） */
   backlinks?: string[];
+  /** 空文件夹（只有 .keep）——搜索时不显示，避免结果里混进空目录 */
+  emptyDirs?: string[];
   onSync(): void;
   onCreateVault(): void;
   onToggleTheme(): void;
@@ -139,7 +141,10 @@ export function MobileView(props: Props) {
     if (dx > 64 && Math.abs(dy) < 48 && s.x < 56) setDrawerOpen(true); // 左缘起手右滑
   };
 
-  const tree = useMemo(() => buildFileTree(filtered), [filtered]);
+  const tree = useMemo(
+    () => buildFileTree(filtered, query.trim() ? [] : props.emptyDirs ?? []),
+    [filtered, query, props.emptyDirs]
+  );
   const report = props.lastReport;
   const hasError = report && report.errors.length > 0;
 

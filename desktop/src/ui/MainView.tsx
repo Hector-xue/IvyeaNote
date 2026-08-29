@@ -39,6 +39,8 @@ import type { SortMode } from '../hooks/useVaultFiles';
 interface Props {
   vault: VaultMeta;
   files: string[];
+  /** 库内的空文件夹（只有 .keep 占位），不显式传就不会出现在树里 */
+  emptyDirs?: string[];
   /** v0.3.4：PDF 文件列表 */
   pdfs: string[];
   currentPath: string | null;
@@ -131,7 +133,10 @@ interface Props {
 
 export function MainView(props: Props) {
   /** v0.5.0 U3：递归树由扁平路径构建 */
-  const fileTree = useMemo(() => buildFileTree(props.files), [props.files]);
+  const fileTree = useMemo(
+    () => buildFileTree(props.files, props.emptyDirs ?? []),
+    [props.files, props.emptyDirs]
+  );
   const [rightCollapsed, setRightCollapsed] = useState(loadRightPanelCollapsed);
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */

@@ -17,8 +17,28 @@ export interface TreeNode {
 }
 
 /** 由扁平路径列表构建嵌套树 */
-export function buildFileTree(paths: string[]): TreeNode[] {
+/**
+ * @param paths 笔记路径（.md）
+ * @param dirs  额外要显示的目录——**空文件夹只能靠它出现**。树本来只从 .md 路径推导，
+ *              于是「新建文件夹」建出来的空目录（里面只有一个 .keep 占位）在侧栏
+ *              完全不显示：用户点完像什么都没发生，也没法把笔记拖进去。
+ */
+export function buildFileTree(paths: string[], dirs: readonly string[] = []): TreeNode[] {
   const root: TreeNode = { name: '', path: '', type: 'dir', children: [] };
+  // 先把显式目录建出来，再让文件挂进去（顺序无所谓，find 会复用已有节点）
+  for (const d of dirs) {
+    let cur = root;
+    const segs = d.split('/').filter(Boolean);
+    for (let i = 0; i < segs.length; i++) {
+      const path = segs.slice(0, i + 1).join('/');
+      let next = cur.children!.find((c) => c.type === 'dir' && c.path === path);
+      if (!next) {
+        next = { name: segs[i], path, type: 'dir', children: [] };
+        cur.children!.push(next);
+      }
+      cur = next;
+    }
+  }
   for (const p of [...paths].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))) {
     const parts = p.split('/');
     let cur = root;

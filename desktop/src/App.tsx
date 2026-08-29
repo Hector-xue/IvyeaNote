@@ -6,6 +6,10 @@ import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
 import { useTabs } from './hooks/useTabs';
+import { useCommands } from './hooks/useCommands';
+import { useAttachments } from './hooks/useAttachments';
+import { useObsidianImport } from './hooks/useObsidianImport';
+import { useTemplates } from './hooks/useTemplates';
 import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor } from './hooks/useTrash';
@@ -16,7 +20,7 @@ import type { FileIO } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
-import { Palette, type PaletteMode, type CommandItem } from './ui/Palette';
+import { Palette } from './ui/Palette';
 import { GraphView } from './ui/GraphView';
 import { useNoteIndex } from './lib/noteIndex';
 import {
@@ -31,7 +35,6 @@ import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import { buildTagIndex } from './lib/tags';
-import { todayPath, dailyContent, templateFiles, renderTemplate } from './lib/daily';
 import {
   loadState,
   saveState,
@@ -46,7 +49,6 @@ import {
 } from './lib/store';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 
 /** 移动端判定：真机 UA（Android/iOS）直接命中，或窄屏窗口——命中即用 MobileView 单栏布局 */
 function useIsMobile(): boolean {
@@ -88,7 +90,6 @@ export default function App() {
   const currentPathRef = useRef<string | null>(null);
   currentPathRef.current = currentPath;
   const [doc, setDoc] = useState<string | null>(null);
-  const [importing, setImporting] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
   const [showLogin, setShowLogin] = useState(false);
@@ -120,11 +121,6 @@ export default function App() {
       return next;
     });
   }, []);
-  /** v0.3.4：桌面端 PDF 内嵌预览（object URL） */
-  const [pdfView, setPdfView] = useState<string | null>(null);
-  const pdfUrlRef = useRef<string | null>(null);
-  /** v0.3.4：阅读模式图片 blob URL 缓存 */
-  const imgCache = useRef<Map<string, string>>(new Map());
 
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -198,6 +194,7 @@ export default function App() {
     files,
     pdfs,
     mdStamps,
+    emptyDirs,
     allPaths,
     sortMode,
     setSortMode,
@@ -250,6 +247,31 @@ export default function App() {
     afterPull,
     errText,
   });
+
+  // ---------- v0.3.4：插图 / 图片解析 / PDF（v0.8.0 P1.4 搬进 hooks/useAttachments） ----------
+
+  const onShowPdf = useCallback(() => {
+    // PDF 与笔记在主区互斥：先把编辑器清干净
+    setCurrentPath(null);
+    setDoc(null);
+  }, []);
+  const {
+    pdfView,
+    insertImage: onInsertImage,
+    saveImageFile: onPasteImage,
+    resolveImage,
+    openPdf: onOpenPdf,
+    closePdf: onClosePdf,
+  } = useAttachments({
+    vaultPath: vault ? vault.localPath ?? '' : null,
+    io,
+    refreshFiles,
+    doSync: () => void doSync(),
+    toast,
+    onShowPdf,
+    errText,
+  });
+
 
   // ---------- 登录 / 注册 ----------
 
@@ -443,7 +465,7 @@ export default function App() {
       if (!vault) return;
       try {
         const text = await io.read(vault.localPath ?? '', path);
-        setPdfView(null);
+        onClosePdf();
         setCurrentPath(path);
         setDoc(text);
         setRecent((cur) => {
@@ -455,7 +477,7 @@ export default function App() {
         toast(`打开失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, toast]
+    [vault, io, toast, onClosePdf]
   );
 
   /** 改名/移动后同步 recent —— 与 remapTabs 成对出现，漏一个就留下死路径 */
@@ -765,52 +787,15 @@ export default function App() {
   /** v0.6.1 H6: add-device pairing code dialog */
   const [pairInfo, setPairInfo] = useState<{ code: string; expiresIn: number } | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
-  /** v0.7.0 F1/F2: universal palette (search / switcher / commands) */
-  const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
   /** v0.7.0 F4: tags panel */
   const [showTagPanel, setShowTagPanel] = useState(false);
   /** v0.7.1 F8: graph view */
   const [showGraph, setShowGraph] = useState(false);
-  /** hasAccount / onOpenTrash 的稳定布尔（供 commands 依赖） */
-  const hasAccountFlag = !!state.account;
-  const onOpenTrashFlag = !!vault;
-
-  const openPalette = useCallback(
-    (mode: PaletteMode) => {
-      if (!vault) return;
-      setPaletteMode(mode);
-    },
-    [vault]
-  );
 
   /** v0.7.0 F4: open tags panel */
   const openTagPanel = useCallback(() => {
     setShowTagPanel(true);
   }, []);
-
-  /** global shortcuts: Ctrl+K search / Ctrl+O switcher / Ctrl+P commands */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const k = e.key.toLowerCase();
-      if (k === 'k') {
-        e.preventDefault();
-        openPalette('search');
-      } else if (k === 'o') {
-        e.preventDefault();
-        openPalette('switcher');
-      } else if (e.key === ',') {
-        // Ctrl+, 是各家设置的通用快捷键（macOS 是 Cmd+,）
-        e.preventDefault();
-        setShowSettings(true);
-      } else if (k === 'p') {
-        e.preventDefault();
-        openPalette('commands');
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [openPalette]);
   const showPairCode = useCallback(async () => {
     if (!client) return;
     setPairBusy(true);
@@ -866,219 +851,17 @@ export default function App() {
   );
 
 
-  // ---------- v0.3.4：插图 / 图片解析 / PDF ----------
+  // ---------- Obsidian 一键导入（v0.8.0 P1.4 搬进 hooks/useObsidianImport） ----------
 
-  /** 选一张图片 → 拷入 Attachments/ → 返回相对路径（null=取消） */
-  const onInsertImage = useCallback(async (): Promise<string | null> => {
-    if (!vault) return null;
-    let picked: { name: string; data: Uint8Array }[] = [];
-    if (isTauri) {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const { readFile } = await import('@tauri-apps/plugin-fs');
-      const sel = await open({ multiple: true, title: '选择图片' });
-      const paths = Array.isArray(sel) ? sel : sel ? [sel] : [];
-      for (const p of paths) {
-        if (typeof p !== 'string') continue;
-        const data = await readFile(p);
-        picked.push({ name: p.split(/[\\/]/).pop() ?? 'image.png', data });
-      }
-    } else {
-      const filesPicked = await new Promise<File[]>((resolve) => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = 'image/*';
-        input.onchange = () => resolve(Array.from(input.files ?? []));
-        input.click();
-      });
-      for (const f of filesPicked) {
-        picked.push({ name: f.name, data: new Uint8Array(await f.arrayBuffer()) });
-      }
-    }
-    if (picked.length === 0) return null;
-    const first = picked[0];
-    // 目标名：Attachments/时间戳-原名，重名加序号
-    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    let rel = `Attachments/${stamp}-${first.name.replace(/[\\/]/g, '_')}`;
-    let i = 1;
-    while (await io.exists(vault.localPath ?? '', rel).catch(() => false)) {
-      rel = rel.replace(/(\.[a-z0-9]+)$/i, `-${i}$1`);
-      i++;
-    }
-    await io.writeBinary(vault.localPath ?? '', rel, first.data);
-    await refreshFiles();
-    void doSync();
-    return rel;
-  }, [vault, io, refreshFiles, doSync]);
-
-  /** 阅读模式：把 Markdown 里的相对图片路径解析成可显示的 blob URL */
-  const resolveImage = useCallback(
-    async (rel: string): Promise<string | null> => {
-      if (!vault) return null;
-      const cached = imgCache.current.get(rel);
-      if (cached) return cached;
-      const bytes = await io.readBinary(vault.localPath ?? '', rel);
-      const ext = rel.split('.').pop()?.toLowerCase() ?? 'png';
-      const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : `image/${ext}`;
-      const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: mime }));
-      imgCache.current.set(rel, url);
-      return url;
-    },
-    [vault, io]
-  );
-
-  /** 打开 PDF：桌面/浏览器内嵌预览；安卓交给系统应用 */
-  const onOpenPdf = useCallback(
-    async (path: string) => {
-      if (!vault) return;
-      if (isAndroid && vault.localPath && !vault.localPath.startsWith('opfs://')) {
-        try {
-          const { openPath } = await import('@tauri-apps/plugin-opener');
-          await openPath(`${vault.localPath.replace(/\/$/, '')}/${path}`);
-          return;
-        } catch (e) {
-          toast(`无法打开 PDF：${errText(e)}`, 'error');
-          return;
-        }
-      }
-      try {
-        const bytes = await io.readBinary(vault.localPath ?? '', path);
-        if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
-        const url = URL.createObjectURL(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }));
-        pdfUrlRef.current = url;
-        setCurrentPath(null);
-        setDoc(null);
-        setPdfView(url);
-      } catch (e) {
-        toast(`打开 PDF 失败：${errText(e)}`, 'error');
-      }
-    },
-    [vault, io, toast]
-  );
-
-  const onClosePdf = useCallback(() => {
-    if (pdfUrlRef.current) {
-      URL.revokeObjectURL(pdfUrlRef.current);
-      pdfUrlRef.current = null;
-    }
-    setPdfView(null);
-  }, []);
-
-  // ---------- Obsidian 一键导入 ----------
-
-  /** v0.4.0 T4：导入进度（null=未在导入；否则显示 n/N） */
-  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
-
-  const onImportObsidian = useCallback(async () => {
-    if (!vault || importing) return;
-    setImporting(true);
-    setImportProgress({ done: 0, total: 0 });
-    let failed: string[] = [];
-    try {
-      if (isTauri) {
-        // 桌面端：选文件夹，递归读取全部 Markdown（跳过 .obsidian 等隐藏目录）
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const dir = await open({ directory: true, title: '选择 Obsidian 库文件夹' });
-        if (typeof dir !== 'string') return;
-        const { readDir, readTextFile } = await import('@tauri-apps/plugin-fs');
-        const out: { rel: string; abs: string }[] = [];
-        const walk = async (d: string, prefix: string) => {
-          for (const e of await readDir(d)) {
-            const rel = prefix ? `${prefix}/${e.name}` : e.name;
-            if (e.isDirectory) {
-              if (!e.name.startsWith('.')) await walk(`${d}/${e.name}`, rel);
-            } else if (/\.(md|markdown)$/i.test(e.name)) {
-              out.push({ rel, abs: `${d}/${e.name}` });
-            }
-          }
-        };
-        await walk(dir, '');
-        failed = [];
-        setImportProgress({ done: 0, total: out.length });
-        for (let i = 0; i < out.length; i++) {
-          try {
-            await io.write(vault.localPath ?? '', out[i].rel, await readTextFile(out[i].abs));
-          } catch {
-            failed.push(out[i].rel); // 单文件失败不中断整体导入
-          }
-          setImportProgress({ done: i + 1, total: out.length });
-        }
-        toast(
-          failed.length === 0
-            ? `已从 Obsidian 导入 ${out.length} 个笔记${stateRef.current.account ? '，正在同步到服务器…' : ''}`
-            : `导入完成：成功 ${out.length - failed.length} 个，失败 ${failed.length} 个（首个失败：${failed[0]}）`,
-          failed.length === 0 ? 'ok' : 'error'
-        );
-      } else {
-        // 浏览器端：优先用目录选择句柄，保留子目录结构；否则退化为文件夹多选
-        type DirHandleLike = {
-          values(): AsyncIterableIterator<{ kind: string; name: string; getFile(): Promise<File> }>;
-        };
-        const wdp = (
-          window as unknown as { showDirectoryPicker?: () => Promise<DirHandleLike> }
-        ).showDirectoryPicker;
-        let entries: { rel: string; getText(): Promise<string> }[] = [];
-        if (wdp) {
-          const root = await wdp.call(window);
-          const walk = async (d: DirHandleLike, prefix: string) => {
-            for await (const h of d.values()) {
-              const rel = prefix ? `${prefix}/${h.name}` : h.name;
-              if (h.kind === 'directory') {
-                if (!h.name.startsWith('.')) await walk(h as unknown as DirHandleLike, rel);
-              } else if (/\.(md|markdown)$/i.test(h.name)) {
-                entries.push({ rel, getText: () => h.getFile().then((f) => f.text()) });
-              }
-            }
-          };
-          await walk(root, '');
-        } else {
-          const picked = await new Promise<File[]>((resolve) => {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.multiple = true;
-            (input as HTMLInputElement & { webkitdirectory?: boolean }).webkitdirectory = true;
-            input.onchange = () => resolve(Array.from(input.files ?? []));
-            input.click();
-          });
-          entries = picked
-            .filter((f) => /\.(md|markdown)$/i.test(f.name))
-            .map((f) => ({
-              rel:
-                (f as File & { webkitRelativePath?: string }).webkitRelativePath
-                  ?.split('/')
-                  .slice(1)
-                  .join('/') || f.name,
-              getText: () => f.text(),
-            }));
-        }
-        let n = 0;
-        failed = [];
-        setImportProgress({ done: 0, total: entries.length });
-        for (const e of entries) {
-          try {
-            await io.write(vault.localPath ?? '', e.rel, await e.getText());
-            n++;
-          } catch {
-            failed.push(e.rel);
-          }
-          setImportProgress({ done: n + failed.length, total: entries.length });
-        }
-        toast(
-          failed.length === 0
-            ? `已从 Obsidian 导入 ${n} 个笔记${stateRef.current.account ? '，正在同步到服务器…' : ''}`
-            : `导入完成：成功 ${n} 个，失败 ${failed.length} 个（首个失败：${failed[0]}）`,
-          failed.length === 0 ? 'ok' : 'error'
-        );
-      }
-      await refreshFiles();
-      // v0.4.0 T4：导入完成自动同步一次（已登录时）
-      if (client) void doUpload();
-    } catch (e) {
-      toast(`导入失败：${errText(e)}`, 'error');
-    } finally {
-      setImporting(false);
-      setImportProgress(null);
-    }
-  }, [vault, importing, io, refreshFiles, toast, client, doUpload]);
+  const { progress: importProgress, run: onImportObsidian } = useObsidianImport({
+    vaultPath: vault ? vault.localPath ?? '' : null,
+    io,
+    refreshFiles,
+    // 已登录才在导入后推一次；未登录传 null，文案里也不会说「正在同步到服务器」
+    afterImport: client ? () => void doUpload() : null,
+    toast,
+    errText,
+  });
 
   // ---------- Vault / 文件夹绑定 ----------
 
@@ -1135,26 +918,6 @@ export default function App() {
     setLastReport(null);
   }, []);
 
-  /** v0.7.1 F7: save pasted/dropped image into Attachments/ and return rel path */
-  const onPasteImage = useCallback(
-    async (file: File): Promise<string | null> => {
-      if (!vault) return null;
-      const data = new Uint8Array(await file.arrayBuffer());
-      const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      let rel = `Attachments/${stamp}-${file.name.replace(/[\\/]/g, '_')}`;
-      let i = 1;
-      while (await io.exists(vault.localPath ?? '', rel).catch(() => false)) {
-        rel = rel.replace(/(\.[a-z0-9]+)$/i, `-${i}$1`);
-        i++;
-      }
-      await io.writeBinary(vault.localPath ?? '', rel, data);
-      await refreshFiles();
-      void doSync();
-      return rel;
-    },
-    [vault, io, refreshFiles, doSync]
-  );
-
   /** v0.7.0 F3: open or create a wiki link target */
   const onOpenWiki = useCallback(
     async (target: string) => {
@@ -1187,98 +950,57 @@ export default function App() {
     return { out, back: [...inbound] };
   }, [currentPath, doc, searchDocs]);
 
-  /** v0.7.1 F5: open-or-create today's daily note */
-  const openDailyNote = useCallback(async () => {
-    if (!vault) return;
-    const path = todayPath();
-    try {
-      if (await io.exists(vault.localPath ?? '', path)) {
-        void openFileInTab(path);
-        return;
-      }
-      // 有模板则套用 Templates/日记.md，否则用默认骨架
-      let content = dailyContent();
-      if (templateFiles(files).some((f) => titleOfPath(f) === '日记')) {
-        try {
-          content = renderTemplateSafe(await io.read(vault.localPath ?? '', 'Templates/日记.md'), path);
-        } catch { /* 模板读取失败用默认 */ }
-      }
-      await io.write(vault.localPath ?? '', path, content);
-      await refreshFiles();
-      void openFileInTab(path);
-      void doSync();
-    } catch (e) {
-      toast(`打开日记失败：${errText(e)}`, 'error');
-    }
-  }, [vault, io, files, refreshFiles, openFileInTab, doSync, toast]);
+    /** v0.8.0 P1.4：日记 / 模板搬进 hooks/useTemplates */
+  const { openDaily: openDailyNote, newFromTemplate } = useTemplates({
+    vaultPath: vault ? vault.localPath ?? '' : null,
+    io,
+    files,
+    refreshFiles,
+    openInTab: (p) => void openFileInTab(p),
+    doSync: () => void doSync(),
+    prompt,
+    toast,
+    errText,
+  });
 
-  /** v0.7.1 F5: new note from a template (prompt to pick) */
-  const newFromTemplate = useCallback(async () => {
-    if (!vault) return;
-    const tpls = templateFiles(files);
-    if (tpls.length === 0) {
-      // 首次使用：建模板目录 + 示例模板
-      await io.write(
-        vault.localPath ?? '',
-        'Templates/会议.md',
-        '# {{title}}\n\n- 时间：{{date}} {{time}}\n- 参会：\n\n## 议题\n\n## 结论\n'
-      );
-      await refreshFiles();
-      toast('已创建 Templates/会议.md 示例模板，编辑后即可使用', 'ok');
-      void doSync();
-      return;
-    }
-    const name = await prompt({
-      title: '从模板新建',
-      description: `可用模板：${tpls.map((t) => titleOfPath(t)).join('、')}。输入新笔记名（可含目录）`,
-      placeholder: '例：会议/产品周会',
-      okText: '创建',
-      validate: (v) => (v.trim() ? null : '请输入名称'),
-    });
-    if (!name) return;
-    const clean = name.trim().replace(/\/+$/, '');
-    const rel = clean.endsWith('.md') ? clean : `${clean}.md`;
-    try {
-      const tplPath = tpls.find((t) => titleOfPath(t) === titleOfPath(rel)) ?? tpls[0];
-      const content = renderTemplateSafe(await io.read(vault.localPath ?? '', tplPath), rel);
-      await io.write(vault.localPath ?? '', rel, content);
-      await refreshFiles();
-      void openFileInTab(rel);
-      void doSync();
-    } catch (e) {
-      toast(`创建失败：${errText(e)}`, 'error');
-    }
-  }, [vault, files, io, refreshFiles, openFileInTab, doSync, prompt, toast]);
-
-  /** renderTemplate 包装（title 去后缀） */
-  function renderTemplateSafe(tpl: string, title: string): string {
-    const base = title.replace(/\.md$/i, '').split('/').pop() ?? title;
-    return renderTemplate(tpl, base);
-  }
-
-  /** v0.7.0 F2: command registry (Ctrl+P) */
-  const commands: CommandItem[] = useMemo(
-    () =>
-      [
-        { id: 'new-note', label: '新建笔记', run: () => void onCreateNote('') },
-        { id: 'new-folder', label: '新建文件夹', run: () => void onCreateFolder('') },
-        { id: 'import-obsidian', label: '从 Obsidian 导入', run: () => void onImportObsidian() },
-        { id: 'daily', label: '打开今日笔记', run: () => void openDailyNote() },
-        { id: 'graph', label: '打开图谱视图', run: () => setShowGraph(true) },
-        { id: 'from-template', label: '从模板新建笔记', run: () => void newFromTemplate() },
-        {
-          id: 'toggle-theme',
-          label: theme === 'light' ? '切换到深色主题' : '切换到浅色主题',
-          run: toggleTheme,
-        },
-        hasAccountFlag ? { id: 'add-device', label: '添加设备（配对码）', run: () => void showPairCode() } : null,
-        { id: 'settings', label: '设置', run: () => setShowSettings(true) },
-        onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void trash.reload() } : null,
-        // v0.7.2：应用内更新入口（手动检查）
-        { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: checkUpdateNow },
-      ].filter((c): c is CommandItem => c !== null),
-    [onCreateNote, onCreateFolder, onImportObsidian, openDailyNote, newFromTemplate, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, trash, appVersion, checkUpdateNow]
+  /**
+   * v0.8.0 P1.4：命令面板 + 全局快捷键整块搬进 `hooks/useCommands`。
+   * 这里只负责把「能干什么」交出去——hook 不认识 vault，也不碰 IO。
+   */
+  const commandActions = useMemo(
+    () => ({
+      onCreateNote: () => void onCreateNote(''),
+      onCreateFolder: () => void onCreateFolder(''),
+      onImportObsidian: () => void onImportObsidian(),
+      onOpenDaily: () => void openDailyNote(),
+      onOpenGraph: () => setShowGraph(true),
+      onNewFromTemplate: () => void newFromTemplate(),
+      onToggleTheme: toggleTheme,
+      onOpenSettings: () => setShowSettings(true),
+      onCheckUpdate: checkUpdateNow,
+      onAddDevice: state.account ? () => void showPairCode() : null,
+      onOpenTrash: vault ? () => void trash.reload() : null,
+    }),
+    [
+      onCreateNote,
+      onCreateFolder,
+      onImportObsidian,
+      openDailyNote,
+      newFromTemplate,
+      toggleTheme,
+      checkUpdateNow,
+      showPairCode,
+      trash,
+      state.account,
+      vault,
+    ]
   );
+  const { paletteMode, openPalette, closePalette, commands } = useCommands({
+    enabled: !!vault,
+    theme,
+    appVersion,
+    actions: commandActions,
+  });
 
   // ---------- 渲染 ----------
 
@@ -1346,6 +1068,7 @@ export default function App() {
         <MobileView
           vault={vault}
           files={files}
+          emptyDirs={emptyDirs}
           pdfs={pdfs}
           currentPath={currentPath}
           doc={doc}
@@ -1446,6 +1169,7 @@ export default function App() {
       <MainView
         vault={vault}
         files={files}
+        emptyDirs={emptyDirs}
         pdfs={pdfs}
         currentPath={currentPath}
         doc={doc}
@@ -1510,7 +1234,7 @@ export default function App() {
               setVaultId(Number(e.target.value));
               setCurrentPath(null);
               setDoc(null);
-              setPdfView(null);
+              onClosePdf();
             }}
           >
             {vaultList.map((v) => (
@@ -1529,7 +1253,7 @@ export default function App() {
           recent={recent}
           commands={commands}
           onOpenNote={(p) => void openFileInTab(p)}
-          onClose={() => setPaletteMode(null)}
+          onClose={closePalette}
         />
       )}
       {showGraph && (
