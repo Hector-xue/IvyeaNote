@@ -6,10 +6,12 @@ import { TabsBar } from './TabsBar';
 import { RibbonIcon } from './Icons';
 import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
+import { SearchPanel } from './SearchPanel';
 import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
+import type { SearchDoc } from '../lib/searchIndex';
 
 export interface FileNode {
   path: string;
@@ -116,6 +118,8 @@ interface Props {
   /** v0.7.0 F4: tags panel */
   onOpenTags?(): void;
   onOpenSettings?(): void;
+  /** v0.7.11 E7：侧栏搜索用的全库正文（与命令面板同一份索引） */
+  searchDocs?: SearchDoc[];
   wikiOut?: string[];
   wikiBack?: string[];
   onOpenWikiPath?(path: string): void;
@@ -130,6 +134,8 @@ export function MainView(props: Props) {
   const fileTree = useMemo(() => buildFileTree(props.files), [props.files]);
   const [rightCollapsed, setRightCollapsed] = useState(loadRightPanelCollapsed);
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */
+  const [sidebarTab, setSidebarTab] = useState<'files' | 'search'>('files');
 
   /** 右键菜单条目：文件与文件夹给不同的动作集 */
   const openMenu = (node: TreeNode, x: number, y: number) => {
@@ -157,12 +163,23 @@ export function MainView(props: Props) {
       {/* v0.5.0 U5：左侧 icon ribbon（对标 Obsidian 功能栏） */}
       <nav className="ribbon" aria-label="功能栏">
         <button
-          className="ribbon-btn"
+          className={`ribbon-btn ${sidebarTab === 'files' ? 'on' : ''}`}
           title="文件"
           aria-label="文件"
-          onClick={() => props.onRibbonAction?.('files')}
+          onClick={() => {
+            setSidebarTab('files');
+            props.onRibbonAction?.('files');
+          }}
         >
           <RibbonIcon name="folder" />
+        </button>
+        <button
+          className={`ribbon-btn ${sidebarTab === 'search' ? 'on' : ''}`}
+          title="搜索"
+          aria-label="搜索"
+          onClick={() => setSidebarTab('search')}
+        >
+          <RibbonIcon name="search" />
         </button>
         {props.onOpenTrash && (
           <button className="ribbon-btn" title="回收站" aria-label="回收站" onClick={props.onOpenTrash}>
@@ -300,6 +317,14 @@ export function MainView(props: Props) {
         )}
 
         <div className="file-list">
+          {sidebarTab === 'search' ? (
+            <SearchPanel
+              docs={props.searchDocs ?? []}
+              currentPath={props.currentPath}
+              onOpen={props.onSelect}
+            />
+          ) : (
+          <>
           {/* v0.5.0 U3：递归文件树（隐藏后缀 / hover 操作 / 多层折叠） */}
           <FileTree
             nodes={fileTree}
@@ -332,6 +357,8 @@ export function MainView(props: Props) {
           )}
           {props.files.length === 0 && props.pdfs.length === 0 && (
             <div className="empty">还没有笔记。可「新建笔记」或从 Obsidian 一键导入。</div>
+          )}
+          </>
           )}
         </div>
 

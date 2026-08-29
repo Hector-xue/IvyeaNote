@@ -1479,6 +1479,7 @@ export default function App() {
         conflictCount={conflictFiles.length}
         onOpenTags={() => void openTagPanel()}
         onOpenSettings={() => setShowSettings(true)}
+        searchDocs={searchDocs}
         onPasteImage={onPasteImage}
         onOpenGraph={() => {
           setShowGraph(true);

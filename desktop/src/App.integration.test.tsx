@@ -332,3 +332,57 @@ describe('右键上下文菜单（E3）', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+
+describe('侧栏搜索（E7）', () => {
+  function ribbon(label: string): HTMLElement {
+    const el = document.querySelector<HTMLElement>(`.ribbon-btn[aria-label="${label}"]`);
+    if (!el) throw new Error(`ribbon 里找不到「${label}」`);
+    return el;
+  }
+
+  it('切到搜索页 → 输入关键词 → 出结果并能点开', async () => {
+    await renderApp({
+      'AI/agent.md': '# Agent\n\n多智能体协作与编排\n',
+      'AI/llm.md': '# LLM\n\n完全无关的内容\n',
+      '日记/2026.md': '# 日记\n\n今天研究了多智能体\n',
+    });
+
+    fireEvent.click(ribbon('搜索'));
+    const input = await screen.findByPlaceholderText('搜索全部笔记…');
+    fireEvent.change(input, { target: { value: '多智能体' } });
+
+    await waitFor(() => {
+      const hits = document.querySelectorAll('.sp-hit');
+      expect(hits.length).toBe(2); // agent.md 与 日记，llm.md 不该出现
+    });
+
+    const first = document.querySelector<HTMLElement>('.sp-hit')!;
+    fireEvent.click(first);
+    // 点开后编辑区状态栏应指向被点的那篇
+    await waitFor(() => {
+      expect(document.querySelector('.status-bar')?.textContent).toMatch(/\.md/);
+    });
+  });
+
+  it('搜不到时给明确反馈，不是空白', async () => {
+    await renderApp({ 'a.md': '# A\n' });
+    fireEvent.click(ribbon('搜索'));
+    const input = await screen.findByPlaceholderText('搜索全部笔记…');
+    fireEvent.change(input, { target: { value: '一定搜不到的词' } });
+    await waitFor(() => {
+      expect(screen.getByText('没有匹配的笔记')).toBeTruthy();
+    });
+  });
+
+  it('切回文件页 → 文件树回来', async () => {
+    await renderApp({ 'a.md': '# A\n' });
+    fireEvent.click(ribbon('搜索'));
+    await screen.findByPlaceholderText('搜索全部笔记…');
+    fireEvent.click(ribbon('文件'));
+    await waitFor(() => {
+      expect(fileNode('a.md')).toBeTruthy();
+    });
+  });
+})

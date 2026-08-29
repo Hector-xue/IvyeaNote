@@ -608,3 +608,100 @@
 .set-preview h2 {
   margin-top: 0;
 }
+
+/* ------------------------------------------------------------ 侧栏搜索
+   结果按「标题 + 目录 + 命中行」三层排布：标题辨认、目录消歧、命中行判断要不要点进去。 */
+
+.ribbon-btn.on {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sp-input-row {
+  padding: 0 var(--sp-2) var(--sp-2);
+}
+.sp-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: var(--sp-2) var(--sp-3);
+}
+.sp-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.sp-input::-webkit-search-cancel-button {
+  filter: grayscale(1) opacity(0.5);
+}
+.sp-tip,
+.sp-count {
+  margin: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.7;
+}
+.sp-tip code {
+  font-family: var(--font-mono);
+  background: var(--panel-2);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.sp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.sp-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  padding: var(--sp-2) var(--sp-3);
+  margin: 0 var(--sp-2);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease);
+}
+.sp-hit:hover {
+  background: var(--panel-2);
+}
+.sp-hit.active {
+  background: var(--accent-weak);
+}
+.sp-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-dir {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 命中行：最多两行，超出省略。这是「要不要点进去」的唯一依据，不能省 */
+.sp-line {
+  font-size: var(--fs-xs);
+  color: var(--n-6);
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
