@@ -1,21 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
-import { MainView, type SortMode } from './ui/MainView';
+import { MainView } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
-// v0.7.2：应用内更新
-import { checkForUpdate, installUpdate, openReleasePage, type UpdateInfo } from './lib/updater';
+import { useUpdater } from './hooks/useUpdater';
+import { useTabs } from './hooks/useTabs';
+import { useVaultFiles } from './hooks/useVaultFiles';
+import { useSyncEngine } from './hooks/useSyncEngine';
+import { useTrash, trashPathFor } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
-import { syncVault, pushOnly, pullOnly, type FileIO, type FileMeta, type SyncReport } from './lib/sync';
+import type { FileIO } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette, type PaletteMode, type CommandItem } from './ui/Palette';
 import { GraphView } from './ui/GraphView';
-import { useNoteIndex, isIndexable, type FileStamp } from './lib/noteIndex';
+import { useNoteIndex } from './lib/noteIndex';
 import { planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import { buildTagIndex } from './lib/tags';
@@ -62,10 +65,6 @@ function errText(e: unknown): string {
 }
 
 /** 排序偏好持久化 */
-function loadSortMode(): SortMode {
-  return (localStorage.getItem('ivnote.sort') as SortMode) || 'name';
-}
-
 export default function App() {
   // 免登录本地模式：无账号时初始化即带一个「我的笔记」本地库
   const [state, setState] = useState<PersistState>(() => {
@@ -73,17 +72,13 @@ export default function App() {
     return s.account ? s : ensureLocalVault(s);
   });
   const [vaultId, setVaultId] = useState<number | null>(null);
-  const [files, setFiles] = useState<string[]>([]);
   /** v0.3.4：PDF 列表与元数据（排序） */
-  const [pdfs, setPdfs] = useState<string[]>([]);
-  const metasRef = useRef<Map<string, FileMeta>>(new Map());
-  /** v0.7.5：可索引文件的指纹快照。由 refreshFiles 统一更新，驱动全库正文索引。 */
-  const [mdStamps, setMdStamps] = useState<FileStamp[]>([]);
-  const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  /** 同步拉取后要重读当前文件，但 currentPath 不能进 useSyncEngine 的依赖——
+   *  否则每切换一次笔记就重建一次同步引擎。用 ref 旁路。 */
+  const currentPathRef = useRef<string | null>(null);
+  currentPathRef.current = currentPath;
   const [doc, setDoc] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [lastReport, setLastReport] = useState<SyncReport | null>(null);
   const [importing, setImporting] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
@@ -101,7 +96,6 @@ export default function App() {
 
   const stateRef = useRef(state);
   stateRef.current = state;
-  const syncingRef = useRef(false);
 
   // ---- v0.3.3：全部 hooks 必须在任何条件 return 之前调用（修复 Rules of Hooks 违例）----
   const isMobile = useIsMobile();
@@ -112,91 +106,16 @@ export default function App() {
   /** 编辑防抖计时器：替代旧的「函数对象挂属性」写法（重构即坏、类型不安全） */
   const saveTimer = useRef<number | undefined>(undefined);
 
-  // ---- v0.7.2：应用内更新 ----
+  // ---- 应用内更新（v0.7.8：整块搬进 hooks/useUpdater） ----
   /** 当前版本：构建时由 vite define 注入（取自 tauri.conf.json），兜底 0.0.0 */
   const appVersion = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '0.0.0';
-  const [pendingUpdate, setPendingUpdate] = useState<UpdateInfo | null>(null);
-  const [updating, setUpdating] = useState(false);
-  void updating; // 预留：后续接入下载进度 UI
-  /** 手动「检查更新」时置 true，用于区分静默检查（无更新不提示） */
-  const manualCheckRef = useRef(false);
-  /** 是否移动端（Android）：更新走跳转下载而非应用内安装 */
-  const isMobileDevice = isMobileUA();
+  const { checkNow: checkUpdateNow } = useUpdater({
+    confirm,
+    toast,
+    appVersion,
+    isMobile: isMobileUA(),
+  });
 
-  /** 检查更新并弹 Dialog；silent=true 时无更新不打扰 */
-  const runUpdateCheck = useCallback(
-    async (silent: boolean) => {
-      manualCheckRef.current = !silent;
-      try {
-        const info = await checkForUpdate(appVersion);
-        const dismissed = localStorage.getItem('ivnote.update.dismissed');
-        if (info && !(silent && info.version === dismissed)) {
-          setPendingUpdate(info);
-        } else if (!silent) {
-          toast(`已是最新版本（v${appVersion}）`, 'ok');
-        }
-      } catch {
-        if (!silent) toast('检查更新失败，请稍后重试或到 GitHub Releases 查看', 'error');
-      }
-    },
-    [appVersion, toast]
-  );
-
-  // 启动后延迟 3 秒静默检查一次（避免抢启动带宽/焦点）
-  useEffect(() => {
-    if (!('__TAURI_INTERNALS__' in window)) return;
-    const t = window.setTimeout(() => void runUpdateCheck(true), 3000);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // 发现新版本时弹确认框（用户点「忽略此版本」后，同版本静默检查不再打扰）
-  useEffect(() => {
-    if (!pendingUpdate) return;
-    void (async () => {
-      const ok = await confirm({
-        title: `发现新版本 v${pendingUpdate.version}`,
-        description: isMobileDevice
-          ? `当前版本 v${appVersion}。安卓端请在浏览器中下载新 APK 安装。`
-          : `当前版本 v${appVersion}。更新将自动下载并重启应用。`,
-        okText: isMobileDevice ? '前往下载' : '立即更新',
-        cancelText: '忽略此版本',
-      });
-      if (ok) {
-        dismissUpdate();
-        await applyUpdate();
-      } else {
-        dismissUpdate();
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingUpdate]);
-
-  /** 确认更新：桌面走 updater 插件下载安装重启；Android 跳 Release 页 */
-  const applyUpdate = useCallback(async () => {
-    if (!pendingUpdate) return;
-    if (isMobileDevice) {
-      await openReleasePage();
-      return;
-    }
-    setUpdating(true);
-    try {
-      toast('正在下载更新…', 'ok');
-      await installUpdate();
-      // installUpdate 内部会 relaunch，正常不会走到这里
-    } catch {
-      setUpdating(false);
-      toast('更新失败，可到 GitHub Releases 手动下载', 'error');
-    }
-  }, [pendingUpdate, isMobileDevice, toast]);
-
-  /** 忽略此版本（记 localStorage，之后不再自动提示） */
-  const dismissUpdate = useCallback(() => {
-    if (pendingUpdate) {
-      localStorage.setItem('ivnote.update.dismissed', pendingUpdate.version);
-    }
-    setPendingUpdate(null);
-  }, [pendingUpdate]);
 
   const persist = useCallback((next: PersistState) => {
     stateRef.current = next;
@@ -239,36 +158,20 @@ export default function App() {
     });
   }, [vault?.localPath, vaultId]);
 
-  /** v0.3.4：按当前排序方式整理文件列表 */
-  const applySort = useCallback((list: string[]): string[] => {
-    const metas = metasRef.current;
-    if (sortMode === 'mtime') {
-      return [...list].sort((a, b) => (metas.get(b)?.mtime ?? 0) - (metas.get(a)?.mtime ?? 0));
-    }
-    return [...list].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
-  }, [sortMode]);
+  /**
+   * 文件列表层（v0.7.8：整块搬进 hooks/useVaultFiles）。
+   * 这是数据咽喉——所有改动文件的操作最后都要走 refreshFiles()。
+   */
+  const {
+    files,
+    pdfs,
+    mdStamps,
+    allPaths,
+    sortMode,
+    setSortMode,
+    refresh: refreshFiles,
+  } = useVaultFiles(io, vault ? (vault.localPath ?? '') : null);
 
-  const refreshFiles = useCallback(async () => {
-    if (!vault) return;
-    try {
-      // v0.3.4：listMeta 一次拿路径+修改时间+大小
-      const metas = await io.listMeta(vault.localPath ?? '');
-      metasRef.current = new Map(metas.map((m) => [m.path, m]));
-      // v0.4.0 T5：.trash/ 回收站目录不进主列表
-      const all = metas.map((m) => m.path).filter((p) => !p.startsWith('.trash/'));
-      setFiles(applySort(all.filter((p) => /\.md$/i.test(p))));
-      setPdfs(applySort(all.filter((p) => /\.pdf$/i.test(p))));
-      // v0.7.5 P0：索引挂在这个咽喉上——新建/删除/重命名/移动/导入/回收站/同步拉取
-      // 每条路径最后都会走到 refreshFiles，索引因此自动跟上，不会再出现「线没接上」。
-      setMdStamps(
-        metas
-          .filter((m) => isIndexable(m.path))
-          .map((m) => ({ path: m.path, mtime: m.mtime, size: m.size }))
-      );
-    } catch (e) {
-      console.error('列出文件失败', e);
-    }
-  }, [vault, io, applySort]);
 
   /**
    * v0.7.5 P0：全库正文索引。
@@ -283,84 +186,38 @@ export default function App() {
   const noteIndex = useNoteIndex(io, vault?.localPath ?? '', mdStamps);
   const searchDocs = noteIndex.docs;
 
-  const onSortChange = useCallback(
-    (m: SortMode) => {
-      setSortMode(m);
-      localStorage.setItem('ivnote.sort', m);
-      setFiles((cur) => applySort(cur));
-      setPdfs((cur) => applySort(cur));
-    },
-    [applySort]
-  );
 
   /** 执行一轮完整同步（推送本地增量 + 拉取远端变更） */
-  const doSync = useCallback(async () => {
-    if (!client || !vault || syncingRef.current) return;
-    syncingRef.current = true;
-    setSyncing(true);
+  /** 同步引擎（v0.7.8：三个复制粘贴的函数收进 hooks/useSyncEngine） */
+  const afterPull = useCallback(async () => {
+    const cur = currentPathRef.current;
+    if (!vault || !cur) return;
     try {
-      const report = await syncVault(client, vault, io, stateRef.current.account!.deviceId, vault.localPath ?? '');
-      setLastReport(report);
-      await refreshFiles();
-      persist({ ...stateRef.current });
-    } catch (e) {
-      console.error('同步失败', e);
-      setLastReport({
-        pushed: 0,
-        pulled: 0,
-        merged: 0,
-        conflicts: [],
-        errors: [errText(e)],
-      });
-    } finally {
-      syncingRef.current = false;
-      setSyncing(false);
+      setDoc(await io.read(vault.localPath ?? '', cur));
+    } catch {
+      // 远端把这篇删了：清空编辑区，别让用户对着一份已不存在的内容继续写
+      setCurrentPath(null);
+      setDoc(null);
     }
-  }, [client, vault, io, refreshFiles, persist]);
+  }, [vault, io]);
 
-  /** 只上传：把本地修改推到服务器 */
-  const doUpload = useCallback(async () => {
-    if (!client || !vault || syncingRef.current) return;
-    syncingRef.current = true;
-    setSyncing(true);
-    try {
-      const report = await pushOnly(client, vault, io, stateRef.current.account!.deviceId, vault.localPath ?? '');
-      setLastReport(report);
-      await refreshFiles();
-      persist({ ...stateRef.current });
-    } catch (e) {
-      setLastReport({ pushed: 0, pulled: 0, merged: 0, conflicts: [], errors: [errText(e)] });
-    } finally {
-      syncingRef.current = false;
-      setSyncing(false);
-    }
-  }, [client, vault, io, refreshFiles, persist]);
-
-  /** 只拉取：把服务器上的变更拉到本机 */
-  const doDownload = useCallback(async () => {
-    if (!client || !vault || syncingRef.current) return;
-    syncingRef.current = true;
-    setSyncing(true);
-    try {
-      const report = await pullOnly(client, vault, io, stateRef.current.account!.deviceId, vault.localPath ?? '');
-      setLastReport(report);
-      await refreshFiles();
-      if (currentPath) {
-        try {
-          setDoc(await io.read(vault.localPath ?? '', currentPath));
-        } catch {
-          setCurrentPath(null);
-          setDoc(null);
-        }
-      }
-      persist({ ...stateRef.current });
-    } catch (e) {
-      setLastReport({ pushed: 0, pulled: 0, merged: 0, conflicts: [], errors: [errText(e)] });
-    } finally {
-      syncingRef.current = false;
-      setSyncing(false);
-    }
-  }, [client, vault, io, refreshFiles, persist, currentPath]);
+  const {
+    syncing,
+    lastReport,
+    setLastReport,
+    sync: doSync,
+    upload: doUpload,
+    download: doDownload,
+  } = useSyncEngine({
+    client,
+    vault: vault ?? null,
+    io,
+    deviceId: state.account?.deviceId,
+    refresh: refreshFiles,
+    persist: () => persist({ ...stateRef.current }),
+    afterPull,
+    errText,
+  });
 
   // ---------- 登录 / 注册 ----------
 
@@ -557,6 +414,16 @@ export default function App() {
     [vault, io, toast]
   );
 
+  /** 多标签页（v0.7.8：整块搬进 hooks/useTabs） */
+  const onTabsEmpty = useCallback(() => {
+    setCurrentPath(null);
+    setDoc(null);
+  }, []);
+  const { openTabs, activeTab, openInTab: openFileInTab, closeTab, remap: remapTabs } = useTabs({
+    openFile,
+    onEmpty: onTabsEmpty,
+  });
+
   /**
    * v0.4.0 T3：标题跟随——编辑防抖落盘后，若正文首个 H1 与当前文件名不一致，
    * 自动把文件重命名为标题（同目录内、清洗非法字符）。
@@ -574,6 +441,8 @@ export default function App() {
         await io.write(vault.localPath ?? '', target, text);
         await io.remove(vault.localPath ?? '', path);
         setCurrentPath(target);
+        // 标签里存的还是旧路径，不改就会指向一个已经不存在的文件
+        remapTabs([{ from: path, to: target }]);
         setDoc(text);
         await refreshFiles();
         toast(`已按标题重命名：${path.split('/').pop()} → ${target.split('/').pop()}`, 'ok');
@@ -582,7 +451,7 @@ export default function App() {
         // 改名失败不影响编辑主流程
       }
     },
-    [vault, io, refreshFiles, doSync, toast]
+    [vault, io, refreshFiles, doSync, toast, remapTabs]
   );
 
   const onEdit = useCallback(
@@ -672,54 +541,6 @@ export default function App() {
     [vault, io, files, refreshFiles, doSync, prompt, toast]
   );
 
-  /** v0.5.0 U2：多标签页（打开的笔记路径列表 + 当前激活），持久化 */
-  const [openTabs, setOpenTabs] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('ivnote.tabs') ?? '[]') as string[];
-    } catch {
-      return [];
-    }
-  });
-  const [activeTab, setActiveTab] = useState<string | null>(
-    () => localStorage.getItem('ivnote.activeTab')
-  );
-  useEffect(() => {
-    localStorage.setItem('ivnote.tabs', JSON.stringify(openTabs));
-    if (activeTab) localStorage.setItem('ivnote.activeTab', activeTab);
-    else localStorage.removeItem('ivnote.activeTab');
-  }, [openTabs, activeTab]);
-
-  /** 打开笔记：确保标签存在并激活（包装 openFile） */
-  const openFileInTab = useCallback(
-    async (path: string) => {
-      setOpenTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
-      setActiveTab(path);
-      await openFile(path);
-    },
-    [openFile]
-  );
-
-  /** 关闭标签：若是当前标签则切到相邻标签 */
-  const closeTab = useCallback(
-    (path: string) => {
-      setOpenTabs((tabs) => {
-        const idx = tabs.indexOf(path);
-        const next = tabs.filter((t) => t !== path);
-        setActiveTab((cur) => {
-          if (cur !== path) return cur;
-          const fallback = next[Math.min(idx, next.length - 1)] ?? null;
-          if (fallback) void openFile(fallback);
-          else {
-            setCurrentPath(null);
-            setDoc(null);
-          }
-          return fallback;
-        });
-        return next;
-      });
-    },
-    [openFile]
-  );
 
   /** v0.7.3 P1：重命名笔记（移动端长按菜单；同名冲突自动序号） */
   const onRenameFile = useCallback(
@@ -744,6 +565,7 @@ export default function App() {
         await io.write(vault.localPath ?? '', final, content);
         await io.remove(vault.localPath ?? '', path);
         if (currentPath === path) setCurrentPath(final);
+        remapTabs([{ from: path, to: final }]);
         await refreshFiles();
         void doSync();
         toast(`已重命名：${titleOfPath(path)} → ${titleOfPath(final)}`, 'ok');
@@ -751,7 +573,7 @@ export default function App() {
         toast(`重命名失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, refreshFiles, doSync, toast]
+    [vault, io, currentPath, refreshFiles, doSync, toast, remapTabs]
   );
 
   /**
@@ -771,7 +593,7 @@ export default function App() {
       if (!vault) return;
       const root = vault.localPath ?? '';
       // 重名消解要看**全部**已知路径（.md / .pdf / .keep / 附件），只看 files 会漏判
-      const all = [...metasRef.current.keys()].filter((p) => !p.startsWith('.trash/'));
+      const all = allPaths();
       const ops = planMove(src, destDir, all, isDir);
       if (!ops) return;
       try {
@@ -782,8 +604,7 @@ export default function App() {
         }
         // 正在打开的文件被移走了：标签页与编辑区必须跟着换路径
         setCurrentPath((cur) => remapPath(cur, ops));
-        setActiveTab((cur) => remapPath(cur, ops));
-        setOpenTabs((tabs) => tabs.map((t) => remapPath(t, ops) ?? t));
+        remapTabs(ops);
         await refreshFiles();
         void doSync();
         const label = destDir || '库根目录';
@@ -798,7 +619,7 @@ export default function App() {
         await refreshFiles();
       }
     },
-    [vault, io, refreshFiles, doSync, toast]
+    [vault, io, allPaths, refreshFiles, doSync, toast]
   );
 
   const onDeleteFile = useCallback(
@@ -813,11 +634,10 @@ export default function App() {
       });
       if (!ok) return;
       try {
-        // v0.4.0 T5：移入回收站而非直接物理删除
-        // v0.5.0：目录结构编码进文件名（sub/b.md → sub__b.md），恢复时可还原
-        const base = path.replaceAll('/', '__');
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        let trashRel = `.trash/${stamp}-${base}`;
+        // 移入回收站而非物理删除；目录结构编码进文件名（sub/b.md → sub__b.md），
+        // 恢复时由 useTrash 的 originalPathOf 反解。两处必须用同一套规则，
+        // 所以路径生成收在 hooks/useTrash 里，不再在这儿手拼。
+        let trashRel = trashPathFor(path);
         while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
           trashRel = trashRel.replace(/(\.md)$/i, `-1$1`);
         }
@@ -841,44 +661,16 @@ export default function App() {
    * v0.4.0 T5：回收站。
    * 列出 .trash/ 下全部条目；支持恢复（移回原目录）与彻底删除。
    */
-  const [trashList, setTrashList] = useState<string[]>([]);
-  const [showTrash, setShowTrash] = useState(false);
+  const trash = useTrash({
+    io,
+    vaultPath: vault?.localPath ?? (vault ? '' : null),
+    refreshFiles,
+    sync: () => void doSync(),
+    toast,
+    confirm,
+    errText,
+  });
 
-  const openTrash = useCallback(async () => {
-    if (!vault) return;
-    try {
-      const all = (await io.list(vault.localPath ?? '')).filter((p) => p.startsWith('.trash/'));
-      setTrashList(all);
-      setShowTrash(true);
-    } catch (e) {
-      toast(`读取回收站失败：${errText(e)}`, 'error');
-    }
-  }, [vault, io, toast]);
-
-  const restoreFromTrash = useCallback(
-    async (trashPath: string) => {
-      if (!vault) return;
-      // 文件名格式：时间戳-原路径（目录用 __ 编码）→ 还原完整相对路径
-      const base = trashPath.split('/').pop() ?? '';
-      const original = base.replace(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-/, '').replaceAll('__', '/');
-      try {
-        if (await io.exists(vault.localPath ?? '', original)) {
-          toast(`恢复失败：${original} 已存在同名笔记`, 'error');
-          return;
-        }
-        const content = await io.read(vault.localPath ?? '', trashPath);
-        await io.write(vault.localPath ?? '', original, content);
-        await io.remove(vault.localPath ?? '', trashPath);
-        setTrashList((l) => l.filter((p) => p !== trashPath));
-        await refreshFiles();
-        void doSync();
-        toast(`已恢复：${original}`, 'ok');
-      } catch (e) {
-        toast(`恢复失败：${errText(e)}`, 'error');
-      }
-    },
-    [vault, io, refreshFiles, doSync, toast]
-  );
 
   /** v0.6.1 H7c：冲突待处理队列（conflict 副本路径列表，从最近同步报告收集） */
   const [showConflict, setShowConflict] = useState(false);
@@ -981,27 +773,6 @@ export default function App() {
     [vault, io, currentPath, refreshFiles, doSync, toast]
   );
 
-  const purgeFromTrash = useCallback(
-    async (trashPath: string) => {
-      if (!vault) return;
-      const ok = await confirm({
-        title: '彻底删除',
-        description: `${trashPath} 将被永久删除，不可恢复。`,
-        okText: '永久删除',
-        danger: true,
-      });
-      if (!ok) return;
-      try {
-        await io.remove(vault.localPath ?? '', trashPath);
-        setTrashList((l) => l.filter((p) => p !== trashPath));
-        await refreshFiles();
-        void doSync();
-      } catch (e) {
-        toast(`删除失败：${errText(e)}`, 'error');
-      }
-    },
-    [vault, io, refreshFiles, doSync, confirm, toast]
-  );
 
   // ---------- v0.3.4：插图 / 图片解析 / PDF ----------
 
@@ -1269,8 +1040,6 @@ export default function App() {
     setShowLogin(false);
     setCurrentPath(null);
     setDoc(null);
-    setFiles([]);
-    setPdfs([]);
     setLastReport(null);
   }, []);
 
@@ -1411,11 +1180,11 @@ export default function App() {
           run: () => setTheme(theme === 'light' ? 'dark' : 'light'),
         },
         hasAccountFlag ? { id: 'add-device', label: '添加设备（配对码）', run: () => void showPairCode() } : null,
-        onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void openTrash() } : null,
+        onOpenTrashFlag ? { id: 'trash', label: '打开回收站', run: () => void trash.reload() } : null,
         // v0.7.2：应用内更新入口（手动检查）
-        { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: () => void runUpdateCheck(false) },
+        { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: checkUpdateNow },
       ].filter((c): c is CommandItem => c !== null),
-    [onCreateNote, onCreateFolder, onImportObsidian, openDailyNote, newFromTemplate, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, openTrash, appVersion, runUpdateCheck]
+    [onCreateNote, onCreateFolder, onImportObsidian, openDailyNote, newFromTemplate, theme, hasAccountFlag, onOpenTrashFlag, showPairCode, trash, appVersion, checkUpdateNow]
   );
 
   // ---------- 渲染 ----------
@@ -1500,7 +1269,7 @@ export default function App() {
           onDeleteFile={(p) => void onDeleteFile(p)}
           onRenameFile={(p, name) => void onRenameFile(p, name)}
           backlinks={wikiLinks.back}
-          onCheckUpdate={() => void runUpdateCheck(false)}
+          onCheckUpdate={checkUpdateNow}
           onSync={() => void doSync()}
           onCreateVault={createVault}
           theme={theme}
@@ -1510,7 +1279,7 @@ export default function App() {
           onOpenLogin={() => setShowLogin(true)}
           syncDisabled={!state.account}
           sortMode={sortMode}
-          onSortChange={onSortChange}
+          onSortChange={setSortMode}
           onOpenPdf={(p) => void onOpenPdf(p)}
           onInsertImage={onInsertImage}
           resolveImage={resolveImage}
@@ -1549,7 +1318,7 @@ export default function App() {
           onOpenLogin={() => setShowLogin(true)}
           syncDisabled={!state.account}
           sortMode={sortMode}
-          onSortChange={onSortChange}
+          onSortChange={setSortMode}
           onOpenPdf={() => undefined}
           pdfView={null}
           onClosePdf={onClosePdf}
@@ -1612,15 +1381,15 @@ export default function App() {
         onOpenLogin={() => setShowLogin(true)}
         syncDisabled={!state.account}
         sortMode={sortMode}
-        onSortChange={onSortChange}
+        onSortChange={setSortMode}
         onOpenPdf={(p) => void onOpenPdf(p)}
         pdfView={pdfView}
         onClosePdf={onClosePdf}
         onInsertImage={onInsertImage}
         resolveImage={resolveImage}
         importProgress={importProgress}
-        trashCount={trashList.length}
-        onOpenTrash={() => void openTrash()}
+        trashCount={trash.list.length}
+        onOpenTrash={() => void trash.reload()}
         collapsedDirs={collapsedDirs}
         onToggleDir={toggleDir}
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
@@ -1779,23 +1548,23 @@ export default function App() {
           </div>
         </div>
       )}
-      {showTrash && (
-        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowTrash(false)}>
+      {trash.open && (
+        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && trash.setOpen(false)}>
           <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="回收站">
             <h2 className="dlg-title">回收站</h2>
-            {trashList.length === 0 ? (
+            {trash.list.length === 0 ? (
               <p className="dlg-desc">回收站是空的。</p>
             ) : (
               <ul className="trash-list">
-                {trashList.map((p) => (
+                {trash.list.map((p) => (
                   <li key={p} className="trash-item">
                     <span className="ti-name" title={p}>
                       {p.replace(/^\.trash\//, '')}
                     </span>
-                    <button className="btn ghost" onClick={() => void restoreFromTrash(p)}>
+                    <button className="btn ghost" onClick={() => void trash.restore(p)}>
                       恢复
                     </button>
-                    <button className="btn danger" onClick={() => void purgeFromTrash(p)}>
+                    <button className="btn danger" onClick={() => void trash.purge(p)}>
                       彻底删除
                     </button>
                   </li>
@@ -1803,7 +1572,7 @@ export default function App() {
               </ul>
             )}
             <div className="dlg-actions">
-              <button className="btn primary" onClick={() => setShowTrash(false)}>
+              <button className="btn primary" onClick={() => trash.setOpen(false)}>
                 关闭
               </button>
             </div>

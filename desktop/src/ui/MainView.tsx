@@ -27,7 +27,9 @@ export function buildTree(paths: string[]): Map<string, FileNode[]> {
   return map;
 }
 
-export type SortMode = 'name' | 'mtime';
+// 排序方式的**唯一定义**在数据层。UI 只转发类型，避免两处各写一份、日后漂移。
+export type { SortMode } from '../hooks/useVaultFiles';
+import type { SortMode } from '../hooks/useVaultFiles';
 
 interface Props {
   vault: VaultMeta;

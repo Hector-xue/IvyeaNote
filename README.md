@@ -72,6 +72,15 @@ ivyea note/
   - 验证方式：headless Chrome 加载**真实构建产物**，浅色/深色两套各出图核对，并脚本检查删除旧 `:root` 后没有留下未定义的 CSS 变量。
   - 门禁：oxlint 0 error / tsc OK / vitest 185/185 / vite build OK。
 
+- [x] v0.7.8 结构重构（第一批，2026-08-29）：App.tsx 从 1817 行 / 32 处 useState 降到 **1586 行 / 20 处**，抽出 5 个 hook。这不是为了行数好看——v0.7.4「移动端反链区块从未显示过」正是巨型组件的产物：数据流没有边界，漏一根线就静默失效且测不出来。
+  - `hooks/useVaultFiles`：**数据咽喉**。一次 `listMeta` 同时产出侧栏列表、PDF 列表、索引指纹，杜绝「有人忘了更新其中一样」；顺手把排序从「重扫盘」改成「派生」。
+  - `hooks/useSyncEngine`：把 doSync/doUpload/doDownload 三个几乎一模一样的函数（重入保护、状态置位、错误落报告全是复制粘贴）收成一个 `run(mode)`；`account!` 硬断言换成安全取值。
+  - `hooks/useTabs`：标签页 + **路径重映射**。顺带修了一个真 bug——重命名（含标题跟随自动改名）只改 `currentPath`，标签里还留着旧路径，点上去是个不存在的文件；此前只有拖拽移动那条路径记得处理。11 条用例锁住。
+  - `hooks/useTrash`：回收站路径的生成与反解收在一处（此前 `onDeleteFile` 手拼、恢复处手解，两边规则必须一致却分散在三个地方）。补了「生成→反解严格互逆」的用例。
+  - `hooks/useUpdater`：应用内更新整块搬走，顺便消掉一处 TDZ 隐患（effect 引用了定义在它之后的 `const`，靠 `eslint-disable` 压着）。
+  - `SortMode` 归一到数据层，UI 只转发类型，避免两处各写一份日后漂移。
+  - 门禁：oxlint 0 error / tsc OK / vitest **200/200**（+15） / vite build OK。
+
 服务端本地运行：
 
 ```bash

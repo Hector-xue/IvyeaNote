@@ -99,3 +99,30 @@ describe('normalizeDir', () => {
     expect(normalizeDir('/')).toBe('');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 回收站路径：生成与反解必须严格互逆，否则「删了能恢复」这条就断了
+
+import { originalPathOf, trashPathFor } from '../hooks/useTrash';
+
+describe('回收站路径', () => {
+  const at = new Date('2026-08-29T11:22:33.000Z');
+
+  it('生成：目录分隔符编码成 __，带时间戳前缀', () => {
+    expect(trashPathFor('AI/agent.md', at)).toBe('.trash/2026-08-29T11-22-33-AI__agent.md');
+  });
+
+  it('反解：能还原出原始相对路径', () => {
+    expect(originalPathOf('.trash/2026-08-29T11-22-33-AI__agent.md')).toBe('AI/agent.md');
+  });
+
+  it('生成 → 反解 严格互逆（含多层目录与中文名）', () => {
+    for (const p of ['a.md', 'AI/agent.md', '日记/2026/08/29.md', '文章/引流 笔记.md']) {
+      expect(originalPathOf(trashPathFor(p, at))).toBe(p);
+    }
+  });
+
+  it('根目录文件反解后不带前导斜杠', () => {
+    expect(originalPathOf(trashPathFor('a.md', at))).toBe('a.md');
+  });
+});
