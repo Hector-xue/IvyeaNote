@@ -34,9 +34,16 @@ import {
 } from './lib/appearance';
 import { loadPrefs, savePrefs, type Prefs } from './lib/prefs';
 import { SettingsView } from './ui/SettingsView';
+import { SyncStatusPanel } from './ui/SyncStatusPanel';
 import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { invertMoveOps, planMove, remapPath } from './lib/movePath';
+import {
+  classifyVault,
+  originalOfConflict,
+  summarize,
+  type FileSyncStatus,
+} from './lib/syncStatus';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import {
   loadState,
@@ -597,7 +604,9 @@ export default function App() {
           // v0.7.5：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
           // 不触发 refreshFiles，光靠咽喉对账的话离线写作时反链/搜索会滞后一拍。
           noteIndex.touch(path, text);
-          void doSync();
+          // 「自动同步」关掉时，落盘后也不再顺手推——设置里写的是「关掉后只能手动同步」，
+          // 只挡住启动/回前台/轮询那三条而放行这一条，说明就成了假话（v0.8.6 的疏漏）。
+          if (prefs.autoSync) void doSync();
           // v0.4.0：标题跟随（在写盘之后执行，避免和防抖写盘竞争）
           void maybeRenameToH1(path, text);
         } catch (e) {
@@ -607,7 +616,7 @@ export default function App() {
         }
       }, 800));
     },
-    [vault, io, currentPath, splitPath, doSync, maybeRenameToH1, noteIndex]
+    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex]
   );
 
   /**
@@ -905,6 +914,11 @@ export default function App() {
   const [mobileSearchSeed, setMobileSearchSeed] = useState<{ text: string; n: number } | null>(null);
   /** v0.8.4 E7：待跳转的行（打开某篇 + 定位）。带序号，连点同一行也要重新跳 */
   const [jumpTo, setJumpTo] = useState<{ path: string; line: number; n: number } | null>(null);
+  /** v0.9.2 P4.3：同步状态面板 */
+  const [showSyncStatus, setShowSyncStatus] = useState(false);
+  const [syncStatusList, setSyncStatusList] = useState<FileSyncStatus[]>([]);
+  const [syncStatusBusy, setSyncStatusBusy] = useState(false);
+
   /** 「移动到…」选择器：桌面右键与移动端长按共用 */
   const [moving, setMoving] = useState<{ path: string; isDir: boolean } | null>(null);
   /** v0.7.1 F8: graph view */
@@ -927,8 +941,12 @@ export default function App() {
     }
   }, [client, toast]);
   const conflictFiles = lastReport?.conflicts ?? [];
-  /** 从副本名反解原路径：xxx.conflict-<ts>.md -> xxx.md */
-  const originalOf = (copy: string) => copy.replace(/\.conflict-\d{4}-\d{2}-\d{2}T[\d-]+\.md$/, '');
+  /**
+   * 从副本名反解原路径。原来这里自己写了一份正则且**把 .md 一起吃掉了**
+   * （`replace(SUFFIX, '')`），「采用副本」于是写进一个没有扩展名的新文件、
+   * 原笔记纹丝不动。现在与同步状态面板共用 lib/syncStatus 的那一份。
+   */
+  const originalOf = originalOfConflict;
 
   /** 裁决：保留我的（原文件内容胜出），删掉副本 */
   const resolveKeepMine = useCallback(
@@ -1085,6 +1103,34 @@ export default function App() {
    * v0.8.0 P1.4：命令面板 + 全局快捷键整块搬进 `hooks/useCommands`。
    * 这里只负责把「能干什么」交出去——hook 不认识 vault，也不碰 IO。
    */
+  /**
+   * 现算每文件的同步状态。要读全部正文，所以**只在打开面板/点重新统计时算**，
+   * 不挂在渲染里——不然每敲一个字都要把整个库读一遍。
+   */
+  const refreshSyncStatus = useCallback(async () => {
+    if (!vault) return;
+    setSyncStatusBusy(true);
+    try {
+      const root = vault.localPath ?? '';
+      const contents = new Map<string, string>();
+      for (const p of files) {
+        try {
+          contents.set(p, await io.read(root, p));
+        } catch {
+          // 读不出来的单篇跳过，不让整次统计失败
+        }
+      }
+      setSyncStatusList(classifyVault(contents, vault));
+    } finally {
+      setSyncStatusBusy(false);
+    }
+  }, [vault, io, files]);
+
+  const openSyncStatus = useCallback(() => {
+    setShowSyncStatus(true);
+    void refreshSyncStatus();
+  }, [refreshSyncStatus]);
+
   const commandActions = useMemo(
     () => ({
       onCreateNote: () => void onCreateNote(''),
@@ -1093,6 +1139,7 @@ export default function App() {
       onOpenDaily: () => void openDailyNote(),
       onOpenGraph: () => setShowGraph(true),
       onToggleSplit: () => (splitPath ? closeSplit() : void openSplit()),
+      onOpenSyncStatus: openSyncStatus,
       onNewFromTemplate: () => void newFromTemplate(),
       onToggleTheme: toggleTheme,
       onOpenSettings: () => setShowSettings(true),
@@ -1110,6 +1157,7 @@ export default function App() {
       splitPath,
       closeSplit,
       openSplit,
+      openSyncStatus,
       checkUpdateNow,
       showPairCode,
       trash,
@@ -1174,6 +1222,25 @@ export default function App() {
           }}
           onOpenLogin={() => setShowLogin(true)}
         />
+        {showSyncStatus && (
+          <SyncStatusPanel
+            loading={syncStatusBusy}
+            list={syncStatusList}
+            summary={summarize(syncStatusList)}
+            errors={lastReport?.errors ?? []}
+            syncing={syncing}
+            onRefresh={() => void refreshSyncStatus()}
+            onSyncNow={async () => {
+                await doSync();
+                await refreshSyncStatus();
+            }}
+            onOpen={(p) => {
+                setShowSyncStatus(false);
+                void openFileInTab(p);
+            }}
+            onClose={() => setShowSyncStatus(false)}
+          />
+        )}
         {dialogEl}
         {toastEl}
       </div>
@@ -1358,6 +1425,7 @@ export default function App() {
         jumpTo={jumpTo}
         defaultView={prefs.defaultView}
         livePreviewOn={prefs.livePreview}
+        onOpenSyncStatus={openSyncStatus}
         onOpenAt={(p, line) => {
           void openFileInTab(p);
           setJumpTo((cur) => ({ path: p, line, n: (cur?.n ?? 0) + 1 }));
@@ -1597,6 +1665,25 @@ export default function App() {
             setMoving(null);
             void onMovePath(m.path, destDir, m.isDir);
           }}
+        />
+      )}
+      {showSyncStatus && (
+        <SyncStatusPanel
+          loading={syncStatusBusy}
+          list={syncStatusList}
+          summary={summarize(syncStatusList)}
+          errors={lastReport?.errors ?? []}
+          syncing={syncing}
+          onRefresh={() => void refreshSyncStatus()}
+          onSyncNow={async () => {
+            await doSync();
+            await refreshSyncStatus();
+          }}
+          onOpen={(p) => {
+            setShowSyncStatus(false);
+            void openFileInTab(p);
+          }}
+          onClose={() => setShowSyncStatus(false)}
         />
       )}
       {dialogEl}

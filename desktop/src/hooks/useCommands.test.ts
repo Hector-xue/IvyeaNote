@@ -20,6 +20,7 @@ function makeActions(over: Partial<CommandActions> = {}): CommandActions {
     onOpenDaily: vi.fn(),
     onOpenGraph: vi.fn(),
     onToggleSplit: vi.fn(),
+    onOpenSyncStatus: vi.fn(),
     onNewFromTemplate: vi.fn(),
     onToggleTheme: vi.fn(),
     onOpenSettings: vi.fn(),
@@ -152,6 +153,7 @@ describe('命令表', () => {
     run('daily');
     run('graph');
     run('split');
+    run('sync-status');
     run('from-template');
     run('toggle-theme');
     run('settings');
@@ -164,6 +166,7 @@ describe('命令表', () => {
     expect(actions.onOpenDaily).toHaveBeenCalled();
     expect(actions.onOpenGraph).toHaveBeenCalled();
     expect(actions.onToggleSplit).toHaveBeenCalled();
+    expect(actions.onOpenSyncStatus).toHaveBeenCalled();
     expect(actions.onNewFromTemplate).toHaveBeenCalled();
     expect(actions.onToggleTheme).toHaveBeenCalled();
     expect(actions.onOpenSettings).toHaveBeenCalled();

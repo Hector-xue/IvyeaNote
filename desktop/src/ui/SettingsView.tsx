@@ -268,7 +268,7 @@ export function SettingsView(props: Props) {
                 </div>
                 <Toggle
                   label="自动同步"
-                  hint="启动时拉一次、窗口回到前台时拉一次、每 60 秒兜底一次。关掉后只能手动同步"
+                  hint="启动时、窗口回到前台时、每 60 秒，以及每次编辑落盘后各同步一次。关掉后一次都不碰服务器，只能手动点「同步」"
                   checked={p.autoSync}
                   onChange={(x) => setPref({ autoSync: x })}
                 />

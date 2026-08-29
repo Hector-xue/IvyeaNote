@@ -21,6 +21,8 @@ export interface CommandActions {
   onOpenGraph(): void;
   /** E9：开/关编辑区分栏 */
   onToggleSplit(): void;
+  /** P4.3：同步状态面板 */
+  onOpenSyncStatus(): void;
   onNewFromTemplate(): void;
   onToggleTheme(): void;
   onOpenSettings(): void;
@@ -96,6 +98,9 @@ export function useCommands(deps: CommandsDeps): Commands {
         { id: 'import-obsidian', label: '从 Obsidian 导入', run: actions.onImportObsidian },
         { id: 'daily', label: '打开今日笔记', run: actions.onOpenDaily },
         { id: 'graph', label: '打开图谱视图', run: actions.onOpenGraph },
+        actions.onOpenTrash
+          ? { id: 'sync-status', label: '同步状态（哪些还没上去）', run: actions.onOpenSyncStatus }
+          : null,
         {
           id: 'split',
           label: splitOpen ? '关闭左右分栏' : '左右分栏（当前笔记的实时预览）',

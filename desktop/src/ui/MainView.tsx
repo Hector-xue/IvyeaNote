@@ -50,6 +50,8 @@ interface Props {
   onRequestMove?(path: string, isDir: boolean): void;
   /** v0.8.4 E7：侧栏搜索点命中行 → 打开并跳到那一行 */
   onOpenAt?(path: string, line: number): void;
+  /** P4.3：点同步报告 → 打开同步状态面板（报告只说上次干了什么，面板说现在还差什么） */
+  onOpenSyncStatus?(): void;
   jumpTo?: { path: string; line: number; n: number } | null;
   /** v0.8.6 E10：编辑器行为偏好 */
   defaultView?: 'edit' | 'read';
@@ -467,12 +469,16 @@ export function MainView(props: Props) {
             </button>
           )}
           {props.lastReport && (
-            <span className={`report ${props.lastReport.errors.length > 0 ? 'has-error' : ''}`}>
+            <button
+              className={`report ${props.lastReport.errors.length > 0 ? 'has-error' : ''}`}
+              title="查看每篇笔记的同步状态"
+              onClick={props.onOpenSyncStatus}
+            >
               ↑{props.lastReport.pushed} ↓{props.lastReport.pulled}
               {props.lastReport.merged > 0 && ` · 合并${props.lastReport.merged}`}
               {props.lastReport.conflicts.length > 0 && ` · 冲突${props.lastReport.conflicts.length}`}
               {props.lastReport.errors.length > 0 && ` · ⚠ ${props.lastReport.errors[0]}`}
-            </span>
+            </button>
           )}
         </div>
         {props.pdfView ? (
