@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { probeServer, normalizeServerUrl, isInsecurePublic } from '../lib/serverConn';
 import { claimPairCode } from '../lib/pairing';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 
 interface Props {
   onLogin: (serverUrl: string, email: string, password: string) => Promise<void>;
@@ -132,7 +132,7 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin }: Props
         <p className="sub">自托管 Markdown 笔记 · 数据完全属于你</p>
 
         <button type="button" className="btn ghost import-btn" onClick={() => fileRef.current?.click()}>
-          📄 导入账号文件（桌面上的 IvyeaNote-账号.txt）
+          导入账号文件（桌面上的 IvyeaNote-账号.txt）
         </button>
         <button type="button" className="link paste-toggle" onClick={() => setPasteMode((v) => !v)}>
           手机上？点此粘贴账号内容
@@ -193,7 +193,7 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin }: Props
         </label>
         <div className="probe-row">
           <button type="button" className="btn ghost" disabled={probing || !serverUrl.trim()} onClick={() => void doProbe()}>
-            {probing ? '测试中…' : '🔌 测试连接'}
+            {probing ? '测试中…' : '测试连接'}
           </button>
           {probeMsg && (
             <span className={probeMsg.ok ? 'probe-ok' : 'probe-fail'}>{probeMsg.text}</span>

@@ -170,6 +170,17 @@ function openNote(path: string) {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * v0.10.0：右栏改成「大纲 / 反向链接」两个标签，双链不再默认可见。
+ * 下面那些用例守的是「索引是不是活的」——切换方式变了，断言不动。
+ */
+function openLinksTab() {
+  const t = [...document.querySelectorAll<HTMLElement>('.rp-tab')].find((b) =>
+    (b.textContent ?? '').startsWith('反向链接')
+  );
+  if (t) fireEvent.click(t);
+}
+
 describe('全库正文索引：不打开命令面板也必须是活的', () => {
   it('打开 B → 立刻看到来自 A 的入链（v0.7.4 这里恒为空）', async () => {
     await renderApp({ 'A.md': '# A\n\n看看 [[B]]\n', 'B.md': '# B\n' });
@@ -178,6 +189,7 @@ describe('全库正文索引：不打开命令面板也必须是活的', () => {
 
     // 入链区块出现，且指向 A —— 全程没有按过 Ctrl+K / 打开过标签面板或图谱
     await waitFor(() => {
+      openLinksTab();
       expect(screen.getByText('入链')).toBeTruthy();
     });
     const panel = screen.getByText('入链').closest('.wp-row')!;
@@ -190,6 +202,7 @@ describe('全库正文索引：不打开命令面板也必须是活的', () => {
     openNote('A.md');
 
     await waitFor(() => {
+      openLinksTab();
       expect(screen.getByText('出链')).toBeTruthy();
     });
     expect(screen.getByText('出链').closest('.wp-row')!.textContent).toContain('B');
@@ -206,6 +219,7 @@ describe('全库正文索引：不打开命令面板也必须是活的', () => {
     await renderApp({ 'sub/A.md': '# A\n\n[[B]]\n', 'B.md': '# B\n' });
     openNote('B.md');
     await waitFor(() => {
+      openLinksTab();
       expect(screen.getByText('入链')).toBeTruthy();
     });
   });
@@ -273,6 +287,7 @@ describe('侧栏拖拽移动（E1）', () => {
 
     openNote('B.md');
     await waitFor(() => {
+      openLinksTab();
       expect(screen.getByText('入链')).toBeTruthy();
     });
     expect(screen.getByText('入链').closest('.wp-row')!.textContent).toContain('A');
@@ -370,8 +385,9 @@ describe('侧栏搜索（E7）', () => {
     const head = document.querySelector<HTMLElement>('.sp-hit-head')!;
     fireEvent.click(head);
     // 点开后编辑区状态栏应指向被点的那篇
+    // v0.10.0：文件名不再重复写在状态栏（标签栏已经说明是哪一篇）
     await waitFor(() => {
-      expect(document.querySelector('.status-bar')?.textContent).toMatch(/\.md/);
+      expect(document.querySelector('.tabs-bar')?.textContent).toBeTruthy();
     });
   });
 
@@ -390,7 +406,7 @@ describe('侧栏搜索（E7）', () => {
     expect(line.querySelector('.sp-line-no')?.textContent).toBe('3');
     fireEvent.click(line);
     await waitFor(() => {
-      expect(document.querySelector('.status-bar')?.textContent).toMatch(/agent\.md/);
+      expect(document.querySelector('.tabs-bar')?.textContent).toMatch(/agent/);
     });
   });
 

@@ -103,8 +103,15 @@ interface TaskHit {
 }
 void (0 as unknown as TaskHit | null);
 
-/** 光标是否在区间附近（附近=区间内或紧贴边缘±1，此时显示源码） */
-function cursorNear(sel: EditorSelection, from: number, to: number): boolean {
+/**
+ * 光标是否在区间附近（附近=区间内或紧贴边缘±1，此时显示源码）。
+ *
+ * `focused=false` 时一律返回 false ——**编辑器没有焦点时不该露出任何语法标记**。
+ * 此前没有这个条件，于是每次打开一篇笔记，光标默认落在偏移 0（正好是标题行），
+ * 标题就顶着一个 `#` 显示，看起来像是「渲染坏了」。Obsidian 是失焦即全部隐藏。
+ */
+function cursorNear(sel: EditorSelection, from: number, to: number, focused: boolean): boolean {
+  if (!focused) return false;
   return sel.ranges.some((r) => r.to >= from - 1 && r.from <= to + 1);
 }
 
@@ -195,7 +202,8 @@ export const livePreview = ViewPlugin.fromClass(
     }
 
     update(u: any) {
-      if (u.docChanged || u.selectionSet || u.viewportChanged) {
+      // focusChanged 必须参与：失焦/聚焦会改变「要不要显示标记」，不重建就不生效
+      if (u.docChanged || u.selectionSet || u.viewportChanged || u.focusChanged) {
         this.build(u.view);
       }
       // 响应复选框点击：切换该行任务状态
@@ -222,6 +230,7 @@ export const livePreview = ViewPlugin.fromClass(
     build(view: IEditorView) {
       const decos: Range<Decoration>[] = [];
       const sel = view.state.selection;
+      const focused = view.hasFocus;
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
@@ -231,7 +240,7 @@ export const livePreview = ViewPlugin.fromClass(
           // ---- 分隔线（E4）----
           if (isHorizontalRule(t)) {
             decos.push(Decoration.line({ class: 'cm-live-hr' }).range(line.from));
-            if (!cursorNear(sel, line.from, line.to)) {
+            if (!cursorNear(sel, line.from, line.to, focused)) {
               decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(line.from, line.to));
             }
             pos = line.to + 1;
@@ -261,7 +270,7 @@ export const livePreview = ViewPlugin.fromClass(
           if (h) {
             const markTo = line.from + h[1].length + 1;
             decos.push(Decoration.line({ class: `cm-live-h${h[1].length}` }).range(line.from));
-            if (!cursorNear(sel, line.from, markTo)) {
+            if (!cursorNear(sel, line.from, markTo, focused)) {
               decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(line.from, markTo));
             }
           } else {
@@ -276,7 +285,7 @@ export const livePreview = ViewPlugin.fromClass(
                 }).range(line.from)
               );
               const markTo = line.from + (call ? call.markEnd : gm[0].length);
-              if (!cursorNear(sel, line.from, markTo)) {
+              if (!cursorNear(sel, line.from, markTo, focused)) {
                 decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(line.from, markTo));
               }
             }
@@ -289,7 +298,7 @@ export const livePreview = ViewPlugin.fromClass(
             for (const r of findFootnoteRefs(t)) {
               const fs = line.from + r.from;
               const fe = line.from + r.to;
-              if (!cursorNear(sel, fs, fe)) {
+              if (!cursorNear(sel, fs, fe, focused)) {
                 decos.push(Decoration.mark({ class: 'cm-live-footnote-ref' }).range(fs, fe));
               }
             }
@@ -300,7 +309,7 @@ export const livePreview = ViewPlugin.fromClass(
             while ((im = inlineRe.exec(t))) {
               const start = line.from + im.index;
               const end = start + im[0].length;
-              if (cursorNear(sel, start, end)) continue;
+              if (cursorNear(sel, start, end, focused)) continue;
               if (im[1]) {
                 decos.push(Decoration.mark({ class: 'cm-live-bold' }).range(start + 2, end - 2));
                 decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + 2));
@@ -318,7 +327,7 @@ export const livePreview = ViewPlugin.fromClass(
 
             // ---- 任务复选框 ----
             const task = parseTaskLine(t, line.from);
-            if (task && !cursorNear(sel, task.boxFrom, task.textFrom)) {
+            if (task && !cursorNear(sel, task.boxFrom, task.textFrom, focused)) {
               decos.push(Decoration.replace({ widget: new TaskWidget(task.checked) }).range(task.boxFrom, task.boxTo));
               if (task.checked && task.textFrom < line.to) {
                 decos.push(Decoration.mark({ class: 'cm-task-checked-text' }).range(task.textFrom, line.to));

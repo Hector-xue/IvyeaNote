@@ -3,8 +3,9 @@
  * 三张卡：打开本地文件夹 / 从 Obsidian 导入 / 新建空白库。
  * 全部免登录可用；仅当用户主动点「登录同步」才进入登录流程。
  */
+import { RibbonIcon, type IconName } from './Icons';
 import { useCallback, useState } from 'react';
-import logoUrl from '../assets/logo.svg';
+import logoUrl from '../assets/logo.png';
 
 export interface WelcomeActions {
   onOpenFolder(): void;
@@ -32,22 +33,22 @@ export function WelcomeView(props: WelcomeActions) {
 
   if (dismissed) return null;
 
-  const cards: { icon: string; title: string; desc: string; action: () => void; primary?: boolean }[] = [
+  const cards: { icon: IconName; title: string; desc: string; action: () => void; primary?: boolean }[] = [
     {
-      icon: '📂',
+      icon: 'folder' as const,
       title: '打开本地文件夹',
       desc: '选择电脑上的任意文件夹，直接作为笔记库使用',
       action: props.onOpenFolder,
       primary: true,
     },
     {
-      icon: '📥',
+      icon: 'file-plus' as const,
       title: '从 Obsidian 导入',
       desc: '选择你的 Obsidian 库文件夹，一键搬进来',
       action: props.onImportObsidian,
     },
     {
-      icon: '✨',
+      icon: 'plus' as const,
       title: '新建空白库',
       desc: '从零开始，创建一个全新的笔记空间',
       action: props.onCreateBlank,
@@ -63,7 +64,9 @@ export function WelcomeView(props: WelcomeActions) {
         <div className="welcome-cards">
           {cards.map((c) => (
             <button key={c.title} className={`welcome-item ${c.primary ? 'primary' : ''}`} onClick={wrap(c.action)}>
-              <span className="wi-icon">{c.icon}</span>
+              <span className="wi-icon">
+                <RibbonIcon name={c.icon} size={22} />
+              </span>
               <span className="wi-title">{c.title}</span>
               <span className="wi-desc">{c.desc}</span>
             </button>

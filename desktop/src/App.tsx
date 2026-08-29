@@ -633,12 +633,19 @@ export default function App() {
         files.filter((f) => f.startsWith(prefix)).map((f) => f.slice(prefix.length))
       );
       const rel = `${prefix}${base}`;
-      await io.write(vault.localPath ?? '', rel, '# untitled\n\n');
+      /*
+       * v0.10.1：**不再往正文塞 `# untitled`**。标题现在由内联标题承担
+       * （文件名即标题），正文再写一行 H1 就是同一个标题出现两遍，
+       * 而且光标落上去还会露出 `#` 号。
+       */
+      await io.write(vault.localPath ?? '', rel, '');
       await refreshFiles();
-      void openFile(rel);
+      // 新建的笔记也要进标签页——此前走的是 openFile，于是「新建」出来的笔记
+      // 永远不出现在标签栏里，标签栏在只用新建的场景下根本不显示
+      void openFileInTab(rel);
       void doSync();
     },
-    [vault, files, io, refreshFiles, openFile, doSync]
+    [vault, files, io, refreshFiles, openFileInTab, doSync]
   );
 
   /** v0.5.0 U3：文件夹折叠状态（持久化） */
@@ -1422,6 +1429,7 @@ export default function App() {
         splitDoc={splitDoc}
         onOpenSplit={(p) => void openSplit(p)}
         onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
+        onRenameFile={(p, name) => void onRenameFile(p, name)}
         jumpTo={jumpTo}
         defaultView={prefs.defaultView}
         livePreviewOn={prefs.livePreview}

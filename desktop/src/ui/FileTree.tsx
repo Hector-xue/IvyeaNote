@@ -8,6 +8,7 @@
  *   悬停折叠文件夹 600ms 自动展开（Obsidian 的 spring-loaded 行为）
  */
 import { useMemo, useRef, useState } from 'react';
+import { RibbonIcon } from './Icons';
 
 export interface TreeNode {
   name: string;
@@ -152,8 +153,13 @@ export function FileTree(props: Props) {
     endDrag();
   };
 
-  const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
-    const pad = { paddingLeft: `${10 + depth * 16}px` };
+  /*
+   * v0.10.1：缩进改成**嵌套结构**而不是按 depth 算 paddingLeft。
+   * 理由是 Obsidian 那条**层级引导线**——每层一条竖线，把子项归属画出来。
+   * 靠 padding 做不出来（一个元素只能有一条 ::before），而嵌套之后
+   * 「左内边距 + 左边框」天然就是那条线，与层数无关。
+   */
+  const renderNode = (node: TreeNode): React.ReactNode => {
     if (node.type === 'dir') {
       const isOpen = !props.collapsed.has(node.path);
       const cls = [
@@ -168,7 +174,6 @@ export function FileTree(props: Props) {
         <div key={node.path} className="ft-node">
           <div
             className={cls}
-            style={pad}
             draggable={canDrag}
             onDragStart={(e) => startDrag(e, node.path, true)}
             onDragEnd={endDrag}
@@ -188,7 +193,9 @@ export function FileTree(props: Props) {
               props.onContextMenu(node, e.clientX, e.clientY);
             }}
           >
-            <span className="ft-caret">{isOpen ? '▾' : '▸'}</span>
+            <span className="ft-caret">
+              <RibbonIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={14} />
+            </span>
             <span className="ft-dir-name">{node.name}</span>
             <span className="ft-actions">
               <button
@@ -198,7 +205,7 @@ export function FileTree(props: Props) {
                   props.onNewNoteIn(node.path);
                 }}
               >
-                ＋
+                <RibbonIcon name="file-plus" size={14} />
               </button>
               <button
                 title="在此新建子文件夹"
@@ -207,11 +214,13 @@ export function FileTree(props: Props) {
                   props.onNewFolderIn(node.path);
                 }}
               >
-                ⊞
+                <RibbonIcon name="folder-plus" size={14} />
               </button>
             </span>
           </div>
-          {isOpen && node.children?.map((c) => renderNode(c, depth + 1))}
+          {isOpen && node.children && node.children.length > 0 && (
+            <div className="ft-children">{node.children.map((c) => renderNode(c))}</div>
+          )}
         </div>
       );
     }
@@ -226,7 +235,6 @@ export function FileTree(props: Props) {
       <div
         key={node.path}
         className={cls}
-        style={pad}
         draggable={canDrag}
         onDragStart={(e) => startDrag(e, node.path, false)}
         onDragEnd={endDrag}
@@ -249,7 +257,7 @@ export function FileTree(props: Props) {
               props.onDeleteFile(node.path);
             }}
           >
-            ✕
+            <RibbonIcon name="close" size={14} />
           </button>
         </span>
       </div>
@@ -267,7 +275,7 @@ export function FileTree(props: Props) {
       }}
       onDrop={(e) => dropInto(e, '')}
     >
-      {props.nodes.map((n) => renderNode(n, 0))}
+      {props.nodes.map((n) => renderNode(n))}
     </div>
   );
 }

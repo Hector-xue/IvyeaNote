@@ -8,6 +8,7 @@
  * 所以这个面板刻意**不看同步报告**：报告是「上一次同步自己说干了什么」，
  * 而这里问的是「现在到底还有什么没上去」。两者不一致时，以这里为准。
  */
+import { RibbonIcon } from './Icons';
 import { STATE_LABEL, type FileSyncStatus, type SyncSummary } from '../lib/syncStatus';
 
 interface Props {
@@ -44,7 +45,7 @@ export function SyncStatusPanel(props: Props) {
         <div className="set-head">
           <h2 className="set-title">同步状态</h2>
           <button className="icon-btn" title="关闭" onClick={props.onClose}>
-            ✕
+            <RibbonIcon name="close" size={16} />
           </button>
         </div>
 
