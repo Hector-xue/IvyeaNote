@@ -8,11 +8,12 @@
 ivyea note/
 ├── README.md            # 本文件
 ├── docs/
-│   ├── IvyeaNote-技术方案.md   # 总体方案（需求/选型/架构/同步协议/API/部署/路线图）
-│   └── IvyeaNote-优化方案.md   # v0.3.3 起的分阶段优化计划（现状诊断/目标架构/里程碑）
+│   ├── IvyeaNote-方案-v2.md    # ★ 现行方案（架构决策/现状核实/设计系统/阶段计划/Agent 融合）
+│   ├── IvyeaNote-技术方案.md   # 初始设计稿（已归档）
+│   └── IvyeaNote-优化方案.md   # v1 优化计划（已归档，被 v2 取代）
 ├── server/              # 后端：Go 同步服务（Postgres + 对象存储）
-├── desktop/             # 桌面端：Tauri 2 + React + CodeMirror 6
-├── mobile/              # 移动端：Flutter（iOS / Android）
+├── desktop/             # 桌面端 + 安卓端：Tauri 2 + React + CodeMirror 6（同一份代码）
+│   └── brand/           # 品牌资产：图标唯一源，改图标只改这里（见 brand/README.md）
 ├── shared/              # 共享内容：同步协议定义、一致性测试用例、类型定义
 ├── scripts/             # 开发/运维脚本
 └── deploy/              # 部署编排：docker-compose、备份脚本（TLS 由宿主 nginx 终结）
@@ -22,7 +23,7 @@ ivyea note/
 
 - 为什么做：Obsidian 官方同步收费且封闭，希望数据完全自持、手机电脑无缝使用。
 - 核心理念：**笔记永远是本地普通 .md 文件**，服务器只做「加密可靠的同步管道」，任何一端离线都能完整工作。
-- 从哪开始读：`docs/IvyeaNote-技术方案.md`
+- 从哪开始读：`docs/IvyeaNote-方案-v2.md`
 
 ## 当前进度
 
@@ -45,6 +46,14 @@ ivyea note/
 - [x] v0.7.3 移动端交互对标 Obsidian（2026-08-26）：长按操作单（重命名/删除）、可折叠文件树、左缘右滑呼出抽屉 + Android 返回键逐级回退、阅读模式活预览（checkbox 可勾选回写 + 图片 lightbox）、笔记内反向链接区块、heading 大纲浮层。vitest 124/124
 
 - [x] v0.7.4 热修（2026-08-27）：Android WebView 宽度报告 >768px 导致渲染成桌面布局（标签栏+工具栏）——UA 直判移动端优先；抽屉加「检查更新」按钮（原命令面板入口手机不可达）。vitest 128/128
+
+- [x] v0.8.0 P0 止血（2026-08-29）：
+  - **修复全库正文索引形同虚设**——旧实现只在打开命令面板时建一次、此后永不更新（`if (searchDocs.length > 0) return`）。后果是桌面端没按过 Ctrl+K 之前反链恒空，移动端因为没有触发入口、**v0.7.3 宣称的「反向链接区块」在真机上从未显示过**。现在索引挂在 `refreshFiles` 这唯一咽喉上做增量对账（按 mtime+size 只重读变更文件），新建/删除/重命名/移动/导入/回收站/同步拉取全部自动跟上（`lib/noteIndex.ts`）。
+  - **新增集成测试**（`src/App.integration.test.tsx`）：此前 128 个测试全是纯函数单测，抓不住「解析器对、但数据源没喂进去」这类缺陷。新用例刻意不碰命令面板，只做用户日常动作再断言渲染结果；已在 v0.7.4 代码上实测**会失败**，确认测的是真问题。
+  - **侧栏拖拽移动文件/文件夹**（E1）：拖到文件夹即移动、拖到空白处移回库根、悬停折叠文件夹 600ms 自动展开、重名自动序号绝不覆盖、正在打开的文件跟着换路径；路径计算是纯函数（`lib/movePath.ts`，21 条用例）。
+  - **图标全平台重做**：品牌标记描摹为真矢量（旧的 `logo.svg` 是 51KB 的 PNG base64 套壳，放大就糊；现在 3.5KB 可任意缩放）；图标改为「品牌标记 + 纸白不透明底」，不再堆叠文稿/笔等元素；修复 `favicon.svg` 曾是无关的紫色第三方图标；补 apple-touch-icon。**并修复了「下载的包 logo 不对」的根因**——`tauri icon` 把安卓图标写进 `gen/android/`（CI 会重新生成），而 APK 实际用的是入库的 `src-tauri/icons/android/`，两者从未同步；安卓自适应图标的前景层改用专门的源（tauri 生成的那份是整张图，系统裁掉外圈会切到叶尖）。再生成流程见 `desktop/brand/README.md`。
+  - 文档口径对齐：技术方案更正移动端选型（未采用 Flutter）与不实的勾选项；删除空目录 `mobile/`。
+  - 门禁：oxlint 0 error / tsc OK / vitest **161/161**（+33）/ vite build OK。
 
 服务端本地运行：
 

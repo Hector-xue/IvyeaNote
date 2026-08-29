@@ -368,6 +368,26 @@ button {
 }
 .ft-actions button:hover { color: var(--accent); background: rgba(127,127,127,0.15); }
 
+/* v0.8.0 E1：拖拽移动
+   反馈只做两件事——「我正在拖谁」和「会落到哪」。落点用整块着色而不是插入线，
+   因为这里是「移入文件夹」而不是「排序」，一条线会让人误以为能调顺序。 */
+.ft-root {
+  min-height: 100%;
+  /* 库根落区必须覆盖列表下方的空白，否则「拖到空白处移回根目录」没有可落的地方 */
+}
+.ft-file[draggable='true'], .ft-dir[draggable='true'] { -webkit-user-drag: element; }
+.ft-file.dragging, .ft-dir.dragging { opacity: 0.4; }
+.ft-dir.drop-target {
+  background: var(--accent-weak, rgba(74, 140, 90, 0.16));
+  box-shadow: inset 0 0 0 1.5px var(--accent, #4a8);
+}
+.ft-dir.drop-target .ft-dir-name { color: var(--accent, #4a8); font-weight: 500; }
+.ft-root.drop-target {
+  background: var(--accent-weak, rgba(74, 140, 90, 0.10));
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1.5px var(--accent, #4a8);
+}
+
 /* v0.5.0 U2：标签栏 */
 .tabs-bar {
   display: flex;

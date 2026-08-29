@@ -52,5 +52,6 @@ docker compose logs -f app   # 看日志
 | Web 版（含手机浏览器） | ✅ 已上线 |
 | 同步协议一致性（双端顺序/冲突/幂等/离线补账等） | ✅ conformance 19/19 |
 | 桌面壳 + CI 打包 | ✅ 就绪（推 GitHub 打标签即出安装包） |
-| 移动原生 App（Flutter, M3） | ⬜ 未开始 |
+| 安卓 App（Tauri 2 Android，与桌面同一份代码） | ✅ 已发布，Release 附 APK |
+| iOS App | ⬜ 未开始（待 macOS 构建条件 + 开发者账号） |
 | 注册接口目前公网开放 | ⚠️ 建议下一步加邀请码或关闭公开注册 |

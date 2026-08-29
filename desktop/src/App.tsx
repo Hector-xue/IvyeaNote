@@ -15,7 +15,8 @@ import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSy
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette, type PaletteMode, type CommandItem } from './ui/Palette';
 import { GraphView } from './ui/GraphView';
-import type { SearchDoc } from './lib/searchIndex';
+import { useNoteIndex, isIndexable, type FileStamp } from './lib/noteIndex';
+import { planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
 import { buildTagIndex } from './lib/tags';
 import { todayPath, dailyContent, templateFiles, renderTemplate } from './lib/daily';
@@ -76,6 +77,8 @@ export default function App() {
   /** v0.3.4：PDF 列表与元数据（排序） */
   const [pdfs, setPdfs] = useState<string[]>([]);
   const metasRef = useRef<Map<string, FileMeta>>(new Map());
+  /** v0.8.0：可索引文件的指纹快照。由 refreshFiles 统一更新，驱动全库正文索引。 */
+  const [mdStamps, setMdStamps] = useState<FileStamp[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>(() => loadSortMode());
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
@@ -255,10 +258,30 @@ export default function App() {
       const all = metas.map((m) => m.path).filter((p) => !p.startsWith('.trash/'));
       setFiles(applySort(all.filter((p) => /\.md$/i.test(p))));
       setPdfs(applySort(all.filter((p) => /\.pdf$/i.test(p))));
+      // v0.8.0 P0：索引挂在这个咽喉上——新建/删除/重命名/移动/导入/回收站/同步拉取
+      // 每条路径最后都会走到 refreshFiles，索引因此自动跟上，不会再出现「线没接上」。
+      setMdStamps(
+        metas
+          .filter((m) => isIndexable(m.path))
+          .map((m) => ({ path: m.path, mtime: m.mtime, size: m.size }))
+      );
     } catch (e) {
       console.error('列出文件失败', e);
     }
   }, [vault, io, applySort]);
+
+  /**
+   * v0.8.0 P0：全库正文索引。
+   *
+   * 旧实现是 `searchDocs` state + `openPalettePreload`：只在打开命令面板时建**一次**，
+   * 且开头 `if (searchDocs.length > 0) return` 保证此后永不更新。后果——
+   * 桌面端没按过 Ctrl+K 之前反链恒空；移动端没有任何触发入口，所以 v0.7.3 宣称的
+   * 「反向链接区块」在真机上从未显示过；建完之后新写的笔记也进不了索引。
+   *
+   * 现在索引由 refreshFiles 的指纹快照驱动，增量对账，无需任何人记得去"预载"。
+   */
+  const noteIndex = useNoteIndex(io, vault?.localPath ?? '', mdStamps);
+  const searchDocs = noteIndex.docs;
 
   const onSortChange = useCallback(
     (m: SortMode) => {
@@ -527,6 +550,9 @@ export default function App() {
       saveTimer.current = window.setTimeout(async () => {
         try {
           await io.write(vault.localPath ?? '', path, text);
+          // v0.8.0：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
+          // 不触发 refreshFiles，光靠咽喉对账的话离线写作时反链/搜索会滞后一拍。
+          noteIndex.touch(path, text);
           void doSync();
           // v0.4.0：标题跟随（在写盘之后执行，避免和防抖写盘竞争）
           void maybeRenameToH1(path, text);
@@ -535,7 +561,7 @@ export default function App() {
         }
       }, 800);
     },
-    [vault, io, currentPath, doSync, maybeRenameToH1]
+    [vault, io, currentPath, doSync, maybeRenameToH1, noteIndex]
   );
 
   /**
@@ -684,6 +710,53 @@ export default function App() {
     [vault, io, currentPath, refreshFiles, doSync, toast]
   );
 
+  /**
+   * v0.8.0 E1：侧栏拖拽移动文件 / 文件夹。
+   *
+   * 路径计算全部放在 `lib/movePath` 的纯函数里——移动是破坏性操作，算错落点
+   * 就是把用户的笔记搬丢，这类逻辑必须可单测。这里只负责按结果做 IO。
+   *
+   * 用二进制读写而不是文本：库里除了 .md 还有 Attachments/ 下的图片和 PDF，
+   * 走文本通道会把它们损坏。
+   *
+   * 同步语义：表达为「新路径 upsert + 旧路径 delete」，与 v0.4.0 标题跟随改名一致，
+   * 多端自然收敛。
+   */
+  const onMovePath = useCallback(
+    async (src: string, destDir: string, isDir: boolean) => {
+      if (!vault) return;
+      const root = vault.localPath ?? '';
+      // 重名消解要看**全部**已知路径（.md / .pdf / .keep / 附件），只看 files 会漏判
+      const all = [...metasRef.current.keys()].filter((p) => !p.startsWith('.trash/'));
+      const ops = planMove(src, destDir, all, isDir);
+      if (!ops) return;
+      try {
+        for (const op of ops) {
+          const data = await io.readBinary(root, op.from);
+          await io.writeBinary(root, op.to, data);
+          await io.remove(root, op.from);
+        }
+        // 正在打开的文件被移走了：标签页与编辑区必须跟着换路径
+        setCurrentPath((cur) => remapPath(cur, ops));
+        setActiveTab((cur) => remapPath(cur, ops));
+        setOpenTabs((tabs) => tabs.map((t) => remapPath(t, ops) ?? t));
+        await refreshFiles();
+        void doSync();
+        const label = destDir || '库根目录';
+        toast(
+          ops.length === 1
+            ? `已移动到「${label}」`
+            : `已移动 ${ops.length} 个文件到「${label}」`,
+          'ok'
+        );
+      } catch (e) {
+        toast(`移动失败：${errText(e)}`, 'error');
+        await refreshFiles();
+      }
+    },
+    [vault, io, refreshFiles, doSync, toast]
+  );
+
   const onDeleteFile = useCallback(
     async (path: string) => {
       if (!vault) return;
@@ -770,7 +843,6 @@ export default function App() {
   const [pairBusy, setPairBusy] = useState(false);
   /** v0.7.0 F1/F2: universal palette (search / switcher / commands) */
   const [paletteMode, setPaletteMode] = useState<PaletteMode | null>(null);
-  const [searchDocs, setSearchDocs] = useState<SearchDoc[]>([]);
   /** v0.7.0 F4: tags panel */
   const [showTagPanel, setShowTagPanel] = useState(false);
   /** v0.7.1 F8: graph view */
@@ -779,39 +851,18 @@ export default function App() {
   const hasAccountFlag = !!state.account;
   const onOpenTrashFlag = !!vault;
 
-  /** open palette; lazily load all note contents for the in-memory index */
-  /** preload all note contents into the in-memory index */
-  const openPalettePreload = useCallback(async () => {
-    if (!vault || searchDocs.length > 0 || files.length === 0) return;
-    try {
-      const docs: SearchDoc[] = [];
-      for (const path of files) {
-        try {
-          docs.push({ path, content: await io.read(vault.localPath ?? '', path) });
-        } catch {
-          // skip unreadable file
-        }
-      }
-      setSearchDocs(docs);
-    } catch {
-      // degrade silently
-    }
-  }, [vault, io, files, searchDocs.length]);
-
   const openPalette = useCallback(
-    async (mode: PaletteMode) => {
+    (mode: PaletteMode) => {
       if (!vault) return;
-      await openPalettePreload();
       setPaletteMode(mode);
     },
-    [vault, openPalettePreload]
+    [vault]
   );
 
-  /** v0.7.0 F4: open tags panel (preloads docs) */
-  const openTagPanel = useCallback(async () => {
-    await openPalettePreload();
+  /** v0.7.0 F4: open tags panel */
+  const openTagPanel = useCallback(() => {
     setShowTagPanel(true);
-  }, [openPalettePreload]);
+  }, []);
 
   /** global shortcuts: Ctrl+K search / Ctrl+O switcher / Ctrl+P commands */
   useEffect(() => {
@@ -820,13 +871,13 @@ export default function App() {
       const k = e.key.toLowerCase();
       if (k === 'k') {
         e.preventDefault();
-        void openPalette('search');
+        openPalette('search');
       } else if (k === 'o') {
         e.preventDefault();
-        void openPalette('switcher');
+        openPalette('switcher');
       } else if (k === 'p') {
         e.preventDefault();
-        void openPalette('commands');
+        openPalette('commands');
       }
     };
     window.addEventListener('keydown', onKey);
@@ -1308,7 +1359,7 @@ export default function App() {
         { id: 'new-folder', label: '新建文件夹', run: () => void onCreateFolder('') },
         { id: 'import-obsidian', label: '从 Obsidian 导入', run: () => void onImportObsidian() },
         { id: 'daily', label: '打开今日笔记', run: () => void openDailyNote() },
-        { id: 'graph', label: '打开图谱视图', run: () => { void openPalettePreload().then(() => setShowGraph(true)); } },
+        { id: 'graph', label: '打开图谱视图', run: () => setShowGraph(true) },
         { id: 'from-template', label: '从模板新建笔记', run: () => void newFromTemplate() },
         {
           id: 'toggle-theme',
@@ -1499,6 +1550,7 @@ export default function App() {
         onCreateNote={() => void onCreateNote('')}
         onNewFolderNote={(folder) => void onCreateNote(folder)}
         onDeleteFile={(p) => void onDeleteFile(p)}
+        onMovePath={(src, dest, isDir) => void onMovePath(src, dest, isDir)}
         onSyncNow={() => void doSync()}
         onUpload={() => void doUpload()}
         onDownload={() => void doDownload()}
@@ -1532,7 +1584,7 @@ export default function App() {
         onOpenTags={() => void openTagPanel()}
         onPasteImage={onPasteImage}
         onOpenGraph={() => {
-          void openPalettePreload().then(() => setShowGraph(true));
+          setShowGraph(true);
         }}
         onOpenWiki={(t) => void onOpenWiki(t)}
         wikiOut={wikiLinks.out}
@@ -1598,7 +1650,7 @@ export default function App() {
                         className="tag-chip"
                         onClick={() => {
                           setShowTagPanel(false);
-                          void openPalette('search');
+                          openPalette('search');
                           window.setTimeout(() => {
                             const input = document.querySelector<HTMLInputElement>('.palette-input');
                             if (input) {
