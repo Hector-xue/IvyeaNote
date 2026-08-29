@@ -1,9 +1,12 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import logoUrl from '../assets/logo.svg';
 import { MarkdownEditor } from './MarkdownEditor';
 import { FileTree, buildFileTree } from './FileTree';
 import { TabsBar } from './TabsBar';
 import { RibbonIcon } from './Icons';
+import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
+import { ContextMenu, type MenuAnchor } from './ContextMenu';
+import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
@@ -47,6 +50,10 @@ interface Props {
   onDeleteFile(path: string): void;
   /** v0.7.5 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
+  /** v0.7.9 E3：右键菜单里的「重命名」——由 App 弹输入框后再执行 */
+  onRequestRename?(path: string): void;
+  /** v0.7.9 E3：右键菜单里的「复制路径」 */
+  onCopyPath?(path: string): void;
   /** v0.6.1 H7a：立即同步一次（推+拉）；未传时退回 onUpload */
   onSyncNow?(): void;
   /** 只上传：本地 → 服务器 */
@@ -120,6 +127,26 @@ interface Props {
 export function MainView(props: Props) {
   /** v0.5.0 U3：递归树由扁平路径构建 */
   const fileTree = useMemo(() => buildFileTree(props.files), [props.files]);
+  const [rightCollapsed, setRightCollapsed] = useState(loadRightPanelCollapsed);
+  const [menu, setMenu] = useState<MenuAnchor | null>(null);
+
+  /** 右键菜单条目：文件与文件夹给不同的动作集 */
+  const openMenu = (node: TreeNode, x: number, y: number) => {
+    const items =
+      node.type === 'dir'
+        ? [
+            { id: 'new', label: '在此新建笔记', run: () => props.onNewFolderNote(node.path) },
+            { id: 'newdir', label: '在此新建子文件夹', run: () => props.onCreateFolder?.(node.path) },
+            { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
+          ]
+        : [
+            { id: 'open', label: '打开', run: () => props.onSelect(node.path) },
+            { id: 'rename', label: '重命名…', run: () => props.onRequestRename?.(node.path) },
+            { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
+            { id: 'del', label: '删除', danger: true, run: () => props.onDeleteFile(node.path) },
+          ];
+    setMenu({ x, y, items });
+  };
   const pdfTree = buildTree(props.pdfs);
   /** v0.5.0 U4：字数统计 */
   const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
@@ -273,6 +300,7 @@ export function MainView(props: Props) {
             onNewFolderIn={props.onCreateFolder}
             onDeleteFile={props.onDeleteFile}
             onMovePath={props.onMovePath}
+            onContextMenu={openMenu}
           />
           {/* v0.3.4：PDF 列表 */}
           {props.pdfs.length > 0 && (
@@ -362,31 +390,6 @@ export function MainView(props: Props) {
             onPasteImage={props.onPasteImage}
           />
         )}
-        {/* v0.7.0 F3: wiki links panel */}
-        {(props.wikiOut?.length ?? 0) > 0 || (props.wikiBack?.length ?? 0) > 0 ? (
-          <div className="wiki-panel">
-            {(props.wikiOut?.length ?? 0) > 0 && (
-              <div className="wp-row">
-                <span className="wp-label">{'\u51fa\u94fe'}</span>
-                {props.wikiOut!.map((t) => (
-                  <button key={t} className="wp-link" onClick={() => props.onOpenWiki?.(t)}>
-                    {t}
-                  </button>
-                ))}
-              </div>
-            )}
-            {(props.wikiBack?.length ?? 0) > 0 && (
-              <div className="wp-row">
-                <span className="wp-label">{'\u5165\u94fe'}</span>
-                {props.wikiBack!.map((p) => (
-                  <button key={p} className="wp-link" onClick={() => props.onOpenWikiPath?.(p)}>
-                    {p.split('/').pop()?.replace(/\.(md|markdown)$/i, '')}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : null}
         {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
         <div className="status-bar">
           <span>{props.currentPath ?? '未选择笔记'}</span>
@@ -395,6 +398,21 @@ export function MainView(props: Props) {
           </span>
         </div>
       </main>
+      {/* v0.7.9 E8：右栏常驻大纲 + 双链。移动端早有，桌面此前缺席 */}
+      <RightPanel
+        doc={props.doc}
+        wikiOut={props.wikiOut}
+        wikiBack={props.wikiBack}
+        onOpenWiki={props.onOpenWiki}
+        onOpenWikiPath={props.onOpenWikiPath}
+        collapsed={rightCollapsed}
+        onToggle={() => {
+          const next = !rightCollapsed;
+          setRightCollapsed(next);
+          saveRightPanelCollapsed(next);
+        }}
+      />
+      <ContextMenu anchor={menu} onClose={() => setMenu(null)} />
     </>
   );
 }

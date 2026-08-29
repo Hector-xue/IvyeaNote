@@ -201,3 +201,278 @@
   border-radius: var(--r-2);
   box-shadow: inset 0 0 0 1.5px var(--accent);
 }
+
+/* ------------------------------------------------- 编辑器查找替换面板
+   CodeMirror 自带面板的默认样式是浏览器原生控件堆在一起，落在这套界面里非常突兀。
+   这里让它变成一条贴在顶部的工具条：与正文同宽、材质与浮层一致、控件用设计系统的尺寸。 */
+
+.editor-host .cm-panels {
+  background: transparent;
+  border: none;
+  color: var(--text);
+  z-index: 5;
+}
+.editor-host .cm-panels-top {
+  border-bottom: 1px solid var(--border);
+}
+.editor-host .cm-panel.cm-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: var(--measure);
+  margin: 0 auto;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--blur-bg);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+.editor-host .cm-panel.cm-search input[type='text'] {
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: 5px var(--sp-2);
+  min-width: 180px;
+}
+.editor-host .cm-panel.cm-search input[type='text']:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.editor-host .cm-panel.cm-search button:not([name='close']) {
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--panel);
+  background-image: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  padding: 5px var(--sp-3);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease);
+}
+.editor-host .cm-panel.cm-search button:not([name='close']):hover {
+  background: var(--panel-2);
+}
+.editor-host .cm-panel.cm-search label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.editor-host .cm-panel.cm-search input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+.editor-host .cm-panel.cm-search button[name='close'] {
+  position: static;
+  margin-left: auto;
+  padding: 0 var(--sp-2);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.editor-host .cm-panel.cm-search button[name='close']:hover {
+  color: var(--text);
+}
+/* 命中高亮：当前一处用品牌色，其余用中性——一眼看出「我在哪」 */
+.editor-host .cm-searchMatch {
+  background: color-mix(in srgb, var(--n-4) 55%, transparent);
+  border-radius: 2px;
+}
+.editor-host .cm-searchMatch-selected {
+  background: var(--accent-weak);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ------------------------------------------------------ 右栏：大纲 + 双链
+   和左侧栏同一档明度：两侧都后退，中间的写作面最亮。 */
+
+.right-panel {
+  width: 248px;
+  min-width: 248px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+.rp-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-2) var(--sp-2) var(--sp-4);
+}
+.rp-title {
+  flex: 1;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  color: var(--muted);
+  letter-spacing: 0.06em; /* 这里是拉丁式小标签，中文短标题给一点点字距不会挤 */
+}
+.rp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 var(--sp-2) var(--sp-4);
+}
+.rp-empty {
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+/* 大纲：靠缩进和字号表达层级，不画树线——树线在只有几条时纯属噪音 */
+.rp-outline {
+  display: flex;
+  flex-direction: column;
+}
+.rp-h {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--n-8);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  padding: 4px var(--sp-2);
+  border-radius: var(--r-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease);
+}
+.rp-h:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.rp-h1 { padding-left: var(--sp-2); font-weight: var(--fw-bold); color: var(--text); }
+.rp-h2 { padding-left: var(--sp-4); }
+.rp-h3 { padding-left: var(--sp-5); }
+.rp-h4 { padding-left: var(--sp-6); font-size: var(--fs-xs); }
+.rp-h5,
+.rp-h6 { padding-left: var(--sp-7); font-size: var(--fs-xs); color: var(--muted); }
+
+/* 双链在右栏里改成竖排（原本在编辑区底部是横排一条）。
+   ⚠️ 必须显式解掉旧的 `.wiki-panel { max-height: 96px; overflow-y: auto }`——
+   那是给底部横条写的，搬到竖排右栏后会把「入链」整块裁在滚动区外面看不见。
+   这个问题只有真渲染才发现得了，读源码是看不出来的。 */
+.rp-links {
+  max-height: none;
+  overflow: visible;
+  font-size: inherit;
+  margin-top: var(--sp-5);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.rp-links .wp-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+.rp-links .wp-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  color: var(--muted);
+  padding: 0 var(--sp-2) var(--sp-1);
+}
+.rp-links .wp-link {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  padding: 4px var(--sp-2);
+  border-radius: var(--r-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rp-links .wp-link:hover {
+  background: var(--accent-weak);
+}
+
+/* 收起后只留一条窄轨，保留「它还在」的线索 */
+.right-rail {
+  width: 28px;
+  min-width: 28px;
+  display: flex;
+  justify-content: center;
+  padding-top: var(--sp-3);
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+}
+
+/* 窄窗口下右栏让位给正文 */
+@media (max-width: 1080px) {
+  .right-panel {
+    display: none;
+  }
+}
+
+/* ------------------------------------------------------------ 右键菜单
+   浮层材质与命令面板一致；条目只在 hover/键盘选中时才上底色。 */
+
+.ctx-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+}
+.ctx-menu {
+  position: fixed;
+  min-width: 176px;
+  padding: var(--sp-1);
+  background: var(--blur-bg);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+  animation: ctx-in var(--dur-1) var(--ease);
+}
+@keyframes ctx-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.ctx-item {
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-item.active {
+  background: var(--panel-2);
+}
+.ctx-item.danger {
+  color: var(--danger);
+}
+.ctx-item.danger.active {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}

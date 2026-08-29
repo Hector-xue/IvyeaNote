@@ -97,7 +97,9 @@ vi.mock('@codemirror/view', () => ({
   drawSelection: () => ({}),
 }));
 vi.mock('@codemirror/state', () => ({
-  EditorState: { create: () => ({}) },
+  // phrases 是 v0.7.9 查找面板汉化用到的 facet；桩里缺了会以
+  // 「Cannot read properties of undefined (reading 'of')」的形式炸在渲染期
+  EditorState: { create: () => ({}), phrases: { of: () => ({}) } },
   EditorSelection: { range: () => ({}), cursor: () => ({}) },
   StateEffect: { define: () => ({ of: () => ({}) }) },
   Range: class {},
@@ -270,5 +272,63 @@ describe('侧栏拖拽移动（E1）', () => {
       expect(screen.getByText('入链')).toBeTruthy();
     });
     expect(screen.getByText('入链').closest('.wp-row')!.textContent).toContain('A');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('右键上下文菜单（E3）', () => {
+  it('右键文件 → 出现文件动作集（v0.7.8 桌面端根本没有重命名入口）', async () => {
+    await renderApp({ 'a.md': '# A\n', 'sub/b.md': '# B\n' });
+
+    fireEvent.contextMenu(fileNode('a.md')!, { clientX: 40, clientY: 60 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('menu')).toBeTruthy();
+    });
+    const labels = [...screen.getAllByRole('menuitem')].map((b) => b.textContent);
+    expect(labels).toEqual(['打开', '重命名…', '复制路径', '删除']);
+  });
+
+  it('右键文件夹 → 出现文件夹动作集（不该有「删除笔记」）', async () => {
+    await renderApp({ 'sub/b.md': '# B\n' });
+
+    fireEvent.contextMenu(dirNode('sub')!, { clientX: 40, clientY: 60 });
+
+    await waitFor(() => {
+      expect(screen.getByRole('menu')).toBeTruthy();
+    });
+    const labels = [...screen.getAllByRole('menuitem')].map((b) => b.textContent);
+    expect(labels).toEqual(['在此新建笔记', '在此新建子文件夹', '复制路径']);
+  });
+
+  it('Esc 关闭菜单', async () => {
+    await renderApp({ 'a.md': '# A\n' });
+    fireEvent.contextMenu(fileNode('a.md')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('点菜单外面关闭', async () => {
+    await renderApp({ 'a.md': '# A\n' });
+    fireEvent.contextMenu(fileNode('a.md')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    fireEvent.mouseDown(document.querySelector('.ctx-mask')!);
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('菜单里点「在此新建笔记」→ 真的在该文件夹下建出来了', async () => {
+    await renderApp({ 'sub/b.md': '# B\n' });
+    fireEvent.contextMenu(dirNode('sub')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('在此新建笔记'));
+
+    await waitFor(() => {
+      expect([...memFiles.keys()].some((p) => p.startsWith('sub/') && p !== 'sub/b.md')).toBe(true);
+    });
   });
 });

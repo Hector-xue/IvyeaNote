@@ -67,6 +67,8 @@ interface Props {
   onDeleteFile(path: string): void;
   /** v0.7.5 E1：把 src 移动到 destDir（'' = 库根）。未传则整棵树不可拖。 */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
+  /** v0.7.9 E3：右键菜单。桌面右键、移动长按都走这里，共用一套菜单定义。 */
+  onContextMenu?(node: TreeNode, x: number, y: number): void;
 }
 
 export function FileTree(props: Props) {
@@ -159,6 +161,12 @@ export function FileTree(props: Props) {
             }}
             onDrop={(e) => dropInto(e, node.path)}
             onClick={() => props.onToggleDir(node.path)}
+            onContextMenu={(e) => {
+              if (!props.onContextMenu) return;
+              e.preventDefault();
+              e.stopPropagation();
+              props.onContextMenu(node, e.clientX, e.clientY);
+            }}
           >
             <span className="ft-caret">{isOpen ? '▾' : '▸'}</span>
             <span className="ft-dir-name">{node.name}</span>
@@ -203,6 +211,12 @@ export function FileTree(props: Props) {
         onDragStart={(e) => startDrag(e, node.path, false)}
         onDragEnd={endDrag}
         onClick={() => props.onSelectFile(node.path)}
+        onContextMenu={(e) => {
+          if (!props.onContextMenu) return;
+          e.preventDefault();
+          e.stopPropagation();
+          props.onContextMenu(node, e.clientX, e.clientY);
+        }}
       >
         <span className="ft-file-name" title={node.path}>
           {displayName(node.name, true)}

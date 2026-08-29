@@ -99,7 +99,9 @@ vi.mock('@codemirror/view', () => ({
   drawSelection: () => ({}),
 }));
 vi.mock('@codemirror/state', () => ({
-  EditorState: { create: () => ({}) },
+  // phrases 是 v0.7.9 查找面板汉化用到的 facet；桩里缺了会以
+  // 「Cannot read properties of undefined (reading 'of')」的形式炸在渲染期
+  EditorState: { create: () => ({}), phrases: { of: () => ({}) } },
   EditorSelection: { range: () => ({}), cursor: () => ({}) },
   StateEffect: { define: () => ({ of: () => ({}) }) },
   Range: class {},

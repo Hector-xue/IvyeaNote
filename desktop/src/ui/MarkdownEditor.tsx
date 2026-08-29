@@ -14,7 +14,7 @@ import {
 } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, indentUnit } from '@codemirror/language';
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked } from 'marked';
@@ -70,6 +70,29 @@ function cmExtensions(
     markdown(),
     ...(dark ? [oneDark] : [syntaxHighlighting(defaultHighlightStyle, { fallback: true })]),
     highlightSelectionMatches(),
+    // v0.7.9 E4：文内查找替换（Ctrl+F / Ctrl+H）。
+    // @codemirror/search 早就装了、searchKeymap 也早就接了，但一直没显式加 search()——
+    // CM6 会在首次调用时自动补配置，所以「能用」，只是面板停在默认英文、且无样式，
+    // 落在这套界面里非常突兀。现在显式配置：面板置顶（跟 Obsidian 一致，不遮正文底部）。
+    search({ top: true }),
+    // 面板文案汉化：这些串在 @codemirror/search 里全部走 phrase()，可以整体替换
+    EditorState.phrases.of({
+      Find: '查找',
+      Replace: '替换',
+      next: '下一个',
+      previous: '上一个',
+      all: '全部替换',
+      'match case': '区分大小写',
+      'by word': '全词匹配',
+      regexp: '正则',
+      replace: '替换',
+      'replace all': '全部替换',
+      close: '关闭',
+      'current match': '当前匹配',
+      'Go to line': '跳转到行',
+      go: '跳转',
+      'on line': '行号',
+    }),
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     ...(getTitles ? [autocompletion({ override: [wikiCompletion(getTitles)] })] : []),
     EditorView.updateListener.of((u) => {

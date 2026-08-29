@@ -622,6 +622,38 @@ export default function App() {
     [vault, io, allPaths, refreshFiles, doSync, toast]
   );
 
+  /**
+   * v0.7.9 E3：右键菜单里的「重命名」。
+   * 弹框留在 App 层——对话框归 useDialog 管，UI 组件不该自己造输入框。
+   */
+  const requestRename = useCallback(
+    async (path: string) => {
+      const cur = path.split('/').pop()?.replace(/\.(md|markdown)$/i, '') ?? '';
+      const name = await prompt({
+        title: '重命名笔记',
+        initial: cur,
+        okText: '重命名',
+        validate: (v) => (v.trim() ? null : '名字不能为空'),
+      });
+      if (name) await onRenameFile(path, name);
+    },
+    [prompt, onRenameFile]
+  );
+
+  /** v0.7.9 E3：复制库内相对路径（贴到别处引用时用） */
+  const copyPath = useCallback(
+    async (path: string) => {
+      try {
+        await navigator.clipboard.writeText(path);
+        toast('已复制路径', 'ok');
+      } catch {
+        // WebView 里剪贴板可能被拒；退回让用户自己看一眼路径，别静默失败
+        toast(`复制失败，路径是：${path}`, 'error');
+      }
+    },
+    [toast]
+  );
+
   const onDeleteFile = useCallback(
     async (path: string) => {
       if (!vault) return;
@@ -1364,6 +1396,8 @@ export default function App() {
         onNewFolderNote={(folder) => void onCreateNote(folder)}
         onDeleteFile={(p) => void onDeleteFile(p)}
         onMovePath={(src, dest, isDir) => void onMovePath(src, dest, isDir)}
+        onRequestRename={(p) => void requestRename(p)}
+        onCopyPath={(p) => void copyPath(p)}
         onSyncNow={() => void doSync()}
         onUpload={() => void doUpload()}
         onDownload={() => void doDownload()}
