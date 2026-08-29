@@ -9,7 +9,9 @@
  *   不是按一下保存再看结果；
  * - 每一项都给**当前值**和**默认值**的提示，让人敢动——不敢动的设置等于没有。
  */
+import { useEffect } from 'react';
 import { DEFAULTS, LIMITS, type Appearance, type ReadFont, type ThemeMode } from '../lib/appearance';
+import { SHORTCUTS, type Prefs } from '../lib/prefs';
 
 interface Props {
   value: Appearance;
@@ -17,6 +19,43 @@ interface Props {
   onClose(): void;
   appVersion: string;
   onCheckUpdate(): void;
+  /** v0.8.6 E10：行为偏好（编辑器 / 同步分区） */
+  prefs: Prefs;
+  onPrefsChange(next: Prefs): void;
+  /** 同步分区要显示的现状 */
+  sync: {
+    /** 已登录账号的服务器地址；未登录为 null */
+    server: string | null;
+    account: string | null;
+    syncing: boolean;
+    onSyncNow(): void;
+  };
+}
+
+/** 开关行：一句标题 + 一句「关掉会怎样」。说不清后果的开关没人敢动 */
+function Toggle(props: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  onChange(v: boolean): void;
+}) {
+  return (
+    <div className="set-row set-toggle-row">
+      <label className="set-label">
+        {props.label}
+        <span className="set-hint">{props.hint}</span>
+      </label>
+      <button
+        role="switch"
+        aria-checked={props.checked}
+        aria-label={props.label}
+        className={`set-switch ${props.checked ? 'on' : ''}`}
+        onClick={() => props.onChange(!props.checked)}
+      >
+        <span className="set-switch-dot" />
+      </button>
+    </div>
+  );
 }
 
 const THEMES: { id: ThemeMode; label: string }[] = [
@@ -34,6 +73,21 @@ const FONTS: { id: ReadFont; label: string; hint: string }[] = [
 export function SettingsView(props: Props) {
   const v = props.value;
   const set = (patch: Partial<Appearance>) => props.onChange({ ...v, ...patch });
+  const p = props.prefs;
+  const setPref = (patch: Partial<Prefs>) => props.onPrefsChange({ ...p, ...patch });
+
+  // Esc 关闭。此前只能点右上角 ✕ 或点遮罩——所有别的浮层都吃 Esc，唯独这里不吃
+  const { onClose } = props;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   return (
     <div
@@ -160,6 +214,81 @@ export function SettingsView(props: Props) {
             <button className="btn ghost set-reset" onClick={() => props.onChange({ ...DEFAULTS })}>
               恢复默认外观
             </button>
+          </section>
+
+          <section className="set-section">
+            <h3 className="set-h">编辑器</h3>
+
+            <div className="set-row">
+              <label className="set-label">
+                打开笔记时
+                <span className="set-hint">默认进编辑态；常写完就读的人可以改成阅读</span>
+              </label>
+              <div className="seg">
+                {(['edit', 'read'] as const).map((m) => (
+                  <button
+                    key={m}
+                    className={`seg-btn ${p.defaultView === m ? 'on' : ''}`}
+                    onClick={() => setPref({ defaultView: m })}
+                  >
+                    {m === 'edit' ? '编辑' : '阅读'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <Toggle
+              label="编辑态实时预览"
+              hint="标题字号、加粗、任务框直接在源码上渲染。关掉就是纯 Markdown 源码"
+              checked={p.livePreview}
+              onChange={(x) => setPref({ livePreview: x })}
+            />
+            <Toggle
+              label="标题跟随文件名"
+              hint="正文第一个 # 标题改了，文件名跟着改。关掉后文件名只能手动重命名"
+              checked={p.titleSync}
+              onChange={(x) => setPref({ titleSync: x })}
+            />
+          </section>
+
+          <section className="set-section">
+            <h3 className="set-h">同步</h3>
+            {props.sync.account ? (
+              <>
+                <div className="set-row set-about">
+                  <span className="set-label">
+                    已登录 {props.sync.account}
+                    <span className="set-hint">{props.sync.server ?? ''}</span>
+                  </span>
+                  <button className="btn" disabled={props.sync.syncing} onClick={props.sync.onSyncNow}>
+                    {props.sync.syncing ? '同步中…' : '立即同步'}
+                  </button>
+                </div>
+                <Toggle
+                  label="自动同步"
+                  hint="启动时拉一次、窗口回到前台时拉一次、每 60 秒兜底一次。关掉后只能手动同步"
+                  checked={p.autoSync}
+                  onChange={(x) => setPref({ autoSync: x })}
+                />
+              </>
+            ) : (
+              <p className="set-hint">
+                当前是本地模式，笔记只存在这台设备上。侧栏的「登录同步」可以接上自建服务器。
+              </p>
+            )}
+          </section>
+
+          <section className="set-section">
+            <h3 className="set-h">快捷键</h3>
+            <ul className="set-keys">
+              {SHORTCUTS.map((k) => (
+                <li key={k.keys}>
+                  <kbd>{k.keys}</kbd>
+                  <span>{k.what}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="set-hint">暂不支持自定义快捷键。</p>
           </section>
 
           <section className="set-section">

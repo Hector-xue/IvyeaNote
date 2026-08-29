@@ -921,3 +921,62 @@ body:has(.panel-resizer.dragging) {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* ------------------------------------------------------------ 设置页新分区（E10） */
+.set-toggle-row {
+  align-items: flex-start;
+}
+.set-toggle-row .set-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  padding-right: 12px;
+}
+/* 开关：形状本身就说明状态，不靠文字「开/关」 */
+.set-switch {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 2px;
+  display: flex;
+  justify-content: flex-start;
+  transition: background 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.set-switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  justify-content: flex-end;
+}
+.set-switch-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.set-keys {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-keys li {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+.set-keys kbd {
+  flex: 0 0 auto;
+  min-width: 8.5em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--muted);
+}

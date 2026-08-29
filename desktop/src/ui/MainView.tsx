@@ -51,6 +51,9 @@ interface Props {
   /** v0.8.4 E7：侧栏搜索点命中行 → 打开并跳到那一行 */
   onOpenAt?(path: string, line: number): void;
   jumpTo?: { path: string; line: number; n: number } | null;
+  /** v0.8.6 E10：编辑器行为偏好 */
+  defaultView?: 'edit' | 'read';
+  livePreviewOn?: boolean;
   onCloseSplit?(): void;
   /** v0.3.4：PDF 文件列表 */
   pdfs: string[];
@@ -482,6 +485,8 @@ export function MainView(props: Props) {
                 onEdit={props.onEdit}
                 currentPath={props.currentPath}
                 jumpTo={props.jumpTo}
+                defaultView={props.defaultView}
+                livePreviewOn={props.livePreviewOn}
                 theme={props.theme}
                 onInsertImage={props.onInsertImage}
                 resolveImage={props.resolveImage}
@@ -506,6 +511,7 @@ export function MainView(props: Props) {
                   onEdit={props.onEdit}
                   currentPath={props.splitPath}
                   theme={props.theme}
+                  livePreviewOn={props.livePreviewOn}
                   resolveImage={props.resolveImage}
                   onOpenWiki={props.onOpenWiki}
                   wikiTitles={props.wikiTitles}

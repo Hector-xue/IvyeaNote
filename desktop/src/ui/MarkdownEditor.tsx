@@ -63,18 +63,24 @@ export interface MarkdownEditorProps {
    * 连点同一条命中行两次也要重新跳（只看 line 会被判定没变）。
    */
   jumpTo?: { path: string; line: number; n: number } | null;
+  /** v0.8.6 E10：打开笔记时的初始视图（设置里可改，默认 edit＝此前的行为） */
+  defaultView?: 'edit' | 'read';
+  /** v0.8.6 E10：编辑态实时预览开关（默认 true＝此前的行为） */
+  livePreviewOn?: boolean;
 }
 
 function cmExtensions(
   onEdit: (text: string) => void,
   dark: boolean,
-  getTitles?: () => { path: string; title: string }[]
+  getTitles?: () => { path: string; title: string }[],
+  livePreviewOn = true
 ): Extension[] {
   return [
     // v0.5.0 U1：Live Preview——默认隐藏行号（Obsidian 风格），装饰渲染见 livePreview.ts
     EditorView.theme({ '.cm-gutters': { display: 'none' } }),
     EditorView.theme(livePreviewTheme),
-    livePreview,
+    // 关掉实时预览＝退回纯 Markdown 源码（主题留着无妨，没有装饰就不会命中）
+    ...(livePreviewOn ? [livePreview] : []),
     highlightActiveLine(),
     drawSelection(),
     history(),
@@ -156,8 +162,23 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const [modeState, setMode] = useState<'edit' | 'read'>('edit');
+  const [modeState, setMode] = useState<'edit' | 'read'>(props.defaultView ?? 'edit');
   const rootRef = useRef<HTMLDivElement>(null);
+  /**
+   * onEdit 走 ref 而不是直接塞进扩展。
+   *
+   * CodeMirror 的扩展是在建 EditorState 那一刻**固化**的：直接把 `props.onEdit`
+   * 传进去，之后它的闭包就再也不更新，编辑器会一直调用当初那一个版本。
+   * 于是「onEdit 依赖的东西变了」在编辑器里根本看不见——v0.8.6 的「标题跟随
+   * 文件名」开关就是这么失灵的：设置里关掉了，编辑器仍在用开着的那份闭包改名。
+   * （EditorState 只在 currentPath / theme 变化时重建，平时不重建。）
+   */
+  const onEditRef = useRef(props.onEdit);
+  const pathRef = useRef(props.currentPath);
+  useEffect(() => {
+    onEditRef.current = props.onEdit;
+    pathRef.current = props.currentPath;
+  });
   const mode = props.readOnlyPreview ? 'read' : modeState;
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
@@ -237,7 +258,15 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (!host) return;
     const view = new EditorView({
       parent: host,
-      state: EditorState.create({ doc: '', extensions: cmExtensions(() => undefined, props.theme === 'dark', () => props.wikiTitles ?? []) }),
+      state: EditorState.create({
+        doc: '',
+        extensions: cmExtensions(
+          () => undefined,
+          props.theme === 'dark',
+          () => props.wikiTitles ?? [],
+          props.livePreviewOn ?? true
+        ),
+      }),
     });
     viewRef.current = view;
     return () => {
@@ -254,12 +283,17 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     view.setState(
       EditorState.create({
         doc: props.doc ?? '',
-        extensions: cmExtensions(props.onEdit.bind(null, props.currentPath ?? ''), props.theme === 'dark', () => props.wikiTitles ?? []),
+        extensions: cmExtensions(
+          (text: string) => onEditRef.current(pathRef.current ?? '', text),
+          props.theme === 'dark',
+          () => props.wikiTitles ?? [],
+          props.livePreviewOn ?? true
+        ),
       })
     );
     setBubble(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.currentPath, props.theme]);
+  }, [props.currentPath, props.theme, props.livePreviewOn]);
 
   // 阅读模式：渲染 + 异步替换图片 + 活预览（v0.7.3 P4）
   useEffect(() => {
@@ -390,6 +424,16 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     document.addEventListener('selectionchange', update);
     return () => document.removeEventListener('selectionchange', update);
   }, [props.mobile, props.currentPath, mode]);
+
+  /**
+   * v0.8.6 E10：换一篇笔记时回到「打开笔记时」设定的视图。
+   * 不这么做的话，用户在某篇里切到阅读态，之后每一篇都停在阅读态——
+   * 那不是「默认视图」，那是粘住了。
+   */
+  useEffect(() => {
+    if (props.readOnlyPreview) return;
+    setMode(props.defaultView ?? 'edit');
+  }, [props.currentPath, props.defaultView, props.readOnlyPreview]);
 
   /** 气泡按钮应用格式后刷新自身状态（选区被重设为选中文本） */
   const bubbleFormat = (btn: ToolBtn) => {

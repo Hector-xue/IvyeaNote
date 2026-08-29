@@ -32,6 +32,7 @@ import {
   saveAppearance,
   type Appearance,
 } from './lib/appearance';
+import { loadPrefs, savePrefs, type Prefs } from './lib/prefs';
 import { SettingsView } from './ui/SettingsView';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { planMove, remapPath } from './lib/movePath';
@@ -108,6 +109,12 @@ export default function App() {
    * 迁移：loadAppearance 读不到新键时用默认值，老用户最多是主题回到浅色一次。
    */
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
+  /** v0.8.6 E10：行为偏好（默认值一律等于本次改动之前的行为） */
+  const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
+  const updatePrefs = useCallback((next: Prefs) => {
+    setPrefs(next);
+    savePrefs(next);
+  }, []);
   const [showSettings, setShowSettings] = useState(false);
   const theme = resolveTheme(appearance.theme);
 
@@ -404,7 +411,7 @@ export default function App() {
   // 编辑落盘后的推送已在 onEdit 防抖里触发，这里补齐其余时机；
   // doSync 内部有 syncingRef 重入保护，多时机并发安全。
   useEffect(() => {
-    if (!client) return;
+    if (!client || !prefs.autoSync) return;
     const timer = window.setTimeout(() => void doSync(), 2000); // 启动拉取一次
     const onVisible = () => {
       if (document.visibilityState === 'visible') void doSync();
@@ -418,7 +425,7 @@ export default function App() {
       window.clearInterval(poll);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [client, doSync]);
+  }, [client, prefs.autoSync, doSync]);
 
   // 卸载时清理编辑防抖计时器
   useEffect(
@@ -550,7 +557,7 @@ export default function App() {
    */
   const maybeRenameToH1 = useCallback(
     async (path: string, text: string) => {
-      if (!vault || !/\.md$/i.test(path)) return;
+      if (!vault || !prefs.titleSync || !/\.md$/i.test(path)) return;
       const h1 = extractH1(text);
       if (!h1) return;
       const target = titleToPath(path, h1);
@@ -572,7 +579,7 @@ export default function App() {
         // 改名失败不影响编辑主流程
       }
     },
-    [vault, io, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
+    [vault, prefs.titleSync, io, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
   );
 
   const onEdit = useCallback(
@@ -1300,6 +1307,8 @@ export default function App() {
         onOpenSplit={(p) => void openSplit(p)}
         onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
         jumpTo={jumpTo}
+        defaultView={prefs.defaultView}
+        livePreviewOn={prefs.livePreview}
         onOpenAt={(p, line) => {
           void openFileInTab(p);
           setJumpTo((cur) => ({ path: p, line, n: (cur?.n ?? 0) + 1 }));
@@ -1479,6 +1488,14 @@ export default function App() {
           onClose={() => setShowSettings(false)}
           appVersion={appVersion}
           onCheckUpdate={checkUpdateNow}
+          prefs={prefs}
+          onPrefsChange={updatePrefs}
+          sync={{
+            server: state.account?.serverUrl ?? null,
+            account: state.account?.email ?? null,
+            syncing,
+            onSyncNow: () => void doSync(),
+          }}
         />
       )}
       {trash.open && (
