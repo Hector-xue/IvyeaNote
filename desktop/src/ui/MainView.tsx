@@ -46,6 +46,8 @@ interface Props {
   splitPath?: string | null;
   splitDoc?: string | null;
   onOpenSplit?(path?: string): void;
+  /** E3：「移动到…」——右键菜单本来就点名要它，此前只有拖拽一条路 */
+  onRequestMove?(path: string, isDir: boolean): void;
   onCloseSplit?(): void;
   /** v0.3.4：PDF 文件列表 */
   pdfs: string[];
@@ -172,6 +174,9 @@ export function MainView(props: Props) {
         ? [
             { id: 'new', label: '在此新建笔记', run: () => props.onNewFolderNote(node.path) },
             { id: 'newdir', label: '在此新建子文件夹', run: () => props.onCreateFolder?.(node.path) },
+            ...(props.onRequestMove
+              ? [{ id: 'movedir', label: '移动到…', run: () => props.onRequestMove?.(node.path, true) }]
+              : []),
             { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
           ]
         : [
@@ -180,6 +185,9 @@ export function MainView(props: Props) {
               ? [{ id: 'split', label: '在右侧打开', run: () => props.onOpenSplit?.(node.path) }]
               : []),
             { id: 'rename', label: '重命名…', run: () => props.onRequestRename?.(node.path) },
+            ...(props.onRequestMove
+              ? [{ id: 'move', label: '移动到…', run: () => props.onRequestMove?.(node.path, false) }]
+              : []),
             { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
             { id: 'del', label: '删除', danger: true, run: () => props.onDeleteFile(node.path) },
           ];

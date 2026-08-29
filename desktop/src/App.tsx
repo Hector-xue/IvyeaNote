@@ -21,6 +21,8 @@ import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette } from './ui/Palette';
+import { TagPanel } from './ui/TagPanel';
+import { MoveDialog } from './ui/MoveDialog';
 import { GraphView } from './ui/GraphView';
 import { useNoteIndex } from './lib/noteIndex';
 import {
@@ -34,7 +36,6 @@ import { SettingsView } from './ui/SettingsView';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { planMove, remapPath } from './lib/movePath';
 import { extractLinks, titleOfPath } from './lib/wikilink';
-import { buildTagIndex } from './lib/tags';
 import {
   loadState,
   saveState,
@@ -844,6 +845,10 @@ export default function App() {
   const [pairBusy, setPairBusy] = useState(false);
   /** v0.7.0 F4: tags panel */
   const [showTagPanel, setShowTagPanel] = useState(false);
+  /** 移动端点标签后要搜的词（命令面板在手机上不渲染，得走抽屉里的全文搜索） */
+  const [mobileSearchSeed, setMobileSearchSeed] = useState<{ text: string; n: number } | null>(null);
+  /** 「移动到…」选择器：桌面右键与移动端长按共用 */
+  const [moving, setMoving] = useState<{ path: string; isDir: boolean } | null>(null);
   /** v0.7.1 F8: graph view */
   const [showGraph, setShowGraph] = useState(false);
 
@@ -1062,6 +1067,35 @@ export default function App() {
     actions: commandActions,
   });
 
+  /**
+   * 点标签 → 搜这个标签。桌面走命令面板的搜索模式；面板的输入框是非受控的，
+   * 只能用原生 setter + input 事件把值灌进去（React 不认直接赋 value）。
+   */
+  const searchTag = useCallback(
+    (tag: string) => {
+      openPalette('search');
+      window.setTimeout(() => {
+        const input = document.querySelector<HTMLInputElement>('.palette-input');
+        if (!input) return;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(input, '#' + tag);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }, 80);
+    },
+    [openPalette]
+  );
+
+
+  /** 库内全部目录（笔记路径推导出来的 + 只有 .keep 的空目录），供「移动到…」列表用 */
+  const allDirs = useMemo(() => {
+    const set = new Set<string>(emptyDirs);
+    for (const f of files) {
+      const parts = f.split('/');
+      for (let i = 1; i < parts.length; i++) set.add(parts.slice(0, i).join('/'));
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+  }, [files, emptyDirs]);
+
   // ---------- 渲染 ----------
 
   if (!state.account && showWelcome) {
@@ -1129,6 +1163,11 @@ export default function App() {
           vault={vault}
           files={files}
           emptyDirs={emptyDirs}
+          searchDocs={searchDocs}
+          onOpenTags={() => void openTagPanel()}
+          searchSeed={mobileSearchSeed}
+          onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
+          onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
           pdfs={pdfs}
           currentPath={currentPath}
           doc={doc}
@@ -1160,6 +1199,30 @@ export default function App() {
           onInsertImage={onInsertImage}
           resolveImage={resolveImage}
         />
+        {/* 标签面板原本整段写在桌面分支之后，手机上根本不渲染——补入口就得连它一起搬 */}
+        {showTagPanel && (
+          <TagPanel
+            docs={searchDocs}
+            onClose={() => setShowTagPanel(false)}
+            onPick={(tag) => {
+              setShowTagPanel(false);
+              setMobileSearchSeed((cur) => ({ text: '#' + tag, n: (cur?.n ?? 0) + 1 }));
+            }}
+          />
+        )}
+        {moving && (
+          <MoveDialog
+            srcPath={moving.path}
+            isDir={moving.isDir}
+            dirs={allDirs}
+            onClose={() => setMoving(null)}
+            onPick={(destDir) => {
+              const m = moving;
+              setMoving(null);
+              void onMovePath(m.path, destDir, m.isDir);
+            }}
+          />
+        )}
         {dialogEl}
         {toastEl}
       </div>
@@ -1233,6 +1296,7 @@ export default function App() {
         splitPath={splitPath}
         splitDoc={splitDoc}
         onOpenSplit={(p) => void openSplit(p)}
+        onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
         onCloseSplit={closeSplit}
         pdfs={pdfs}
         currentPath={currentPath}
@@ -1332,47 +1396,14 @@ export default function App() {
         />
       )}
       {showTagPanel && (
-        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowTagPanel(false)}>
-          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="tags">
-            <h2 className="dlg-title">{'\u6807\u7b7e'}</h2>
-            {(() => {
-              const idx = buildTagIndex(searchDocs);
-              if (idx.size === 0)
-                return <p className="dlg-desc">{'\u8fd8\u6ca1\u6709\u6807\u7b7e\u3002\u5728\u7b14\u8bb0\u91cc\u5199 #\u6807\u7b7e \u5373\u53ef\u3002'}</p>;
-              return (
-                <div className="tag-cloud">
-                  {[...idx.entries()]
-                    .sort((a, b) => b[1].length - a[1].length)
-                    .map(([tag, paths]) => (
-                      <button
-                        key={tag}
-                        className="tag-chip"
-                        onClick={() => {
-                          setShowTagPanel(false);
-                          openPalette('search');
-                          window.setTimeout(() => {
-                            const input = document.querySelector<HTMLInputElement>('.palette-input');
-                            if (input) {
-                              const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                              setter?.call(input, '#' + tag);
-                              input.dispatchEvent(new Event('input', { bubbles: true }));
-                            }
-                          }, 80);
-                        }}
-                      >
-                        #{tag} <span className="tag-count">{paths.length}</span>
-                      </button>
-                    ))}
-                </div>
-              );
-            })()}
-            <div className="dlg-actions">
-              <button className="btn primary" onClick={() => setShowTagPanel(false)}>
-                {'\u5173\u95ed'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <TagPanel
+          docs={searchDocs}
+          onClose={() => setShowTagPanel(false)}
+          onPick={(tag) => {
+            setShowTagPanel(false);
+            searchTag(tag);
+          }}
+        />
       )}
       {pairInfo && (
         <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}>
@@ -1473,6 +1504,19 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {moving && (
+        <MoveDialog
+          srcPath={moving.path}
+          isDir={moving.isDir}
+          dirs={allDirs}
+          onClose={() => setMoving(null)}
+          onPick={(destDir) => {
+            const m = moving;
+            setMoving(null);
+            void onMovePath(m.path, destDir, m.isDir);
+          }}
+        />
       )}
       {dialogEl}
       {toastEl}

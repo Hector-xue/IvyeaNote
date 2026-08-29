@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/logo.svg';
 import { buildFileTree, displayName, type TreeNode } from './FileTree';
+import { searchNotes, type SearchDoc } from '../lib/searchIndex';
 import { MarkdownEditor } from './MarkdownEditor';
 import { extractHeadings } from '../lib/headings';
 import type { VaultMeta } from '../lib/store';
@@ -28,6 +29,12 @@ interface Props {
   onSelect(path: string): void;
   onEdit(path: string, text: string): void;
   onCreateNote(): void;
+  /**
+   * v0.8.3：移动端此前**没有任何新建文件夹的入口**——底部栏和长按菜单都没有，
+   * 于是「移动到…」在手机上永远只有库根一个目标。正是方案 1.4 要杜绝的
+   * 「移动端功能是空的」。
+   */
+  onCreateFolder?(parent?: string): void;
   onDeleteFile(path: string): void;
   /** v0.7.3 P1：重命名 */
   onRenameFile(path: string, newName: string): void;
@@ -35,6 +42,24 @@ interface Props {
   backlinks?: string[];
   /** 空文件夹（只有 .keep）——搜索时不显示，避免结果里混进空目录 */
   emptyDirs?: string[];
+  /**
+   * v0.8.3：全库正文（与桌面命令面板 / 侧栏搜索同一份倒排索引）。
+   * 移动端此前只按文件名 `includes` 过滤——记不住标题就找不着，等于没有搜索。
+   */
+  searchDocs?: SearchDoc[];
+  /** v0.8.3：标签面板（桌面 ribbon 早就有，手机上一直没入口） */
+  onOpenTags?(): void;
+  /**
+   * v0.8.3：从外部灌一个搜索词进抽屉（点标签用）。
+   * 带序号是因为「连点同一个标签两次」也该重新搜——只看字符串会被 React 判定没变。
+   */
+  searchSeed?: { text: string; n: number } | null;
+  /**
+   * v0.8.3：长按操作单里的「移动到…」。
+   * 方案 §4.6 写的是长按拖拽——小屏上拖到目标文件夹本身就难（目标一行高、还要
+   * 同时滚列表），先给稳的选择器，移动端此前压根没有任何移动手段。
+   */
+  onRequestMove?(path: string, isDir: boolean): void;
   onSync(): void;
   onCreateVault(): void;
   onToggleTheme(): void;
@@ -148,6 +173,25 @@ export function MobileView(props: Props) {
   const report = props.lastReport;
   const hasError = report && report.errors.length > 0;
 
+  /**
+   * v0.8.3：抽屉里的搜索改走全文倒排索引。
+   * 标题命中也在索引里，所以这是原来「按文件名过滤」的严格超集。
+   */
+  const hits = useMemo(
+    () => (query.trim() && props.searchDocs ? searchNotes(props.searchDocs, query, 40) : []),
+    [props.searchDocs, query]
+  );
+  const searching = query.trim() !== '' && !!props.searchDocs;
+
+  // 外部灌词：填进搜索框并把抽屉推出来，否则用户点完标签什么也看不见
+  const seedN = props.searchSeed?.n;
+  const seedText = props.searchSeed?.text;
+  useEffect(() => {
+    if (seedN === undefined || seedText === undefined) return;
+    setQuery(seedText);
+    setDrawerOpen(true);
+  }, [seedN, seedText]);
+
   // ---- P6：大纲数据 ----
   const headings = useMemo(() => extractHeadings(props.doc ?? ''), [props.doc]);
 
@@ -215,6 +259,18 @@ export function MobileView(props: Props) {
             >
               ✏️ 重命名
             </button>
+            {props.onRequestMove && (
+              <button
+                className="m-sheet-item"
+                onClick={() => {
+                  const p = sheet.path;
+                  setSheet(null);
+                  props.onRequestMove?.(p, false);
+                }}
+              >
+                📂 移动到…
+              </button>
+            )}
             <button
               className="m-sheet-item danger"
               onClick={() => {
@@ -225,6 +281,18 @@ export function MobileView(props: Props) {
               🗑 删除
             </button>
           </>
+        )}
+        {sheet.kind === 'dir' && props.onCreateFolder && (
+          <button
+            className="m-sheet-item"
+            onClick={() => {
+              const p = sheet.path;
+              setSheet(null);
+              props.onCreateFolder?.(p);
+            }}
+          >
+            ⊞ 在此新建子文件夹
+          </button>
         )}
         {sheet.kind === 'pdf' && (
           <button
@@ -293,6 +361,11 @@ export function MobileView(props: Props) {
         <div className="m-drawer-head">
           <img src={logoUrl} alt="" className="brand-logo" />
           <span className="brand-name">Ivyea Note</span>
+          {props.onOpenTags && (
+            <button className="icon-btn" title="标签" aria-label="标签" onClick={props.onOpenTags}>
+              🏷
+            </button>
+          )}
           <button className="icon-btn" onClick={props.onToggleTheme}>
             {props.theme === 'light' ? '🌙' : '☀️'}
           </button>
@@ -324,8 +397,35 @@ export function MobileView(props: Props) {
         </div>
 
         <div className="m-file-list">
-          {tree.map((n) => renderNode(n, 0))}
-          {filteredPdfs.length > 0 && (
+          {searching ? (
+            hits.length === 0 ? (
+              <div className="empty">没有匹配的笔记</div>
+            ) : (
+              <>
+                <div className="m-hit-count">{hits.length} 篇匹配</div>
+                {hits.map((h) => (
+                  <button
+                    key={h.path}
+                    className={`m-hit ${props.currentPath === h.path ? 'active' : ''}`}
+                    onClick={() => props.onSelect(h.path)}
+                  >
+                    <span className="m-hit-title">{displayName(h.path.split('/').pop() ?? h.path, true)}</span>
+                    {h.path.includes('/') && (
+                      <span className="m-hit-dir">{h.path.slice(0, h.path.lastIndexOf('/'))}</span>
+                    )}
+                    {h.preview.map((line, i) => (
+                      <span key={i} className="m-hit-line">
+                        {line}
+                      </span>
+                    ))}
+                  </button>
+                ))}
+              </>
+            )
+          ) : (
+            tree.map((n) => renderNode(n, 0))
+          )}
+          {!searching && filteredPdfs.length > 0 && (
             <div className="dir-group">
               <div className="dir-label pdf-label">📄 PDF</div>
               {filteredPdfs.map((p) => (
@@ -350,6 +450,9 @@ export function MobileView(props: Props) {
 
         <div className="sidebar-foot">
           <button onClick={props.onCreateNote}>＋ 新建笔记</button>
+          {props.onCreateFolder && (
+            <button onClick={() => props.onCreateFolder?.('')}>⊞ 新建文件夹</button>
+          )}
           {props.onCheckUpdate && <button onClick={props.onCheckUpdate}>检查更新</button>}
           <button onClick={props.onCreateVault}>＋ 新建笔记库</button>
           {props.hasAccount ? (

@@ -783,3 +783,80 @@ body:has(.panel-resizer.dragging) {
 .split-toggle {
   margin-left: auto;
 }
+
+/* ------------------------------------------------------------ 移动端搜索结果
+   v0.8.3：抽屉里的搜索从「按文件名过滤」换成全文命中，结果沿用桌面侧栏搜索
+   的三层排布（标题 / 目录 / 命中行），只是触控目标放大。 */
+.m-hit-count {
+  padding: 6px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.m-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+  border-radius: 10px;
+}
+.m-hit.active {
+  background: var(--panel-2);
+}
+.m-hit-title {
+  font-weight: 500;
+}
+.m-hit-dir,
+.m-hit-line {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------ 「移动到…」选择器 */
+.move-card {
+  max-width: min(420px, calc(100vw - 32px));
+}
+.move-list {
+  max-height: min(50vh, 360px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0 4px;
+}
+.move-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 14px;
+}
+.move-item:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.move-item:disabled {
+  color: var(--muted);
+}
+.move-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.move-item-tag {
+  font-size: 12px;
+  color: var(--muted);
+}
