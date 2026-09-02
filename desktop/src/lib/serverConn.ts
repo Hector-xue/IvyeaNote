@@ -5,16 +5,34 @@
  */
 
 /**
- * 内置默认服务器地址（构建期注入，见 vite.config.ts）。
- * 空串＝这份构建没有默认服务器，登录时必须手填。
- * 测试环境没有 define，取不到就当空串——不能让它抛 ReferenceError 把登录页炸掉。
+ * 默认同步服务器地址。
+ *
+ * 优先级：
+ * ① 构建期预置（`VITE_DEFAULT_SERVER`）——**仓库默认为空**，只有私有构建才会有值。
+ *    这是开源项目，公开安装包里写死任何人的域名都是错的（v0.10.3 犯过，v0.10.4 改回）。
+ * ② `--mode web` 构建：这份产物是**同步服务端自己托管**的（go:embed 到 /app/），
+ *    页面就是那台服务器发出来的，所以当前来源必然正是服务器地址——每个自建者
+ *    都白得"不用填地址"，而仓库里一个域名都不用写。
+ * ③ 其余（桌面 / 安卓 / 开发服务器）：没有默认值，老老实实让用户填一次。
+ *
+ * 三处 `typeof` 判断是给测试环境兜底：vitest 里没有这些 define，直接引用会抛
+ * ReferenceError 把登录页整个炸掉。
  */
 export function defaultServerUrl(): string {
   try {
-    return typeof __DEFAULT_SERVER__ === 'string' ? __DEFAULT_SERVER__ : '';
+    if (typeof __DEFAULT_SERVER__ === 'string' && __DEFAULT_SERVER__) return __DEFAULT_SERVER__;
   } catch {
-    return '';
+    /* 没有这个 define：继续往下判断 */
   }
+  try {
+    if (typeof __WEB_BUILD__ !== 'undefined' && __WEB_BUILD__ && typeof location !== 'undefined') {
+      // Tauri 的 WebView 来源是 tauri://localhost 之类，绝不能拿它当服务器地址
+      if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
+    }
+  } catch {
+    /* 同上 */
+  }
+  return '';
 }
 
 export interface ProbeResult {

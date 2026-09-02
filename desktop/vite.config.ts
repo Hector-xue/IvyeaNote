@@ -7,16 +7,18 @@ import { readFileSync } from 'node:fs';
 const appVersion = JSON.parse(readFileSync('./src-tauri/tauri.conf.json', 'utf-8')).version as string;
 
 /*
- * v0.10.3：**内置默认同步服务器**。
+ * 默认同步服务器。
  *
- * 此前登录页第一栏就是空的「服务器地址」，而部署引导还在教你装 Docker——
- * 于是"开启同步"这件事，第一步就是"先去搭一台服务器"。官方发行版没有理由
- * 让人做这一步：地址烧进包里，登录页只剩邮箱和密码，自建的人在「高级」里改。
+ * **仓库里永远是空的，绝不能写死任何域名。**
+ * v0.10.3 一度把作者自己的 note.ivyea.com 当成了所有构建的默认值——这是个错误：
+ * 这是开源项目，公开 Release 的安装包谁都能下，于是每个用户的登录页底下都挂着
+ * 别人的私有服务器地址。自托管软件不该有"官方服务器"。
  *
- * 用环境变量覆盖（`VITE_DEFAULT_SERVER=... npm run build`），
- * 传空串就是"没有默认服务器"，退回手填。
+ * 需要预置地址的私有构建自己传 `VITE_DEFAULT_SERVER=... npm run build`。
+ * 而由同步服务端托管的网页版（`--mode web`，挂在 /app/）不需要任何预置：
+ * 页面就是那台服务器发出来的，直接用当前来源即可（见 lib/serverConn.ts）。
  */
-const defaultServer = (process.env.VITE_DEFAULT_SERVER ?? 'https://note.ivyea.com').trim();
+const defaultServer = (process.env.VITE_DEFAULT_SERVER ?? '').trim();
 
 // Web 版构建（vite build --mode web）用 /app/ 子路径，供服务端 go:embed 托管；
 // 桌面端 Tauri 构建（默认 mode）保持 /。
@@ -26,6 +28,8 @@ export default defineConfig(({ mode }) => ({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
     __DEFAULT_SERVER__: JSON.stringify(defaultServer),
+    // web 版＝由同步服务端自己托管的那份，可以拿页面来源当服务器地址
+    __WEB_BUILD__: JSON.stringify(mode === 'web'),
   },
   clearScreen: false,
   server: {
