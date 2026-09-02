@@ -1,6 +1,8 @@
 // v0.7.0 H9: LAN discovery (Rust side).
 pub mod discover;
 pub use discover::discover_servers;
+// v0.10.5：内置同步服务端（sidecar 起停）。Windows+安卓这个主场景不该要求用户先搭服务器
+pub mod localserver;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,7 +13,16 @@ pub fn run() {
         // v0.7.2：应用内更新（桌面端）。updater 负责检查/下载/校验，process 负责重启安装
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![discover_servers])
+        // 安卓 SAF：桌面端注册后所有命令返回 Unsupported，前端按平台分流，不影响桌面
+        .plugin(tauri_plugin_ivnote_saf::init())
+        .manage(localserver::LocalServer::default())
+        .invoke_handler(tauri::generate_handler![
+            discover_servers,
+            localserver::start_local_server,
+            localserver::stop_local_server,
+            localserver::local_server_status,
+            localserver::local_server_available
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

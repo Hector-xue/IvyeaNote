@@ -1,0 +1,69 @@
+# 安卓调试构建：只出一个 APK，不发版、不打 tag、不碰 Release。
+#
+# 存在的理由：安卓那部分（Rust 插件 + Kotlin 原生代码）**本机编译不了**——
+# 开发机没有 cargo，也没有 Android NDK。以前验证安卓改动的唯一办法是打 tag 发一版，
+# 一次二十多分钟还会在 Releases 里留下垃圾。这个工作流把反馈缩到十分钟内，
+# 产物挂在 workflow artifact 上，扫码装机就能试。
+name: android-debug
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'feat/**'
+      - 'fix/android**'
+
+jobs:
+  apk:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 稳定工具链（Android 目标）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: 安装 Java 17 + Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 固定 Node 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 前端构建
+        working-directory: desktop
+        run: npm install --no-audit --no-fund && npm run build
+
+      - name: 安装 tauri-cli 并初始化 Android 工程
+        working-directory: desktop
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri android init
+
+      - name: 注入 Android 品牌图标
+        working-directory: desktop
+        run: cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
+
+      # debug 包自带 debug 签名，不需要发布密钥——这条路径刻意不碰 ANDROID_KEYSTORE_*，
+      # 免得调试构建把发布签名密钥也拖进来
+      - name: 构建 debug APK
+        working-directory: desktop
+        run: |
+          sudo apt-get update && sudo apt-get install -y gradle
+          unset NDK_HOME
+          cargo tauri android build --apk --debug
+          mkdir -p apk-out
+          find src-tauri/gen/android -name "*.apk" -exec cp {} apk-out/ \;
+          ls -la apk-out
+
+      - name: 上传 APK（workflow artifact，不进 Release）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivyea-note-debug-apk
+          path: desktop/apk-out/*.apk
+          retention-days: 14

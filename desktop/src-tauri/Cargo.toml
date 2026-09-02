@@ -1,6 +1,6 @@
 [package]
 name = "ivyea-note-desktop"
-version = "0.10.4"
+version = "0.10.5"
 description = "Ivyea Note 桌面端：本地 Markdown · 多端同步"
 authors = ["ivyea"]
 edition = "2021"
@@ -21,6 +21,8 @@ serde_json = "1"
 tauri-plugin-opener = "2.5.4"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+# 安卓 SAF：让笔记库能落在用户自己选的系统目录里（上游 dialog 插件没实现选目录）
+tauri-plugin-ivnote-saf = { path = "plugins/ivnote-saf" }
 
 [profile.release]
 strip = true

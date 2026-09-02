@@ -233,6 +233,66 @@ ivyea note/
   - 门禁：oxlint 0 error / tsc OK / vitest **374/374** / vite build OK。测试改的都是**定位方式**（按钮搬家了），断言一条没放宽。
   - **仍然未做**：安卓上的「选择已有文件夹」。这需要 Android SAF，而本机编译不了 Tauri——**我没有安卓验证能力**，这一条得等能验证了再动。
 
+- [x] **v0.10.5 安卓能选自己的文件夹了 + Windows/安卓同步一键化**（2026-09-03）。
+  两块都冲着「用户群体大多是一台 Windows 配一部安卓」去的。
+
+  **① 安卓 SAF：笔记库能落在用户自己选的系统目录。**
+  此前安卓上笔记只能存在 WebView 的 OPFS 里，也就是应用私有数据区——**卸载即清空**，
+  而且**根本没有"选择文件夹"这个入口**。接上 Storage Access Framework 之后，笔记就是
+  用户选的那个目录里的普通 `.md`，卸载、换机、用别的编辑器打开都不受影响。
+  - 为什么必须自己写原生插件：`tauri-plugin-dialog` 2.7.2 的安卓实现里只有
+    `ACTION_GET_CONTENT`（选单个文件）和 `ACTION_CREATE_DOCUMENT`（另存为），
+    `mobile.rs` 里**根本没有 `pick_folder`**——不是没接上，是上游没实现。
+  - **性能是设计重点**：SAF 每次目录查询都是一次跨进程 `ContentResolver` 调用，
+    逐个文件去问会慢到不可用。`listEntries` 一次 BFS 把整棵树带回来（每个目录一个
+    cursor，不是每个文件一次查询）并建立 路径→documentId 缓存；写入/删除就地更新
+    而不是整棵作废，否则每存一次笔记都要重新遍历全库。
+  - `takePersistableUriPermission` 是必须的——不持久化授权的话应用一重启 URI 就失效，
+    表现就是「昨天还好好的，今天笔记全没了」。
+
+  **② Windows + 安卓同步一键化。** 查下来零件全是现成的，只是没接起来——
+  **同一个毛病这个仓库里已经第三次出现**（前两次是配对码入口、移动端长按操作单）：
+  服务端默认后端就是 SQLite、密钥与管理员账号全自动生成；服务端从 v0.7.0 起就在
+  UDP 9999 应答 `IVYEA-DISCOVER` 广播；Rust 侧 `discover_servers` 和前端
+  `lib/discover.ts` 也都在；`ivnote-win-setup.ps1` 本身就是免 Docker 向导。断在三处：
+  - **服务端二进制从来没被发布过**。那个免 Docker 向导从 v0.7.0 起就写着「请先从
+    Release 下载 `ivnote-server-windows-amd64.exe`」——而这个文件**在任何一个 Release
+    里都不存在**。现在 6 个平台交叉编译随 Release 发布。
+  - **`start.bat` 第 7 行就在 `where docker`**，检测不到就让用户去装 Docker Desktop——
+    而旁边的免 Docker 向导明明能用。改成有 exe 就直接跑。
+  - **局域网发现写好了却没接到任何界面上**。配对码那一屏现在有「找找附近的电脑」，
+    省掉的正是最难的一步：在手机键盘上敲 `http://192.168.x.x:8080`。
+
+  再往前一步：**服务端作为 sidecar 编进桌面安装包**，设置里一个开关「在这台电脑上
+  开启同步」，**打开即起服务 + 自动登录**。自动登录是关键——少了它用户还是要面对
+  账号密码，"点点点"就断在最后一米。凭据每台机器随机生成一次存本机（不是给所有人
+  一个默认密码，有单测锁着：换一组凭据等于服务端里的笔记对不上了）。
+  - **不引 `tauri-plugin-shell`**：那条路要多一套权限作用域，而开发机编译不了 Tauri
+    （没 cargo、没 NDK），任何不确定都要花一轮 CI 才能证伪。sidecar 落点是确定的
+    （主程序同目录、去掉 triple 后缀），自己解析路径反而最可验证。
+  - **macOS 两支必须按 target 编 sidecar 而不是按 host**，照 host 编出来是另一个架构，
+    打包时 Tauri 找不到对应后缀直接失败。
+  - 局域网 IP 用「连一个外网地址的 UDP socket 再读 `local_addr`」——UDP 无连接不会
+    真发包，只是让内核按路由表挑出口网卡（Rust 标准库没有枚举网卡的能力）。
+  - `stdout` 必须 `Stdio::null()`：设了 `piped()` 却没人读，管道缓冲写满后**子进程会
+    阻塞在写日志上**，表现是服务端跑着跑着突然不响应。
+  - `tauri.android.conf.json` 把安卓的 `externalBin` 清空：它是全局配置，
+    `tauri android build` 会去找 `ivnote-server-aarch64-linux-android` 然后失败。
+    这个风险 `cargo check` 抓不到（打包不参与 check），只有真跑一次 android build 才知道。
+
+  **③ 打包线补上域名闸门。** 「产物不得内置同步服务器域名」此前只在 `ci.yml` 有——
+  门禁挡的是 PR，发版走的是另一条路，而 v0.10.3 正是从后者把私有域名漏出去的。
+
+  **④ 新增 `desktop-check` 工作流**（Windows/macOS 只跑 `cargo check`）。
+  `ci.yml` 的 Rust 门禁只跑 ubuntu，而 `#[cfg(windows)]` 的代码在 Linux 上**根本不
+  参与编译**——内置服务端里那段 `CREATE_NO_WINDOW` 在 ci 里永远是绿的，真出问题要等
+  发版打包才知道。完整打包三平台二十多分钟太贵，只做 check 几分钟就够。
+
+  门禁：oxlint 0 error / tsc OK / vitest **428/428**（+6）/ Linux+Windows+macOS
+  `cargo check` 全过 / android build 出包 / vite build OK。
+  **仍未真机验证**：SAF 的选目录与授权持久化、Windows 内置服务端的防火墙与起停、
+  手机能否发现到电脑。
+
 - [x] **v0.10.4 热修：移除写死的同步服务器域名**（2026-09-02）。
   v0.10.3 把作者自己的 `note.ivyea.com` 当成了**所有构建**的默认值。这是开源项目，
   公开 Release 的安装包谁都能下——于是每个用户的登录页底下都挂着别人的私有服务器地址。

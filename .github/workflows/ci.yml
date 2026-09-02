@@ -30,6 +30,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      # tauri.conf.json 声明了 externalBin，缺了这个文件 Rust 侧的构建校验会失败。
+      # 顺带：这一步等于每个 PR 都在验证服务端还能编译，不必等到发版才发现。
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: server/go.sum
+
+      - name: 编译同步服务端 sidecar（cargo check 需要它存在）
+        working-directory: server
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          mkdir -p ../desktop/src-tauri/binaries
+          go build -ldflags="-s -w" \
+            -o ../desktop/src-tauri/binaries/ivnote-server-x86_64-unknown-linux-gnu \
+            ./cmd/ivnote-server
+
       - name: Rust 编译门禁（cargo check）
         working-directory: desktop/src-tauri
         run: cargo check

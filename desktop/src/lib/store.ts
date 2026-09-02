@@ -10,8 +10,16 @@ export interface Tokens {
 export interface VaultMeta {
   id: number;
   name: string;
-  /** 绑定的本地文件夹绝对路径（桌面端） */
+  /**
+   * 绑定的本地位置。桌面端是文件夹绝对路径；安卓走 SAF 时是 `content://` 树 URI；
+   * `opfs://` 前缀＝应用内部存储（卸载即清空）。
+   */
   localPath?: string;
+  /**
+   * v0.10.4：给人看的位置名。`content://com.android.externalstorage.documents/tree/...`
+   * 这种东西摆在设置里等于没说，所以另存一份系统给的显示名。
+   */
+  localLabel?: string;
   /** 服务端变更流游标：已应用到本地的最后一条 seq */
   cursor: number;
   /** path -> 最后一次确认的服务端版本号（base_version） */
