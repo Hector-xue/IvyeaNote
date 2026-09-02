@@ -1,0 +1,71 @@
+# 桌面端跨平台编译检查（只 cargo check，不打包、不发版）。
+#
+# 存在的理由：ci.yml 的 Rust 门禁只跑在 ubuntu 上，而 `#[cfg(windows)]` 的代码
+# 在 Linux 上**根本不参与编译**。内置服务端那块正好有一段 Windows 专属逻辑
+# （CREATE_NO_WINDOW，用来避免弹出黑色控制台窗口），它在 ci.yml 里永远是绿的，
+# 真正会不会编译过要等发版打包时才知道——那时候已经太晚了。
+#
+# 完整打包很贵（三平台二十多分钟），所以这里只做 cargo check：几分钟，
+# 足够验证类型和平台条件编译。
+name: desktop-check
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'feat/**'
+      - 'fix/**'
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            go_os: windows
+            go_arch: amd64
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            go_os: darwin
+            go_arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: server/go.sum
+
+      # tauri.conf.json 声明了 externalBin，缺文件会让构建校验失败
+      - name: 编译服务端 sidecar
+        shell: bash
+        working-directory: server
+        env:
+          GOOS: ${{ matrix.go_os }}
+          GOARCH: ${{ matrix.go_arch }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          out="../desktop/src-tauri/binaries/ivnote-server-${{ matrix.triple }}"
+          [ "${{ matrix.go_os }}" = "windows" ] && out="$out.exe"
+          mkdir -p ../desktop/src-tauri/binaries
+          go build -o "$out" ./cmd/ivnote-server
+
+      - name: 固定 Node 22 LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # tauri::generate_context! 要求 frontendDist 存在
+      - name: 前端构建
+        working-directory: desktop
+        run: npm install --no-audit --no-fund && npm run build
+
+      - name: cargo check
+        working-directory: desktop/src-tauri
+        run: cargo check
