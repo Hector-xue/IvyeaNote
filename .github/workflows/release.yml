@@ -63,20 +63,43 @@ jobs:
           go-version: '1.27'
           cache-dependency-path: server/go.sum
 
+      # 要为**两个** triple 各编一份：
+      #   - matrix.triple：`tauri build --target …` 真正打包用的那个
+      #   - host triple：`cargo check` **不带 --target**，所以它按 host 校验 externalBin
+      # macos-latest 是 Apple Silicon（host=aarch64-apple-darwin），而 x86_64 那一支
+      # 的 matrix.triple 是 x86_64-apple-darwin —— 只编 matrix 的那份，cargo check
+      # 就会报 `binaries/ivnote-server-aarch64-apple-darwin doesn't exist`（实测踩到）。
+      # Go 交叉编译几乎不花时间，多编一份比在这里绕弯子便宜。
       - name: 编译同步服务端 sidecar
         shell: bash
         working-directory: server
         env:
-          GOOS: ${{ matrix.go_os }}
-          GOARCH: ${{ matrix.go_arch }}
           CGO_ENABLED: '0'
         run: |
           set -euo pipefail
-          out="../desktop/src-tauri/binaries/ivnote-server-${{ matrix.triple }}"
-          [ "${{ matrix.go_os }}" = "windows" ] && out="$out.exe"
           mkdir -p ../desktop/src-tauri/binaries
-          go build -ldflags="-s -w" -o "$out" ./cmd/ivnote-server
-          ls -la "$out"
+          build_for() {
+            local triple="$1" os arch ext=""
+            case "$triple" in
+              x86_64-pc-windows-msvc)    os=windows arch=amd64 ext=.exe ;;
+              aarch64-pc-windows-msvc)   os=windows arch=arm64 ext=.exe ;;
+              aarch64-apple-darwin)      os=darwin  arch=arm64 ;;
+              x86_64-apple-darwin)       os=darwin  arch=amd64 ;;
+              x86_64-unknown-linux-gnu)  os=linux   arch=amd64 ;;
+              aarch64-unknown-linux-gnu) os=linux   arch=arm64 ;;
+              *) echo "::error::不认识的 target triple: $triple"; return 1 ;;
+            esac
+            local out="../desktop/src-tauri/binaries/ivnote-server-$triple$ext"
+            echo "→ $triple ($os/$arch)"
+            GOOS=$os GOARCH=$arch go build -ldflags="-s -w" -o "$out" ./cmd/ivnote-server
+          }
+          build_for "${{ matrix.triple }}"
+          HOST="$(rustc -vV | sed -n 's/^host: //p')"
+          if [ -n "$HOST" ] && [ "$HOST" != "${{ matrix.triple }}" ]; then
+            echo "host($HOST) 与 target 不同，为 cargo check 再编一份"
+            build_for "$HOST"
+          fi
+          ls -la ../desktop/src-tauri/binaries/
 
       # v0.7.2：Rust 编译门禁 —— 打包前先 cargo check，类型错误几分钟内暴露
       - name: Rust 编译门禁（cargo check）
