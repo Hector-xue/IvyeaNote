@@ -201,7 +201,21 @@ export function MobileView(props: Props) {
         second,
       ];
     }
-    if (!cur) return [[{ key: 'new', icon: 'file-plus', label: '新建笔记', onClick: props.onCreateNote }]];
+    /*
+     * v0.10.3：「更多」里必须能到设置。
+     * 手机上设置此前**只在抽屉顶部那个齿轮下面**——而顶栏右上角的「更多」才是
+     * 所有人第一反应会点的地方，它却只有当前笔记的增删改。于是"存储位置在哪""怎么
+     * 开同步"在手机上等于不存在。设置单独成组放在最后：它是应用级的，不属于这篇笔记。
+     */
+    const appGroup: SheetItem[] = props.onOpenSettings
+      ? [{ key: 'settings', icon: 'settings', label: '设置', onClick: props.onOpenSettings }]
+      : [];
+    if (!cur) {
+      return [
+        [{ key: 'new', icon: 'file-plus', label: '新建笔记', onClick: props.onCreateNote }],
+        appGroup,
+      ];
+    }
     const fileActions: SheetItem[] = [
       {
         key: 'rename',
@@ -219,6 +233,7 @@ export function MobileView(props: Props) {
     return [
       [{ key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) }],
       fileActions,
+      appGroup,
     ];
   };
 

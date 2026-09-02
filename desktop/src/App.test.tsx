@@ -218,8 +218,38 @@ describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
     expect(document.querySelector('.login-card')).toBeTruthy();
 
     // 返回主界面
-    fireEvent.click(screen.getByText('先不登录，直接记笔记 →'));
+    fireEvent.click(screen.getByText('先不同步，直接记笔记 →'));
     expect(await screen.findByText('a')).toBeTruthy();
     expect(document.querySelector('.login-card')).toBeNull();
+  });
+
+  /**
+   * v0.10.3：登录页的默认路径**不该出现「服务器地址」输入框**。
+   * 这一栏此前是第一栏且默认为空，"开启同步"的第一步于是变成"先去搭台服务器"。
+   * 它没有被删掉，只是收进了「用自己的服务器」折叠区。
+   */
+  it('登录页默认不要求填服务器地址，展开「用自己的服务器」才出现', async () => {
+    await renderMain();
+    fireEvent.click(screen.getByTitle(/本地模式/));
+
+    expect(screen.queryByLabelText('服务器地址')).toBeNull();
+    expect(screen.queryByText('服务器地址')).toBeNull();
+
+    fireEvent.click(screen.getByText('用自己的服务器'));
+    expect(screen.getByText('服务器地址')).toBeTruthy();
+  });
+
+  /** 手机上默认落在「配对码」——在手机键盘上敲地址和密码本身就是劝退动作 */
+  it('登录页给出配对码与邮箱密码两条路，且说明了配对码从哪来', async () => {
+    await renderMain();
+    fireEvent.click(screen.getByTitle(/本地模式/));
+
+    expect(screen.getByRole('tab', { name: '配对码' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: '邮箱密码' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('tab', { name: '配对码' }));
+    expect(screen.getByLabelText('配对码')).toBeTruthy();
+    // 6 个格子不说清楚从哪来就没人知道填什么
+    expect(screen.getByText(/添加设备/)).toBeTruthy();
   });
 });

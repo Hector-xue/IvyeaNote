@@ -1359,6 +1359,11 @@ export default function App() {
             account: state.account?.email ?? null,
             syncing,
             onSyncNow: () => void doSync(),
+            onOpenLogin: () => {
+              setShowSettings(false);
+              setShowLogin(true);
+            },
+            onAddDevice: () => void showPairCode(),
           }}
           storage={{
             // opfs:// 是虚拟标记，对用户来说就是「应用内部存储」，不该把它当路径显示
@@ -1437,6 +1442,7 @@ export default function App() {
         onPairLogin={onPairLogin}
         onShowGuide={() => setShowGuide(true)}
         onCancel={() => setShowLogin(false)}
+        preferPairing={isMobile}
       />
     );
   }
@@ -1723,15 +1729,24 @@ export default function App() {
         />
       )}
       {pairInfo && (
-        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}>
+        /*
+         * v0.10.3：**必须盖在设置面板之上**。配对码是从「设置 → 同步 → 生成配对码」
+         * 点出来的，两个弹层都是 .dlg-mask（z-index 50），按 DOM 顺序设置卡片反而在上面——
+         * 于是屏幕上唯一要读的那串数字被压在毛玻璃后面看不清。
+         */
+        <div
+          className="dlg-mask dlg-mask-top"
+          onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}
+        >
           <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="添加设备">
             <h2 className="dlg-title">添加设备</h2>
             <p className="dlg-desc">
-              在新设备（手机/另一台电脑）的登录页点「已有配对码？免密码快速登录」，
-              填入服务器地址和下面的配对码即可登录。
+              在新设备（手机 / 另一台电脑）上打开 Ivyea Note，选「配对码」，
+              把下面这 6 位数字填进去就行——不用输服务器地址，也不用输密码。
             </p>
             <div className="pair-code">{pairInfo.code}</div>
-            <p className="dlg-desc">⏱ {pairInfo.expiresIn} 秒内有效，仅可使用一次</p>
+            {/* v0.10.0 定的规矩是清掉装饰性 emoji（字形在各平台不一致，Windows 上还会变黑白），这里漏了一个 */}
+            <p className="dlg-desc">{pairInfo.expiresIn} 秒内有效，仅可使用一次</p>
             <div className="dlg-actions">
               <button
                 className="btn ghost"

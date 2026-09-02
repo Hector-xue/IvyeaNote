@@ -1736,3 +1736,80 @@ button {
   user-select: none;
   -webkit-touch-callout: none;
 }
+
+/* ---------------------------------------------- 登录页（v0.10.3 重做） */
+
+/* 方式切换：配对码 / 邮箱密码。沿用 .side-tab 那套"分段控件"观感 */
+.login-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 18px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.login-tab {
+  flex: 1;
+  padding: 7px 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+.login-tab.on {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 0.06));
+}
+
+/* 配对码怎么拿：这段说明比输入框本身重要——不说清楚，6 个格子没人知道填什么 */
+.pair-how {
+  text-align: left;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+.login-card .pair-input {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 30px;
+  letter-spacing: 10px;
+  text-align: center;
+  padding: 12px 0 12px 10px; /* 字距会把最后一格推出去，左边补回来才居中 */
+  margin-bottom: 14px;
+}
+
+/* 「同步到 xxx · 用自己的服务器」：连的是哪台要看得见，但不该占第一栏 */
+.server-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.server-cur b {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.login-advanced {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  text-align: left;
+}
+.login-advanced .hint {
+  margin-top: 10px;
+}
+
+/* 叠在别的弹层之上的遮罩：配对码是从设置里点出来的，两个都是 .dlg-mask 时
+   按 DOM 顺序设置卡片会盖住它——而那串数字正是此刻唯一要读的东西 */
+.dlg-mask.dlg-mask-top {
+  z-index: 70;
+}

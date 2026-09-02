@@ -30,6 +30,12 @@ interface Props {
     account: string | null;
     syncing: boolean;
     onSyncNow(): void;
+    /**
+     * v0.10.3：这两个入口以前只存在于命令面板里（Ctrl+P → 「添加设备（配对码）」），
+     * 也就是说：不知道有命令面板的人，永远找不到"怎么让手机也同步"。
+     */
+    onOpenLogin(): void;
+    onAddDevice(): void;
   };
   /**
    * v0.10.2：**存储位置**。此前设置里根本没有这一节，"绑定本地文件夹"藏在
@@ -342,11 +348,35 @@ export function SettingsView(props: Props) {
                   checked={p.autoSync}
                   onChange={(x) => setPref({ autoSync: x })}
                 />
+                <div className="set-row set-about">
+                  <span className="set-label">
+                    添加设备
+                    <span className="set-hint">
+                      生成一个 6 位配对码。在手机上打开 Ivyea Note，选「配对码」填进去即可——
+                      不用输地址、不用输密码
+                    </span>
+                  </span>
+                  <button className="btn" onClick={props.sync.onAddDevice}>
+                    生成配对码
+                  </button>
+                </div>
               </>
             ) : (
-              <p className="set-hint">
-                当前是本地模式，笔记只存在这台设备上。侧栏的「登录同步」可以接上自建服务器。
-              </p>
+              <>
+                <p className="set-hint">
+                  当前是本地模式，笔记只存在这台设备上。开启同步之后，多台设备之间就会自动流动；
+                  不开也能一直用。
+                </p>
+                <div className="set-row set-about">
+                  <span className="set-label">
+                    同步
+                    <span className="set-hint">未开启</span>
+                  </span>
+                  <button className="btn" onClick={props.sync.onOpenLogin}>
+                    开启同步
+                  </button>
+                </div>
+              </>
             )}
           </section>
 

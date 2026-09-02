@@ -10,6 +10,11 @@ services:
     ports:
       - "127.0.0.1:8080:8080"   # 只暴露给宿主 nginx，不直接对公网
     environment:
+      # ⚠️ IVNOTE_DB 必须显式给。服务端是按它选后端的，**默认是 sqlite**——
+      # 只设 IVNOTE_DATABASE_URL 而不设这个，容器会去开 SQLite：
+      # 目录不可写就是起不来（v0.10.3 上线时踩到），可写的话更糟——
+      # 它会安安静静地用一个空库跑起来，看上去像"所有笔记都没了"。
+      IVNOTE_DB: postgres
       IVNOTE_DATABASE_URL: postgres://ivnote:${POSTGRES_PASSWORD:?请在 .env 配置}@postgres:5432/ivnote?sslmode=disable
       IVNOTE_SECRET: ${IVNOTE_SECRET:?请在 .env 配置}
       IVNOTE_ADMIN_EMAIL: ${IVNOTE_ADMIN_EMAIL:-admin@example.com}
