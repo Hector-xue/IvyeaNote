@@ -318,9 +318,9 @@ export function SettingsView(props: Props) {
                 </p>
                 {props.storage.isAndroid ? (
                   <p className="set-hint">
-                    安卓上暂时选不了系统目录（需要 Android SAF，Tauri 还没提供），这台设备只能用内部存储。
-                    <b>务必先在下面的「同步」里登录并同步一次</b>——卸载、清除数据或更新失败时，
-                    笔记才有地方可取。
+                    点「选择文件夹…」会打开系统的目录选择器。选好之后笔记就存在那个目录里
+                    （比如「文档」，或某个网盘的同步目录），<b>卸载应用也不会跟着删</b>，
+                    用别的编辑器也能直接打开。
                   </p>
                 ) : (
                   <p className="set-hint">选一个磁盘文件夹，笔记就变成随时能备份、能用别的编辑器打开的普通文件。</p>

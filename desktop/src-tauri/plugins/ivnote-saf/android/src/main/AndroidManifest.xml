@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SAF 不需要任何存储权限声明：授权来自用户在系统选择器里亲手选的那棵目录树 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+</manifest>
