@@ -39,6 +39,7 @@ import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { invertMoveOps, planMove, remapPath } from './lib/movePath';
 import { noteCandidates } from './lib/links';
+import { isSafPath, pickVaultFolder, safIO } from './lib/saf';
 import {
   classifyVault,
   originalOfConflict,
@@ -217,6 +218,8 @@ export default function App() {
   // 文件 IO：绑定了本地文件夹且在 Tauri 里 → 真实磁盘；否则 OPFS
   const io: FileIO = useMemo(() => {
     const vp = vault?.localPath;
+    // v0.10.4：安卓 SAF 选出来的是 content:// 树 URI，既不是磁盘路径也不是 OPFS
+    if (isSafPath(vp)) return safIO;
     // 'opfs://' 前缀是虚拟标记（本地库 / 移动端未绑定文件夹），统一走 OPFS
     if (vp && isTauri && !vp.startsWith('opfs://')) return tauriIO;
     return opfsIO(() => {
@@ -1075,36 +1078,49 @@ export default function App() {
       toast('浏览器版使用内置虚拟存储（OPFS），无法选择磁盘目录；请在桌面 App 中设置。', 'error');
       return;
     }
-    let sel: unknown;
+    /*
+     * v0.10.4：安卓走 **SAF**（Storage Access Framework），桌面仍走系统文件夹对话框。
+     *
+     * 两者拿到的东西不是一类：桌面是磁盘绝对路径，安卓是 `content://` 树 URI。
+     * 但对下游是一样的——都只是 `vault.localPath`，由 `io` 按前缀选适配器。
+     * 上游 tauri-plugin-dialog 的安卓实现里只有选文件/另存为，**没有选目录**，
+     * 所以安卓这条必须走我们自己的插件（src-tauri/plugins/ivnote-saf）。
+     */
+    let sel: string | null = null;
+    let label: string | null = null;
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      sel = await open({ directory: true });
-    } catch (e) {
-      toast(`这台设备无法选择文件夹：${errText(e)}`, 'error');
-      return;
-    }
-    if (typeof sel !== 'string' || !sel) {
-      // 安卓的目录选择器可能直接返回空而不是抛错——不解释一句，用户只会以为自己点错了
       if (isAndroidUA()) {
-        toast('这台设备的安卓版本还不支持选择系统目录，笔记只能留在应用内部存储。请务必开启同步。', 'error');
+        const picked = await pickVaultFolder();
+        if (!picked) return; // 用户取消
+        sel = picked.uri;
+        label = picked.name;
+      } else {
+        const { open } = await import('@tauri-apps/plugin-dialog');
+        const r = await open({ directory: true });
+        if (typeof r !== 'string' || !r) return; // 用户取消
+        sel = r;
       }
-      return; // 桌面端：用户取消，不必打扰
+    } catch (e) {
+      toast(`选择文件夹失败：${errText(e)}`, 'error');
+      return;
     }
 
     const from = vault.localPath ?? '';
     if (from === sel) return;
     const wasVirtual = !from || from.startsWith('opfs://');
     const count = allPaths.length;
+    const shownDest = label ?? sel;
     if (count > 0) {
       const ok = await confirm({
         title: '移动笔记到新位置',
-        description: `将把当前笔记库的 ${count} 个文件复制到：\n${sel}\n\n复制完成后，笔记库指向新位置。原位置的文件不会被删除，可自行清理。`,
+        description: `将把当前笔记库的 ${count} 个文件复制到：\n${shownDest}\n\n复制完成后，笔记库指向新位置。原位置的文件不会被删除，可自行清理。`,
         okText: '开始移动',
       });
       if (!ok) return;
       try {
-        const srcIo = wasVirtual ? opfsIO(() => vault) : tauriIO;
-        await migrateFiles(srcIo, wasVirtual ? '' : from, tauriIO, sel);
+        const srcIo = wasVirtual ? opfsIO(() => vault) : isSafPath(from) ? safIO : tauriIO;
+        const dstIo = isSafPath(sel) ? safIO : tauriIO;
+        await migrateFiles(srcIo, wasVirtual ? '' : from, dstIo, sel);
       } catch (e) {
         // 关键：复制没成功就**不动 localPath**，笔记留在原地仍然打得开
         toast(`移动失败，笔记库位置未改变：${errText(e)}`, 'error');
@@ -1113,6 +1129,7 @@ export default function App() {
     }
     patchVault(vault.id, (m) => {
       m.localPath = sel as string;
+      m.localLabel = label ?? undefined;
     });
     await refreshFiles();
     toast(count > 0 ? `已移动 ${count} 个文件到新位置` : '已设置笔记库位置', 'ok');
@@ -1135,6 +1152,7 @@ export default function App() {
     if (!ok) return;
     patchVault(vault.id, (m) => {
       m.localPath = `opfs://${vault.id}`;
+      m.localLabel = undefined;
     });
     await refreshFiles();
   }, [vault, patchVault, confirm, refreshFiles]);
@@ -1367,9 +1385,13 @@ export default function App() {
           }}
           storage={{
             // opfs:// 是虚拟标记，对用户来说就是「应用内部存储」，不该把它当路径显示
+            // content:// 那一长串给人看等于没说，有显示名就用显示名
             path:
-              vault?.localPath && !vault.localPath.startsWith('opfs://') ? vault.localPath : null,
+              vault?.localPath && !vault.localPath.startsWith('opfs://')
+                ? vault.localLabel ?? vault.localPath
+                : null,
             fileCount: allPaths.length,
+            // v0.10.4：安卓有自己的 SAF 选择器了，不再是"只有桌面能选"
             canPick: isTauri,
             isAndroid: isAndroidUA(),
             onPick: () => void onBindFolder(),

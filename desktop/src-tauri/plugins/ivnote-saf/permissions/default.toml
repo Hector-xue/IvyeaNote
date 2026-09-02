@@ -1,0 +1,19 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+允许应用调用 SAF 目录选择与该目录下的读写。
+
+作用域由**用户在系统目录选择器里选的那个文件夹**决定：
+应用只能碰这棵子树，这是 Android 自己保证的，不是我们自己实现的检查。
+"""
+permissions = [
+  "allow-pick-vault-folder",
+  "allow-list-entries",
+  "allow-read-text",
+  "allow-read-binary",
+  "allow-write-text",
+  "allow-write-binary",
+  "allow-remove-entry",
+  "allow-entry-exists",
+]
