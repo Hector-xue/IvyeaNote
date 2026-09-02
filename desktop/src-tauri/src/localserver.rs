@@ -147,7 +147,9 @@ pub fn start_local_server<R: Runtime>(
         .env("IVNOTE_ADMIN_PASSWORD", &password)
         // 开放注册保持关闭：这台服务器只服务机主自己的设备，配对码就够了
         .env("IVNOTE_OPEN_REGISTRATION", "false")
-        .stdout(Stdio::piped())
+        // stdout 必须丢弃而不是 piped：管道缓冲区写满后**子进程会阻塞在写日志上**，
+        // 表现是服务端跑着跑着突然不响应了。stderr 留着是因为下面真的有人在读它。
+        .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
     // Windows：不要弹出一个黑色控制台窗口

@@ -124,8 +124,17 @@ struct EntriesResult {
 #[cfg(target_os = "android")]
 pub struct Saf<R: Runtime>(PluginHandle<R>);
 
+/*
+ * 非安卓平台的占位实现。
+ *
+ * 这里必须是 `PhantomData<fn() -> R>` 而不是 `PhantomData<R>`：
+ * `PhantomData<R>` 只有在 `R: Send + Sync` 时才是 `Send + Sync`，而 `R: Runtime`
+ * 并不保证这一点，于是 `app.manage()` / `app.state()` 的 `Send + Sync` 约束通不过
+ * （CI 一次报了 26 个 E0277）。`fn() -> R` 这种函数指针型的 PhantomData
+ * **无条件**是 Send + Sync，又同样能占住类型参数，是标准做法。
+ */
 #[cfg(not(target_os = "android"))]
-pub struct Saf<R: Runtime>(std::marker::PhantomData<R>);
+pub struct Saf<R: Runtime>(std::marker::PhantomData<fn() -> R>);
 
 #[cfg(target_os = "android")]
 impl<R: Runtime> Saf<R> {
@@ -147,6 +156,7 @@ impl<R: Runtime> Saf<R> {
 fn pick_vault_folder<R: Runtime>(app: tauri::AppHandle<R>) -> Result<PickedFolder> {
     // 传 `()` 会序列化成 JSON null，而移动端桥那边期望一个对象；给个空对象最稳
     app.state::<Saf<R>>()
+        .inner()
         .call("pickVaultFolder", serde_json::json!({}))
 }
 
@@ -154,13 +164,14 @@ fn pick_vault_folder<R: Runtime>(app: tauri::AppHandle<R>) -> Result<PickedFolde
 fn list_entries<R: Runtime>(app: tauri::AppHandle<R>, tree: String) -> Result<Vec<Entry>> {
     let r: EntriesResult = app
         .state::<Saf<R>>()
+        .inner()
         .call("listEntries", TreeArg { tree: &tree })?;
     Ok(r.entries)
 }
 
 #[tauri::command]
 fn read_text<R: Runtime>(app: tauri::AppHandle<R>, tree: String, path: String) -> Result<String> {
-    let r: TextResult = app.state::<Saf<R>>().call(
+    let r: TextResult = app.state::<Saf<R>>().inner().call(
         "readText",
         PathArg {
             tree: &tree,
@@ -172,7 +183,7 @@ fn read_text<R: Runtime>(app: tauri::AppHandle<R>, tree: String, path: String) -
 
 #[tauri::command]
 fn read_binary<R: Runtime>(app: tauri::AppHandle<R>, tree: String, path: String) -> Result<String> {
-    let r: BinaryResult = app.state::<Saf<R>>().call(
+    let r: BinaryResult = app.state::<Saf<R>>().inner().call(
         "readBinary",
         PathArg {
             tree: &tree,
@@ -189,7 +200,7 @@ fn write_text<R: Runtime>(
     path: String,
     content: String,
 ) -> Result<()> {
-    let _: serde_json::Value = app.state::<Saf<R>>().call(
+    let _: serde_json::Value = app.state::<Saf<R>>().inner().call(
         "writeText",
         WriteTextArg {
             tree: &tree,
@@ -207,7 +218,7 @@ fn write_binary<R: Runtime>(
     path: String,
     base64: String,
 ) -> Result<()> {
-    let _: serde_json::Value = app.state::<Saf<R>>().call(
+    let _: serde_json::Value = app.state::<Saf<R>>().inner().call(
         "writeBinary",
         WriteBinaryArg {
             tree: &tree,
@@ -220,7 +231,7 @@ fn write_binary<R: Runtime>(
 
 #[tauri::command]
 fn remove_entry<R: Runtime>(app: tauri::AppHandle<R>, tree: String, path: String) -> Result<()> {
-    let _: serde_json::Value = app.state::<Saf<R>>().call(
+    let _: serde_json::Value = app.state::<Saf<R>>().inner().call(
         "removeEntry",
         PathArg {
             tree: &tree,
@@ -232,7 +243,7 @@ fn remove_entry<R: Runtime>(app: tauri::AppHandle<R>, tree: String, path: String
 
 #[tauri::command]
 fn entry_exists<R: Runtime>(app: tauri::AppHandle<R>, tree: String, path: String) -> Result<bool> {
-    let r: BoolResult = app.state::<Saf<R>>().call(
+    let r: BoolResult = app.state::<Saf<R>>().inner().call(
         "entryExists",
         PathArg {
             tree: &tree,
