@@ -71,6 +71,8 @@ interface Props {
   onDeleteFile(path: string): void;
   /** v0.7.5 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
+  /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
+  onOpenPath?(relPath: string): void;
   /** v0.7.9 E3：右键菜单里的「重命名」——由 App 弹输入框后再执行 */
   onRequestRename?(path: string): void;
   /** 直接改名（内联标题用：拿到新名字就改，不弹框） */
@@ -333,27 +335,12 @@ export function MainView(props: Props) {
           </button>
         </div>
 
-        {/* 左栏标签：文件 / 搜索。ribbon 上的图标与它是同一份状态——
-            Obsidian 也是两处联动（ribbon 切面板、面板顶部有标签） */}
-        <div className="side-tabs" role="tablist">
-          <button
-            role="tab"
-            aria-selected={sidebarTab === 'files'}
-            className={`side-tab ${sidebarTab === 'files' ? 'on' : ''}`}
-            onClick={() => setSidebarTab('files')}
-          >
-            文件
-          </button>
-          <button
-            role="tab"
-            aria-selected={sidebarTab === 'search'}
-            className={`side-tab ${sidebarTab === 'search' ? 'on' : ''}`}
-            onClick={() => setSidebarTab('search')}
-          >
-            搜索
-          </button>
-        </div>
-
+        {/*
+          v0.10.2：删掉了这里的「文件 / 搜索」标签行。
+          它和左边 ribbon 上那两个图标是**同一份状态、同一个动作**，两者相距不到
+          一指宽——用户看到的就是"同一个功能有两个按钮"。ribbon 是 Obsidian 的
+          面板切换器，留它一个就够，侧栏还能多出一行文件树的高度。
+        */}
         {/* Obsidian 式图标操作条：新建笔记 / 新建文件夹 / 排序 / 全部折叠。
             此前这些是侧栏底部的 2×2 emoji 按钮格，和文件树离得最远、还最抢眼 */}
         {sidebarTab === 'files' && (
@@ -504,6 +491,7 @@ export function MainView(props: Props) {
                 onInsertImage={props.onInsertImage}
                 resolveImage={props.resolveImage}
                 onOpenWiki={props.onOpenWiki}
+                onOpenPath={props.onOpenPath}
                 wikiTitles={props.wikiTitles}
                 onPasteImage={props.onPasteImage}
               />
@@ -527,6 +515,7 @@ export function MainView(props: Props) {
                   livePreviewOn={props.livePreviewOn}
                   resolveImage={props.resolveImage}
                   onOpenWiki={props.onOpenWiki}
+                  onOpenPath={props.onOpenPath}
                   wikiTitles={props.wikiTitles}
                   readOnlyPreview={sameDoc}
                 />

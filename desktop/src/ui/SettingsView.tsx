@@ -31,6 +31,23 @@ interface Props {
     syncing: boolean;
     onSyncNow(): void;
   };
+  /**
+   * v0.10.2：**存储位置**。此前设置里根本没有这一节，"绑定本地文件夹"藏在
+   * 侧栏库名的下拉菜单里，移动端一个入口都没有——于是"笔记到底存在哪、
+   * 能不能换个地方"完全没有答案，而这恰恰是本地优先笔记软件最该说清的一件事。
+   */
+  storage: {
+    /** 磁盘绝对路径；null = 应用内部存储（OPFS） */
+    path: string | null;
+    /** 当前库里的文件数，用于说明"会搬多少东西" */
+    fileCount: number;
+    /** 这台设备能不能选目录（浏览器版不能） */
+    canPick: boolean;
+    /** 安卓：系统目录选择要 Android SAF，Tauri 现在还没有——得把话说明白 */
+    isAndroid: boolean;
+    onPick(): void;
+    onUnbind(): void;
+  };
   /** v0.9.0 P3：Agent 接入区块（令牌管理），由 App 注入以免这里去碰 SyncClient */
   agentSection?: React.ReactNode;
 }
@@ -255,6 +272,58 @@ export function SettingsView(props: Props) {
           </section>
 
           <section className="set-section">
+            <h3 className="set-h">存储位置</h3>
+            <div className="set-row set-about">
+              <span className="set-label">
+                {props.storage.path ? '磁盘文件夹' : '应用内部存储'}
+                <span className="set-hint set-path" title={props.storage.path ?? undefined}>
+                  {props.storage.path ??
+                    '笔记保存在应用私有空间里。卸载应用会连同笔记一起删除，其它编辑器也打不开。'}
+                </span>
+              </span>
+              {props.storage.canPick ? (
+                <button className="btn" onClick={props.storage.onPick}>
+                  {props.storage.path ? '换个位置…' : '选择文件夹…'}
+                </button>
+              ) : (
+                <span className="set-hint">此版本无法选择目录</span>
+              )}
+            </div>
+            {props.storage.path ? (
+              <>
+                <p className="set-hint">
+                  笔记就是这个文件夹里的普通 .md 文件，可以直接用别的编辑器打开、用网盘同步、
+                  或者随时备份。换位置时会把现有 {props.storage.fileCount} 个文件复制过去。
+                </p>
+                <div className="set-row set-about">
+                  <span className="set-label">
+                    改回应用内部存储
+                    <span className="set-hint">磁盘上的原文件会保留，不会被删除</span>
+                  </span>
+                  <button className="btn" onClick={props.storage.onUnbind}>
+                    改回内部存储
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="set-hint">
+                  ⚠️ 放在内部存储里的笔记，卸载或"清除数据"后<b>无法找回</b>，也没法用别的工具打开。
+                </p>
+                {props.storage.isAndroid ? (
+                  <p className="set-hint">
+                    安卓上暂时选不了系统目录（需要 Android SAF，Tauri 还没提供），这台设备只能用内部存储。
+                    <b>务必先在下面的「同步」里登录并同步一次</b>——卸载、清除数据或更新失败时，
+                    笔记才有地方可取。
+                  </p>
+                ) : (
+                  <p className="set-hint">选一个磁盘文件夹，笔记就变成随时能备份、能用别的编辑器打开的普通文件。</p>
+                )}
+              </>
+            )}
+          </section>
+
+          <section className="set-section">
             <h3 className="set-h">同步</h3>
             {props.sync.account ? (
               <>
@@ -310,7 +379,9 @@ export function SettingsView(props: Props) {
               </button>
             </div>
             <p className="set-hint">
-              笔记始终是你磁盘上的普通 Markdown 文件。卸载本软件后，用任何编辑器都能继续打开。
+              {props.storage.path
+                ? '笔记就是你磁盘上的普通 Markdown 文件。卸载本软件后，用任何编辑器都能继续打开。'
+                : '当前笔记存在应用内部存储里，卸载会一并删除。在上面的「存储位置」选一个磁盘文件夹，笔记就会变成随时能用别的编辑器打开的普通 Markdown 文件。'}
             </p>
           </section>
         </div>

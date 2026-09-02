@@ -77,6 +77,13 @@ export const livePreviewTheme = {
     opacity: '0.92',
   },
   '.cm-live-marker': { color: 'transparent', fontSize: '0px' },
+  // 链接：颜色 + 手型即可。下划线留给 hover——满屏下划线会把正文切碎
+  '.cm-live-link': {
+    color: 'var(--accent, #4a8)',
+    cursor: 'pointer',
+    textDecoration: 'none',
+  },
+  '.cm-live-link:hover': { textDecoration: 'underline' },
   '.cm-task-checkbox': {
     border: '1.5px solid var(--muted, #999)',
     borderRadius: '3px',
@@ -171,6 +178,56 @@ export function findFootnoteRefs(lineText: string): { from: number; to: number }
   const re = /\[\^([^\]\s]+)\](?!:)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(lineText))) out.push({ from: m.index, to: m.index + m[0].length });
+  return out;
+}
+
+/**
+ * 行内 Markdown 链接 `[文字](地址 "可选标题")`。返回**相对行首**的偏移。
+ * 只认单行（Markdown 的行内链接本来就不跨行），地址里不允许空格——
+ * 带空格的地址在 Markdown 里必须用 <> 包起来，那种写法极少见，先不认。
+ */
+export function findInlineLinks(
+  lineText: string
+): { from: number; to: number; textFrom: number; textTo: number; href: string }[] {
+  const out: { from: number; to: number; textFrom: number; textTo: number; href: string }[] = [];
+  // 前面不能紧跟 `!`，否则那是图片 `![alt](src)`——图片不该变成可点链接
+  const re = /(!?)\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(lineText))) {
+    if (m[1] === '!') continue;
+    // `[[双链]]` 会让内层匹配成 `[双链]`——排掉，双链有自己的渲染与跳转
+    if (lineText.slice(Math.max(0, m.index - 1), m.index) === '[') continue;
+    const from = m.index;
+    const textFrom = from + 1;
+    out.push({ from, to: from + m[0].length, textFrom, textTo: textFrom + m[2].length, href: m[3] });
+  }
+  return out;
+}
+
+/**
+ * 裸 URL（`https://…` 直接写在正文里）。
+ *
+ * 结尾的中英文标点要剔掉——`见 https://a.com/b。` 里的句号不属于地址，
+ * 连进去会打开一个 404。成对括号同理（维基百科链接常带括号，只去掉多出来的那个）。
+ */
+export function findBareUrls(lineText: string): { from: number; to: number; href: string }[] {
+  const out: { from: number; to: number; href: string }[] = [];
+  const re = /https?:\/\/[^\s<>"']+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(lineText))) {
+    // 已经在 Markdown 链接语法里的地址不重复处理（那边有自己的装饰）
+    const prev = lineText[m.index - 1];
+    if (prev === '(' || prev === '<') continue;
+    let url = m[0];
+    while (url.length > 0) {
+      const last = url[url.length - 1];
+      if ('.,;:!?、。，；：！？）】」』'.includes(last)) url = url.slice(0, -1);
+      else if (last === ')' && (url.match(/\(/g)?.length ?? 0) < (url.match(/\)/g)?.length ?? 0))
+        url = url.slice(0, -1);
+      else break;
+    }
+    if (url.length > 8) out.push({ from: m.index, to: m.index + url.length, href: url });
+  }
   return out;
 }
 
@@ -323,6 +380,43 @@ export const livePreview = ViewPlugin.fromClass(
                 decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + 1));
                 decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - 1, end));
               }
+            }
+
+            // ---- 行内链接（v0.10.2）----
+            // 不渲染成可点的话，编辑态里链接就只是一串源码；而 `[文字](地址)`
+            // 这种写法在阅读态之外**从来没有过入口**。光标靠近时退回源码，
+            // 否则改不动自己写的链接。
+            const links = findInlineLinks(t);
+            for (const lk of links) {
+              const start = line.from + lk.from;
+              const end = line.from + lk.to;
+              if (cursorNear(sel, start, end, focused)) continue;
+              const tf = line.from + lk.textFrom;
+              const tt = line.from + lk.textTo;
+              // 空文字 `[](地址)`：没有可点的东西，保持源码原样
+              if (tt <= tf) continue;
+              decos.push(
+                Decoration.mark({
+                  class: 'cm-live-link',
+                  attributes: { 'data-href': lk.href, title: lk.href },
+                }).range(tf, tt)
+              );
+              // 与本文件其它语法标记一致，用 cm-live-marker 隐藏而不是 replace：
+              // replace 会改动光标在文档里的映射，方向键走到链接上就会跳格
+              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, tf));
+              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(tt, end));
+            }
+            for (const u of findBareUrls(t)) {
+              // 落在 `[文字](地址)` 内部的地址已由上面处理
+              if (links.some((lk) => u.from >= lk.from && u.to <= lk.to)) continue;
+              const start = line.from + u.from;
+              const end = line.from + u.to;
+              decos.push(
+                Decoration.mark({
+                  class: 'cm-live-link',
+                  attributes: { 'data-href': u.href, title: u.href },
+                }).range(start, end)
+              );
             }
 
             // ---- 任务复选框 ----

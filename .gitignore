@@ -1,4 +1,8 @@
 # ===== 敏感信息（绝不入库）=====
+# 安卓发布密钥：泄露＝别人能签出冒充本应用的包（真身在仓库外，见 docs/安卓签名密钥.md）
+*.keystore
+*.jks
+keystore-password.txt
 deploy/.env
 .env
 .env.*

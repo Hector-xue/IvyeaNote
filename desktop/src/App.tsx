@@ -38,6 +38,7 @@ import { SyncStatusPanel } from './ui/SyncStatusPanel';
 import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { invertMoveOps, planMove, remapPath } from './lib/movePath';
+import { noteCandidates } from './lib/links';
 import {
   classifyVault,
   originalOfConflict,
@@ -54,6 +55,7 @@ import {
   LOCAL_VAULT_ID,
   LOCAL_VAULT_NAME,
   newVaultMeta,
+  nextLocalVaultId,
   type PersistState,
   type VaultMeta,
 } from './lib/store';
@@ -73,6 +75,11 @@ function useIsMobile(): boolean {
     return () => mq.removeEventListener('change', fn);
   }, []);
   return m;
+}
+
+/** 安卓专属分支：目录选择器要 Android SAF，Tauri 还没提供，文案得说实话 */
+function isAndroidUA(): boolean {
+  return typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
 }
 
 /** v0.7.4：Android WebView 报告的 CSS 宽度可能 >768 导致桌面布局误判（v0.7.3 真机反馈），UA 判定优先 */
@@ -198,8 +205,13 @@ export default function App() {
     }, acc.deviceId);
   }, [state.account?.serverUrl, state.account === undefined]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 未登录时强制使用本地库（免登录模式的主界面）
-  const activeVaultId = state.account ? vaultId : LOCAL_VAULT_ID;
+  /*
+   * v0.10.2：未登录时也能有**多个**本地库。
+   * 此前这里硬钉成 LOCAL_VAULT_ID，于是就算建出了第二个本地库也切不过去——
+   * 「新建笔记库要先登录」的另一半原因就在这行。
+   * 云端库（正数 id）仍然要登录才能用，未登录选中它就回落到默认本地库。
+   */
+  const activeVaultId = state.account ? vaultId : vaultId && vaultId < 0 ? vaultId : LOCAL_VAULT_ID;
   const vault: VaultMeta | null = activeVaultId ? state.vaults[String(activeVaultId)] ?? null : null;
 
   // 文件 IO：绑定了本地文件夹且在 Tauri 里 → 真实磁盘；否则 OPFS
@@ -208,10 +220,12 @@ export default function App() {
     // 'opfs://' 前缀是虚拟标记（本地库 / 移动端未绑定文件夹），统一走 OPFS
     if (vp && isTauri && !vp.startsWith('opfs://')) return tauriIO;
     return opfsIO(() => {
-      const m = stateRef.current.vaults[String(vaultId ?? '')];
-      return m ?? newVaultMeta(-1, 'tmp');
+      // 必须用 activeVaultId：OPFS 的存储目录是 `vault-<id>`，
+      // 拿 vaultId（未登录时可能是 null）会把第二个本地库读成默认库
+      const m = stateRef.current.vaults[String(activeVaultId ?? '')];
+      return m ?? newVaultMeta(LOCAL_VAULT_ID, 'tmp');
     });
-  }, [vault?.localPath, vaultId]);
+  }, [vault?.localPath, activeVaultId]);
 
   /**
    * 文件列表层（v0.7.8：整块搬进 hooks/useVaultFiles）。
@@ -1008,11 +1022,14 @@ export default function App() {
 
   // ---------- Vault / 文件夹绑定 ----------
 
+  /**
+   * 新建笔记库。
+   *
+   * v0.10.2：**未登录也能建**。此前第一句是「云同步需要登录」直接 return——
+   * 可"建一个笔记本"跟服务器毫无关系，登录只该影响同步这一件事。
+   * 未登录时建的是本地库（负数 id，OPFS 里各占一个目录）；登录后建的仍是云端库。
+   */
   const createVault = useCallback(async () => {
-    if (!client) {
-      toast('云同步需要登录：请先在侧栏点「登录同步」');
-      return;
-    }
     const name = await prompt({
       title: '新建笔记库',
       placeholder: '笔记库名称',
@@ -1020,36 +1037,107 @@ export default function App() {
       validate: (v) => (v.trim() ? null : '请输入名称'),
     });
     if (!name) return;
+    const cur = stateRef.current;
+    if (!client) {
+      const id = nextLocalVaultId(cur.vaults);
+      persist({ ...cur, vaults: { ...cur.vaults, [String(id)]: newVaultMeta(id, name.trim()) } });
+      setVaultId(id);
+      setCurrentPath(null);
+      setDoc(null);
+      toast(`已创建本地笔记库「${name.trim()}」`, 'ok');
+      return;
+    }
     try {
       const v = await client.createVault(name.trim());
-      const cur = stateRef.current;
       persist({ ...cur, vaults: { ...cur.vaults, [String(v.id)]: newVaultMeta(v.id, v.name) } });
       setVaultId(v.id);
+      setCurrentPath(null);
+      setDoc(null);
     } catch (e) {
       toast(`创建失败：${errText(e)}`, 'error');
     }
   }, [client, persist, prompt, toast]);
 
+  /**
+   * 选择笔记库在磁盘上的位置。
+   *
+   * v0.10.2 两处补课：
+   * ① **搬家而不是换招牌**。此前只改 `localPath` 就完事，原来存在 OPFS 里的笔记
+   *    一篇都不跟着走——用户点完"选择文件夹"眼前突然空了，以为笔记全没了
+   *    （其实还在 OPFS 里，但界面上再也回不去）。现在先复制过去再改指向，
+   *    复制失败就**不改指向**，保证任何一步出错笔记都还在原地看得见。
+   * ② 失败要说话。选不了目录（安卓 WebView 没有目录选择器）时给明确提示，
+   *    而不是点一下什么都不发生。
+   */
   const onBindFolder = useCallback(async () => {
+    if (!vault) return;
     if (!isTauri) {
-      toast('浏览器开发模式下使用内置虚拟存储（OPFS）；绑定真实文件夹请在桌面 App 中进行。');
+      toast('浏览器版使用内置虚拟存储（OPFS），无法选择磁盘目录；请在桌面 App 中设置。', 'error');
       return;
     }
-    const { open } = await import('@tauri-apps/plugin-dialog');
-    const sel = await open({ directory: true });
-    if (typeof sel === 'string' && vault) {
-      patchVault(vault.id, (m) => {
-        m.localPath = sel;
-      });
+    let sel: unknown;
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      sel = await open({ directory: true });
+    } catch (e) {
+      toast(`这台设备无法选择文件夹：${errText(e)}`, 'error');
+      return;
     }
-  }, [vault, patchVault, toast]);
+    if (typeof sel !== 'string' || !sel) {
+      // 安卓的目录选择器可能直接返回空而不是抛错——不解释一句，用户只会以为自己点错了
+      if (isAndroidUA()) {
+        toast('这台设备的安卓版本还不支持选择系统目录，笔记只能留在应用内部存储。请务必开启同步。', 'error');
+      }
+      return; // 桌面端：用户取消，不必打扰
+    }
 
-  const onUnbindFolder = useCallback(() => {
-    if (!vault) return;
+    const from = vault.localPath ?? '';
+    if (from === sel) return;
+    const wasVirtual = !from || from.startsWith('opfs://');
+    const count = allPaths.length;
+    if (count > 0) {
+      const ok = await confirm({
+        title: '移动笔记到新位置',
+        description: `将把当前笔记库的 ${count} 个文件复制到：\n${sel}\n\n复制完成后，笔记库指向新位置。原位置的文件不会被删除，可自行清理。`,
+        okText: '开始移动',
+      });
+      if (!ok) return;
+      try {
+        const srcIo = wasVirtual ? opfsIO(() => vault) : tauriIO;
+        await migrateFiles(srcIo, wasVirtual ? '' : from, tauriIO, sel);
+      } catch (e) {
+        // 关键：复制没成功就**不动 localPath**，笔记留在原地仍然打得开
+        toast(`移动失败，笔记库位置未改变：${errText(e)}`, 'error');
+        return;
+      }
+    }
     patchVault(vault.id, (m) => {
-      m.localPath = undefined;
+      m.localPath = sel as string;
     });
-  }, [vault, patchVault]);
+    await refreshFiles();
+    toast(count > 0 ? `已移动 ${count} 个文件到新位置` : '已设置笔记库位置', 'ok');
+  }, [vault, allPaths.length, patchVault, confirm, toast, refreshFiles]);
+
+  /**
+   * 撤回到应用内部存储。
+   *
+   * v0.10.2：加一次确认并说清后果——内部存储**卸载即清空**，
+   * 这是「安卓更新完笔记没了」这类事故的源头，不该一声不响地切过去。
+   * 磁盘上的原文件保留不动，所以这个动作本身不会删任何东西。
+   */
+  const onUnbindFolder = useCallback(async () => {
+    if (!vault) return;
+    const ok = await confirm({
+      title: '改回应用内部存储',
+      description: '笔记库将改用应用内部存储。内部存储的笔记在卸载应用时会被一并删除，且无法用其它编辑器打开。\n\n磁盘上原文件夹里的文件会保留，不会被删除。',
+      okText: '仍然改回',
+    });
+    if (!ok) return;
+    patchVault(vault.id, (m) => {
+      m.localPath = `opfs://${vault.id}`;
+    });
+    await refreshFiles();
+  }, [vault, patchVault, confirm, refreshFiles]);
 
   const onLogout = useCallback(() => {
     // 只清登录态，保留全部本地笔记（含免登录本地库），下次登录可继续迁移
@@ -1077,6 +1165,49 @@ export default function App() {
       toast(`已创建：${target}`, 'ok');
     },
     [vault, files, io, refreshFiles, openFileInTab, doSync, toast]
+  );
+
+  /**
+   * v0.10.2：普通 Markdown 链接指向库内文件时怎么办。
+   * 编辑器已经把相对路径解析成库内路径，这里只负责「用什么打开」：
+   * - 笔记：开标签页（后缀可省，`.md`/`.markdown` 都试一遍）
+   * - PDF：走既有的 PDF 视图（安卓交系统应用）
+   * - 其它附件：交系统默认程序；OPFS 库没有磁盘路径，只能提示
+   *
+   * 找不到目标时**不静默**——链接点了没反应是最难排查的一种坏。
+   */
+  const onOpenLinkPath = useCallback(
+    (rel: string) => {
+      if (!vault || !rel) return;
+      const hit = noteCandidates(rel).find((c) => files.includes(c));
+      if (hit) {
+        void openFileInTab(hit);
+        return;
+      }
+      if (/\.pdf$/i.test(rel)) {
+        if (pdfs.includes(rel)) {
+          void onOpenPdf(rel);
+          return;
+        }
+        toast(`库里没有这个文件：${rel}`, 'error');
+        return;
+      }
+      const root = vault.localPath ?? '';
+      if (!root || root.startsWith('opfs://')) {
+        toast(`库里没有这个笔记：${rel}`, 'error');
+        return;
+      }
+      // 附件走 openPath 而不是 openUrl：file:// URL 在 Windows 上会被 opener 拒掉
+      void (async () => {
+        try {
+          const { openPath } = await import('@tauri-apps/plugin-opener');
+          await openPath(`${root.replace(/\/$/, '')}/${rel}`);
+        } catch (e) {
+          toast(`无法打开：${errText(e)}`, 'error');
+        }
+      })();
+    },
+    [vault, files, pdfs, openFileInTab, onOpenPdf, toast]
   );
 
   /** v0.7.0 F3: outbound links of current note + inbound links (from cached docs) */
@@ -1209,6 +1340,47 @@ export default function App() {
     return [...set].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
   }, [files, emptyDirs]);
 
+  /*
+   * v0.10.2：设置面板抽成变量，**移动端也要能打开**。
+   * 此前它只挂在桌面分支里，于是手机上没有任何地方能看到（更别说改）
+   * 「笔记存在哪」——而安卓恰恰是"卸载即丢笔记"后果最严重的那一端。
+   */
+  const settingsEl = showSettings ? (
+  <SettingsView
+          value={appearance}
+          onChange={updateAppearance}
+          onClose={() => setShowSettings(false)}
+          appVersion={appVersion}
+          onCheckUpdate={checkUpdateNow}
+          prefs={prefs}
+          onPrefsChange={updatePrefs}
+          sync={{
+            server: state.account?.serverUrl ?? null,
+            account: state.account?.email ?? null,
+            syncing,
+            onSyncNow: () => void doSync(),
+          }}
+          storage={{
+            // opfs:// 是虚拟标记，对用户来说就是「应用内部存储」，不该把它当路径显示
+            path:
+              vault?.localPath && !vault.localPath.startsWith('opfs://') ? vault.localPath : null,
+            fileCount: allPaths.length,
+            canPick: isTauri,
+            isAndroid: isAndroidUA(),
+            onPick: () => void onBindFolder(),
+            onUnbind: () => void onUnbindFolder(),
+          }}
+          agentSection={
+            <AgentSection
+              client={client}
+              serverUrl={state.account?.serverUrl ?? null}
+              toast={toast}
+              errText={errText}
+            />
+          }
+        />
+  ) : null;
+
   // ---------- 渲染 ----------
 
   if (!state.account && showWelcome) {
@@ -1269,8 +1441,8 @@ export default function App() {
     );
   }
 
-  // 未登录：列表里只展示本地库（云端库要登录后才能用）
-  const vaultList = Object.values(state.vaults).filter((v) => state.account || v.id === LOCAL_VAULT_ID);
+  // 未登录：列表里展示全部**本地**库（负数 id）；云端库要登录后才能用
+  const vaultList = Object.values(state.vaults).filter((v) => state.account || v.id < 0);
 
   const vaultSelectorEl = (value: number | '', onChange: (id: number) => void) => (
     <select
@@ -1330,6 +1502,8 @@ export default function App() {
           onOpenPdf={(p) => void onOpenPdf(p)}
           onInsertImage={onInsertImage}
           resolveImage={resolveImage}
+          onOpenPath={onOpenLinkPath}
+          onOpenSettings={() => setShowSettings(true)}
         />
         {/* 标签面板原本整段写在桌面分支之后，手机上根本不渲染——补入口就得连它一起搬 */}
         {showTagPanel && (
@@ -1355,6 +1529,7 @@ export default function App() {
             }}
           />
         )}
+        {settingsEl}
         {dialogEl}
         {toastEl}
       </div>
@@ -1490,6 +1665,7 @@ export default function App() {
           setShowGraph(true);
         }}
         onOpenWiki={(t) => void onOpenWiki(t)}
+        onOpenPath={onOpenLinkPath}
         wikiOut={wikiLinks.out}
         wikiBack={wikiLinks.back}
         onOpenWikiPath={(p) => void openFileInTab(p)}
@@ -1606,31 +1782,7 @@ export default function App() {
           </div>
         </div>
       )}
-      {showSettings && (
-        <SettingsView
-          value={appearance}
-          onChange={updateAppearance}
-          onClose={() => setShowSettings(false)}
-          appVersion={appVersion}
-          onCheckUpdate={checkUpdateNow}
-          prefs={prefs}
-          onPrefsChange={updatePrefs}
-          sync={{
-            server: state.account?.serverUrl ?? null,
-            account: state.account?.email ?? null,
-            syncing,
-            onSyncNow: () => void doSync(),
-          }}
-          agentSection={
-            <AgentSection
-              client={client}
-              serverUrl={state.account?.serverUrl ?? null}
-              toast={toast}
-              errText={errText}
-            />
-          }
-        />
-      )}
+      {settingsEl}
       {trash.open && (
         <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && trash.setOpen(false)}>
           <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="回收站">

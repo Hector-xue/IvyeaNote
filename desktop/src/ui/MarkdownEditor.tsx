@@ -36,6 +36,7 @@ import { livePreview, livePreviewTheme } from '../lib/livePreview';
 import { autocompletion } from '@codemirror/autocomplete';
 import { wikiCompletion } from '../lib/wikiComplete';
 import { renderWikiLinks } from '../lib/wikilink';
+import { classifyLink, headingSlug, openExternal, resolveVaultPath } from '../lib/links';
 
 export interface MarkdownEditorProps {
   doc: string;
@@ -83,15 +84,29 @@ export interface MarkdownEditorProps {
    * 组件卸载时回传 null。
    */
   exposeFormat?(apply: ((key: string) => void) | null): void;
+  /**
+   * v0.10.2：普通 Markdown 链接指向库内文件时的回调（已解析成库内相对路径）。
+   * 不传则只处理外部链接与锚点——**外部链接必须处理**，
+   * 否则 WebView 会带着整个应用导航走。
+   */
+  onOpenPath?(relPath: string): void;
 }
 
 function cmExtensions(
   onEdit: (text: string) => void,
   dark: boolean,
   getTitles?: () => { path: string; title: string }[],
-  livePreviewOn = true
+  livePreviewOn = true,
+  onFollowLink?: (href: string) => void
 ): Extension[] {
   return [
+    /*
+     * v0.10.2：**软换行**。CM6 默认 `white-space: pre`——一段长文就是一条不换行的
+     * 长线，只能横向滚。typography.css 里早写了 `.cm-line { overflow-wrap: break-word }`，
+     * 但 `pre` 下那句根本不生效，所以「写了却没用」，一直没人发现漏了这个扩展。
+     * 笔记软件的正文永远该按视口宽度回绕（Obsidian 也没有「不换行」这个选项）。
+     */
+    EditorView.lineWrapping,
     // v0.5.0 U1：Live Preview——默认隐藏行号（Obsidian 风格），装饰渲染见 livePreview.ts
     EditorView.theme({ '.cm-gutters': { display: 'none' } }),
     EditorView.theme(livePreviewTheme),
@@ -135,6 +150,24 @@ function cmExtensions(
     ...(getTitles ? [autocompletion({ override: [wikiCompletion(getTitles)] })] : []),
     EditorView.updateListener.of((u) => {
       if (u.docChanged) onEdit(u.state.doc.toString());
+    }),
+    /*
+     * v0.10.2：编辑态点击链接。装饰由 livePreview 打上 `.cm-live-link` 与 data-href。
+     * 用 mousedown 而不是 click：CM6 在 mousedown 就会开始设置选区，
+     * 等到 click 时光标已经落进链接里、装饰随即退回源码，元素早没了。
+     */
+    EditorView.domEventHandlers({
+      mousedown(e) {
+        if (!onFollowLink) return false;
+        // 按住修饰键是「我要选文字/多光标」，不该被当成打开链接
+        if (e.button !== 0 || e.altKey || e.shiftKey) return false;
+        const el = (e.target as HTMLElement | null)?.closest?.('.cm-live-link');
+        const href = el?.getAttribute('data-href');
+        if (!href) return false;
+        e.preventDefault();
+        onFollowLink(href);
+        return true;
+      },
     }),
   ];
 }
@@ -253,11 +286,46 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const lastEmitted = useRef<string | null>(null);
   const onEditRef = useRef(props.onEdit);
   const pathRef = useRef(props.currentPath);
+  const onOpenPathRef = useRef(props.onOpenPath);
   useEffect(() => {
     onEditRef.current = props.onEdit;
     pathRef.current = props.currentPath;
+    onOpenPathRef.current = props.onOpenPath;
   });
   const mode = mode0;
+
+  /**
+   * v0.10.2：**统一的链接跳转**。阅读态与编辑态共用这一份判定，
+   * 免得两边各写一套、再各错一次（此前只有 `[[双链]]` 是通的）。
+   *
+   * 放在 ref 里是因为 cmExtensions 只在建实例/换文件时求值一次，
+   * 直接闭包会捕获到旧的 currentPath，跨目录的相对链接就会解析错。
+   */
+  const followLink = useCallback(
+    (href: string) => {
+      const link = classifyLink(href);
+      if (link.kind === 'external') {
+        void openExternal(link.target);
+        return;
+      }
+      if (link.kind === 'anchor') {
+        // 阅读态：滚到同名标题；编辑态没有可滚的 DOM，忽略即可
+        const host = previewRef.current;
+        if (!host || !link.target) return;
+        const want = headingSlug(decodeURIComponent(link.target));
+        const hit = Array.from(host.querySelectorAll('h1,h2,h3,h4,h5,h6')).find(
+          (h) => headingSlug(h.textContent ?? '') === want
+        );
+        hit?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      onOpenPathRef.current?.(resolveVaultPath(pathRef.current, link.target));
+    },
+    []
+  );
+  const followLinkRef = useRef(followLink);
+  followLinkRef.current = followLink;
+
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
   const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
@@ -367,7 +435,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           () => undefined,
           props.theme === 'dark',
           () => props.wikiTitles ?? [],
-          props.livePreviewOn ?? true
+          props.livePreviewOn ?? true,
+          (href) => followLinkRef.current(href)
         ),
       }),
     });
@@ -393,7 +462,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           },
           props.theme === 'dark',
           () => props.wikiTitles ?? [],
-          props.livePreviewOn ?? true
+          props.livePreviewOn ?? true,
+          (href) => followLinkRef.current(href)
         ),
       })
     );
@@ -438,16 +508,28 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       });
     }
 
-    // 双链点击（事件委托）
-    el.querySelectorAll('a.wikilink').forEach((a) => {
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        const t = (a as HTMLElement).dataset.target;
-        if (t) props.onOpenWiki?.(t);
-      });
-    });
+    /*
+     * v0.10.2：**所有** <a> 的点击都在这里接管，一个事件委托搞定。
+     *
+     * 此前只给 `a.wikilink` 逐个绑了 click，于是普通 `[文字](https://…)`
+     * 完全没人管——WebView 会带着整个应用导航到那个地址（白屏，只能重启）。
+     * 委托到容器上还有个好处：图片异步替换、任务勾选重渲染都不会把监听丢掉。
+     */
+    const onLinkClick = (e: MouseEvent) => {
+      const a = (e.target as HTMLElement | null)?.closest?.('a');
+      if (!a || !el.contains(a)) return;
+      e.preventDefault();
+      const wiki = (a as HTMLElement).dataset.target;
+      if (a.classList.contains('wikilink')) {
+        if (wiki) props.onOpenWiki?.(wiki);
+        return;
+      }
+      const href = a.getAttribute('href');
+      if (href) followLinkRef.current(href);
+    };
+    el.addEventListener('click', onLinkClick);
 
-    if (!props.resolveImage) return;
+    if (!props.resolveImage) return () => el.removeEventListener('click', onLinkClick);
     let cancelled = false;
     const imgs = Array.from(el.querySelectorAll('img'));
     void (async () => {
@@ -473,6 +555,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     })();
     return () => {
       cancelled = true;
+      el.removeEventListener('click', onLinkClick);
     };
   }, [mode, props.doc, props.resolveImage]);
 

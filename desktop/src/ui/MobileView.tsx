@@ -67,6 +67,10 @@ interface Props {
   onRequestMove?(path: string, isDir: boolean): void;
   onSync(): void;
   onCreateVault(): void;
+  /** v0.10.2：打开设置面板（存储位置、外观、同步都在里面）。手机上此前没有任何入口 */
+  onOpenSettings?(): void;
+  /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
+  onOpenPath?(relPath: string): void;
   onToggleTheme(): void;
   theme: 'light' | 'dark';
   onLogout(): void;
@@ -169,6 +173,9 @@ export function MobileView(props: Props) {
     }
     if (which === 'app') {
       const second: SheetItem[] = [];
+      if (props.onOpenSettings) {
+        second.push({ key: 'settings', icon: 'settings', label: '设置', onClick: props.onOpenSettings });
+      }
       if (props.onCheckUpdate) second.push({ key: 'update', icon: 'sync', label: '检查更新', onClick: props.onCheckUpdate });
       second.push(
         props.hasAccount
@@ -207,14 +214,60 @@ export function MobileView(props: Props) {
       fileActions.push({ key: 'move', icon: 'move', label: '移动到…', onClick: () => props.onRequestMove?.(cur, false) });
     }
     fileActions.push({ key: 'del', icon: 'trash', label: '删除', danger: true, onClick: () => props.onDeleteFile(cur) });
+    // v0.10.2：不再有「阅读视图 / 编辑视图」两条——顶栏右边那个图标就是这个开关，
+    // 一个模式在一屏里有两个切换入口，只会让人怀疑自己按错了地方
     return [
-      [
-        { key: 'read', icon: 'book', label: '阅读视图', checked: mode === 'read', onClick: () => setMode('read') },
-        { key: 'edit', icon: 'edit', label: '编辑视图', checked: mode === 'edit', onClick: () => setMode('edit') },
-      ],
       [{ key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) }],
       fileActions,
     ];
+  };
+
+  /**
+   * v0.10.2：**长按侧栏条目的操作单**。
+   *
+   * `setSheet` 从 P1 起就在长按时被调用，但这个 state **从来没有被渲染过**——
+   * 它只参与 layersOpen 的 hash 栈，于是手机上长按文件/文件夹什么都不会发生，
+   * 侧栏里既没有"移动到…"也没有重命名。手机没有 HTML5 拖放，这张单子就是
+   * 移动文件的**唯一**入口，它不在，"侧边栏没法移动文件"就是字面事实。
+   */
+  const buildSheet = (st: SheetState): SheetItem[][] => {
+    const isDir = st.kind === 'dir';
+    const groups: SheetItem[][] = [];
+    if (st.kind === 'pdf') {
+      return [[{ key: 'open', icon: 'file', label: '打开', onClick: () => props.onOpenPdf(st.path) }]];
+    }
+    if (isDir) {
+      groups.push([
+        { key: 'newnote', icon: 'file-plus', label: '在此新建笔记', onClick: () => props.onCreateNote() },
+        { key: 'newdir', icon: 'folder-plus', label: '在此新建子文件夹', onClick: () => props.onCreateFolder?.(st.path) },
+      ]);
+    } else {
+      groups.push([
+        { key: 'open', icon: 'file', label: '打开', onClick: () => props.onSelect(st.path) },
+        {
+          key: 'rename',
+          icon: 'edit',
+          label: '重命名',
+          onClick: () => setRenaming({ path: st.path, value: st.name.replace(/\.(md|markdown)$/i, '') }),
+        },
+      ]);
+    }
+    if (props.onRequestMove) {
+      groups.push([
+        {
+          key: 'move',
+          icon: 'move',
+          label: isDir ? '把这个文件夹移动到…' : '移动到…',
+          onClick: () => props.onRequestMove?.(st.path, isDir),
+        },
+      ]);
+    }
+    if (!isDir) {
+      groups.push([
+        { key: 'del', icon: 'trash', label: '删除', danger: true, onClick: () => props.onDeleteFile(st.path) },
+      ]);
+    }
+    return groups;
   };
 
   // 打开笔记后自动收起抽屉
@@ -400,6 +453,7 @@ export function MobileView(props: Props) {
               exposeFormat={(fn) => setApplyFormat(() => fn)}
               onInsertImage={props.onInsertImage}
               resolveImage={props.resolveImage}
+              onOpenPath={props.onOpenPath}
             />
             {/* P5：反向链接区块 */}
             <BacklinksSection backlinks={props.backlinks ?? []} onSelect={props.onSelect} />
@@ -415,11 +469,9 @@ export function MobileView(props: Props) {
       </main>
 
       <BottomBar
-        canGoBack={props.currentPath != null}
         formatOpen={formatOpen}
         formatAvailable={props.currentPath != null && mode === 'edit' && !!applyFormat}
         formats={FORMATS.map((f) => ({ ...f, run: () => applyFormat?.(f.key) }))}
-        onBack={() => setDrawerOpen(true)}
         onSearch={() => {
           setDrawerOpen(true);
           // 抽屉一开就把焦点放进搜索框，少一次点击
@@ -427,13 +479,20 @@ export function MobileView(props: Props) {
         }}
         onCreate={props.onCreateNote}
         onToggleFormat={() => setFormatOpen((v) => !v)}
-        onMore={() => setMenu('note')}
       />
 
       <Sheet
         open={menu !== null}
         groups={menu === null ? [] : buildMenu(menu)}
         onClose={() => setMenu(null)}
+      />
+
+      {/* 长按侧栏条目的操作单（v0.10.2 前建了 state 却忘了渲染） */}
+      <Sheet
+        open={sheet !== null}
+        title={sheet?.name}
+        groups={sheet === null ? [] : buildSheet(sheet)}
+        onClose={() => setSheet(null)}
       />
 
 

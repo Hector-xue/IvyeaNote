@@ -130,9 +130,23 @@ export function FileTree(props: Props) {
   };
 
   const overDir = (e: React.DragEvent, dir: string, isCollapsed: boolean) => {
-    if (!canDrag || !canDropInto(dir)) return;
-    e.preventDefault();
+    // dragRef 为空＝不是树内部发起的拖拽（比如从系统里拖文件进来）：一律不拦，
+    // 让事件继续冒泡给别的接收方
+    if (!canDrag || !dragRef.current) return;
+    /*
+     * v0.10.2：**先占住这块地盘，再判断能不能落**。
+     * 此前是「不能落就直接 return」，事件于是冒泡到祖先——把一个文件拖到它
+     * 自己所在的文件夹上方时，高亮的是**上一级**，松手就被移到上一级去了。
+     */
     e.stopPropagation();
+    if (!canDropInto(dir)) {
+      if (dropDir !== null) {
+        clearSpring();
+        setDropDir(null);
+      }
+      return;
+    }
+    e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (dropDir !== dir) {
       setDropDir(dir);
@@ -145,7 +159,7 @@ export function FileTree(props: Props) {
   };
 
   const dropInto = (e: React.DragEvent, dir: string) => {
-    if (!canDrag) return;
+    if (!canDrag || !dragRef.current) return;
     e.preventDefault();
     e.stopPropagation();
     const d = dragRef.current;
@@ -171,7 +185,18 @@ export function FileTree(props: Props) {
         .filter(Boolean)
         .join(' ');
       return (
-        <div key={node.path} className="ft-node">
+        /*
+         * v0.10.2：外层 .ft-node 也是这个文件夹的落区。
+         * 此前只有文件夹**那一行**接收拖放，展开后的内容区域是空档——
+         * 拖到子文件上方松手，事件一路冒到 .ft-root，笔记被移到了**库根**，
+         * 看起来就像「拖拽乱跳」。内层已 stopPropagation，最深的一层优先。
+         */
+        <div
+          key={node.path}
+          className="ft-node"
+          onDragOver={(e) => overDir(e, node.path, false)}
+          onDrop={(e) => dropInto(e, node.path)}
+        >
           <div
             className={cls}
             draggable={canDrag}

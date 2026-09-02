@@ -1727,3 +1727,12 @@ button {
 .graph-node text { font-size: 11px; fill: var(--muted, #666); pointer-events: none; }
 .graph-node.virtual circle { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
 .graph-node.current circle { fill: var(--danger, #c44); }
+
+/* v0.10.2：侧栏条目要能长按呼出操作单。安卓 WebView 上长按会先进入文字选择，
+   把 contextmenu / touch 长按抢掉——用户体感就是"长按没反应"。
+   这些行本来就没有需要选中的文字，禁掉选择即可。 */
+.m-tree-row {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
