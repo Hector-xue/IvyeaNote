@@ -224,19 +224,18 @@ describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
   });
 
   /**
-   * v0.10.3：登录页的默认路径**不该出现「服务器地址」输入框**。
-   * 这一栏此前是第一栏且默认为空，"开启同步"的第一步于是变成"先去搭台服务器"。
-   * 它没有被删掉，只是收进了「用自己的服务器」折叠区。
+   * v0.10.4：**开源构建里不许有默认服务器**。
+   *
+   * v0.10.3 把作者自己的域名写死成了所有构建的默认值，于是公开安装包的登录页
+   * 底下挂着别人的私有服务器地址——自托管软件不该有"官方服务器"。
+   * 没有预置地址时，服务器那一栏必须一开始就是展开可填的，否则用户无路可走。
    */
-  it('登录页默认不要求填服务器地址，展开「用自己的服务器」才出现', async () => {
+  it('没有预置服务器时，服务器地址栏一开始就可填（不藏在折叠区里）', async () => {
     await renderMain();
     fireEvent.click(screen.getByTitle(/本地模式/));
 
-    expect(screen.queryByLabelText('服务器地址')).toBeNull();
-    expect(screen.queryByText('服务器地址')).toBeNull();
-
-    fireEvent.click(screen.getByText('用自己的服务器'));
     expect(screen.getByText('服务器地址')).toBeTruthy();
+    expect(screen.getByText(/还没有服务器地址/)).toBeTruthy();
   });
 
   /** 手机上默认落在「配对码」——在手机键盘上敲地址和密码本身就是劝退动作 */

@@ -45,3 +45,24 @@ jobs:
 
       - name: 前端构建（vite build）
         run: npx vite build
+
+      # v0.10.4：**开源产物里不许出现任何硬编码的同步服务器域名**。
+      # v0.10.3 把作者自己的 note.ivyea.com 写死成了所有构建的默认值，于是公开
+      # Release 的每个安装包，登录页底下都挂着别人的私有服务器地址——而且是发版
+      # 之后才被用户发现的。单测只能守住 defaultServerUrl() 的返回值，守不住
+      # "有人换个地方又写死一次"，所以直接扫产物。
+      # 私有构建（自己传 VITE_DEFAULT_SERVER）不受影响：那种情况下这一步不该跑，
+      # 而 CI 从不设这个变量。
+      - name: 产物不得内置同步服务器域名
+        run: |
+          if [ -n "${VITE_DEFAULT_SERVER:-}" ]; then
+            echo "设置了 VITE_DEFAULT_SERVER，跳过（私有构建）"; exit 0
+          fi
+          hits=$(grep -rhoE '(https?://)?[a-z0-9-]+\.(ivyea|example)\.[a-z]{2,}' dist/assets/*.js 2>/dev/null \
+                 | grep -v 'example\.com' | sort -u || true)
+          if [ -n "$hits" ]; then
+            echo "::error::构建产物里出现了硬编码域名——开源安装包不该指向任何人的私有服务器："
+            echo "$hits"
+            exit 1
+          fi
+          echo "产物干净：没有内置任何同步服务器域名" 
