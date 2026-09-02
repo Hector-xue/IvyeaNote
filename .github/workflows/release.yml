@@ -55,11 +55,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      # v0.7.2：Rust 编译门禁 —— 打包前先 cargo check，类型错误几分钟内暴露
-      - name: Rust 编译门禁（cargo check）
-        working-directory: desktop/src-tauri
-        run: cargo check
-
       # v0.10.5：把同步服务端作为 sidecar 编进安装包。
       # 用户群体大多是「一台 Windows + 一部安卓」，此前这个组合要同步得先自己搭服务器；
       # 而服务端默认 SQLite、密钥与管理员账号全自动生成，本来就该跟着客户端一起发。
@@ -82,6 +77,11 @@ jobs:
           mkdir -p ../desktop/src-tauri/binaries
           go build -ldflags="-s -w" -o "$out" ./cmd/ivnote-server
           ls -la "$out"
+
+      # v0.7.2：Rust 编译门禁 —— 打包前先 cargo check，类型错误几分钟内暴露
+      - name: Rust 编译门禁（cargo check）
+        working-directory: desktop/src-tauri
+        run: cargo check
 
       - name: 固定 Node 22 LTS（Node 20 缺 util.markAsUncloneable，jsdom/undici 会崩；Node 24 曾触发 npm bug）
         uses: actions/setup-node@v4
