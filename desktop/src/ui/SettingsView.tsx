@@ -36,6 +36,17 @@ interface Props {
      */
     onOpenLogin(): void;
     onAddDevice(): void;
+    /**
+     * v0.10.5：内置服务端。null＝这份构建没带（或不是桌面端），此时不显示这一块。
+     * 「Windows + 安卓」是主力组合，而它此前要同步得先自己搭服务器——这个开关
+     * 就是为了把那一步彻底去掉。
+     */
+    localServer: {
+      running: boolean;
+      busy: boolean;
+      lanUrl: string | null;
+      onToggle(next: boolean): void;
+    } | null;
   };
   /**
    * v0.10.2：**存储位置**。此前设置里根本没有这一节，"绑定本地文件夹"藏在
@@ -367,6 +378,33 @@ export function SettingsView(props: Props) {
                   当前是本地模式，笔记只存在这台设备上。开启同步之后，多台设备之间就会自动流动；
                   不开也能一直用。
                 </p>
+                {props.sync.localServer && (
+                  <>
+                    <Toggle
+                      label="在这台电脑上开启同步"
+                      hint="把这台电脑变成你自己的同步服务器，数据只存在本机。手机连同一个 Wi-Fi 就能同步，不需要账号、不需要域名，也不用装任何别的东西"
+                      checked={props.sync.localServer.running}
+                      onChange={(v) => props.sync.localServer!.onToggle(v)}
+                    />
+                    {props.sync.localServer.busy && <p className="set-hint">正在处理…</p>}
+                    {props.sync.localServer.running && (
+                      <p className="set-hint">
+                        {props.sync.localServer.lanUrl ? (
+                          <>
+                            手机上打开 Ivyea Note → 开启同步 → 「找找附近的电脑」即可；
+                            找不到时手动填 <b>{props.sync.localServer.lanUrl}</b>。
+                            这台电脑关机或退出程序时，同步会暂停。
+                          </>
+                        ) : (
+                          <>
+                            没能拿到这台电脑的局域网地址（可能没连 Wi-Fi）。
+                            接入同一个 Wi-Fi 后手机才能找到它。
+                          </>
+                        )}
+                      </p>
+                    )}
+                  </>
+                )}
                 <div className="set-row set-about">
                   <span className="set-label">
                     同步

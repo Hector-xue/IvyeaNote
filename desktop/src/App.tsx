@@ -41,6 +41,13 @@ import { invertMoveOps, planMove, remapPath } from './lib/movePath';
 import { noteCandidates } from './lib/links';
 import { isSafPath, pickVaultFolder, safIO } from './lib/saf';
 import {
+  localServerAvailable,
+  localServerStatus,
+  startLocalServer,
+  stopLocalServer,
+  type LocalServerInfo,
+} from './lib/localServer';
+import {
   classifyVault,
   originalOfConflict,
   summarize,
@@ -948,6 +955,51 @@ export default function App() {
   /** v0.7.1 F8: graph view */
   const [showGraph, setShowGraph] = useState(false);
 
+  /**
+   * v0.10.5：内置同步服务端。
+   *
+   * 「Windows + 安卓」是主力组合，而它此前要同步，第一步是自己搭一台服务器。
+   * 现在服务端随桌面包一起发，这里负责起停 + **起完自动登录**——
+   * 少了自动登录这一步，用户还是要面对账号密码，"点点点"就断在最后一米。
+   */
+  const [localSrv, setLocalSrv] = useState<LocalServerInfo | null>(null);
+  const [localSrvBusy, setLocalSrvBusy] = useState(false);
+  const [localSrvOk, setLocalSrvOk] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const ok = await localServerAvailable();
+      setLocalSrvOk(ok);
+      if (ok) setLocalSrv(await localServerStatus());
+    })();
+  }, []);
+
+  const toggleLocalServer = useCallback(
+    async (next: boolean) => {
+      setLocalSrvBusy(true);
+      try {
+        if (!next) {
+          setLocalSrv(await stopLocalServer());
+          toast('已停止本机同步服务', 'ok');
+          return;
+        }
+        const { info, cred } = await startLocalServer();
+        setLocalSrv(info);
+        // 起完就登录：凭据是本机生成保存的，用户全程不需要知道它
+        if (!stateRef.current.account) {
+          await onLogin(info.url, cred.email, cred.password);
+        }
+        toast('本机同步已开启', 'ok');
+      } catch (e) {
+        toast(`开启失败：${errText(e)}`, 'error');
+        setLocalSrv(await localServerStatus());
+      } finally {
+        setLocalSrvBusy(false);
+      }
+    },
+    [onLogin, toast]
+  );
+
   /** v0.7.0 F4: open tags panel */
   const openTagPanel = useCallback(() => {
     setShowTagPanel(true);
@@ -1382,6 +1434,14 @@ export default function App() {
               setShowLogin(true);
             },
             onAddDevice: () => void showPairCode(),
+            localServer: localSrvOk
+              ? {
+                  running: !!localSrv?.running,
+                  busy: localSrvBusy,
+                  lanUrl: localSrv?.lanUrl ?? null,
+                  onToggle: (v) => void toggleLocalServer(v),
+                }
+              : null,
           }}
           storage={{
             // opfs:// 是虚拟标记，对用户来说就是「应用内部存储」，不该把它当路径显示

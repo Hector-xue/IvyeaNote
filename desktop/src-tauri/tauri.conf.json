@@ -26,9 +26,21 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "app", "dmg", "deb", "appimage"],
-    "icon": ["icons/icon.png", "icons/icon.ico"],
-    "createUpdaterArtifacts": true
+    "targets": [
+      "nsis",
+      "app",
+      "dmg",
+      "deb",
+      "appimage"
+    ],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/ivnote-server"
+    ]
   },
   "plugins": {
     "updater": {

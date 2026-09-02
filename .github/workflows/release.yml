@@ -15,15 +15,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # triple/go_os/go_arch 是给 sidecar 用的：Tauri 按 `<name>-<target-triple>` 找二进制。
+        # macOS 两支是**交叉目标**，必须按 target 编而不是按 host——照 host 编出来的是
+        # 另一个架构，打包时 Tauri 找不到对应后缀的文件直接失败。
         include:
           - os: macos-latest
             args: --target aarch64-apple-darwin
+            triple: aarch64-apple-darwin
+            go_os: darwin
+            go_arch: arm64
           - os: macos-latest
             args: --target x86_64-apple-darwin
+            triple: x86_64-apple-darwin
+            go_os: darwin
+            go_arch: amd64
           - os: ubuntu-22.04
             args: ''
+            triple: x86_64-unknown-linux-gnu
+            go_os: linux
+            go_arch: amd64
           - os: windows-latest
             args: ''
+            triple: x86_64-pc-windows-msvc
+            go_os: windows
+            go_arch: amd64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +59,29 @@ jobs:
       - name: Rust 编译门禁（cargo check）
         working-directory: desktop/src-tauri
         run: cargo check
+
+      # v0.10.5：把同步服务端作为 sidecar 编进安装包。
+      # 用户群体大多是「一台 Windows + 一部安卓」，此前这个组合要同步得先自己搭服务器；
+      # 而服务端默认 SQLite、密钥与管理员账号全自动生成，本来就该跟着客户端一起发。
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: server/go.sum
+
+      - name: 编译同步服务端 sidecar
+        shell: bash
+        working-directory: server
+        env:
+          GOOS: ${{ matrix.go_os }}
+          GOARCH: ${{ matrix.go_arch }}
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          out="../desktop/src-tauri/binaries/ivnote-server-${{ matrix.triple }}"
+          [ "${{ matrix.go_os }}" = "windows" ] && out="$out.exe"
+          mkdir -p ../desktop/src-tauri/binaries
+          go build -ldflags="-s -w" -o "$out" ./cmd/ivnote-server
+          ls -la "$out"
 
       - name: 固定 Node 22 LTS（Node 20 缺 util.markAsUncloneable，jsdom/undici 会崩；Node 24 曾触发 npm bug）
         uses: actions/setup-node@v4
