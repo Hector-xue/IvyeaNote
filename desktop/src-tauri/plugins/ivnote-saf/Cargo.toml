@@ -3,6 +3,10 @@ name = "tauri-plugin-ivnote-saf"
 version = "0.1.0"
 description = "安卓 Storage Access Framework：让笔记库能落在用户自己选的系统目录里"
 edition = "2021"
+# tauri-plugin 的 build 脚本硬性要求：links 必须存在且与 package.name 一致
+#（官方插件也是这么写的）。缺了它 cargo build 直接 exit 101，
+# 报 "package.links field in the Cargo manifest is not set"。
+links = "tauri-plugin-ivnote-saf"
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }
