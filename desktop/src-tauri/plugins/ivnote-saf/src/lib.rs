@@ -42,7 +42,12 @@ pub enum Error {
 }
 
 impl Serialize for Error {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    // 必须写全 `std::result::Result`：本模块下面那个 `Result<T>` 别名只收一个泛型参数，
+    // 直接写 `Result<S::Ok, S::Error>` 会被它遮蔽，报 "expected 1 generic argument"
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
@@ -140,7 +145,9 @@ impl<R: Runtime> Saf<R> {
 
 #[tauri::command]
 fn pick_vault_folder<R: Runtime>(app: tauri::AppHandle<R>) -> Result<PickedFolder> {
-    app.state::<Saf<R>>().call("pickVaultFolder", ())
+    // 传 `()` 会序列化成 JSON null，而移动端桥那边期望一个对象；给个空对象最稳
+    app.state::<Saf<R>>()
+        .call("pickVaultFolder", serde_json::json!({}))
 }
 
 #[tauri::command]
