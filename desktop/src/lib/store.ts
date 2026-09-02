@@ -91,6 +91,24 @@ export function ensureLocalVault(cur?: PersistState): PersistState {
   };
 }
 
+/**
+ * 下一个可用的本地库 id（v0.10.2）。
+ *
+ * 本地库一律用**负数** id，云端自增 id 永远是正的，两边永不撞车；
+ * OPFS 的存储目录是 `vault-<id>`，所以 id 唯一就等于数据互不串门。
+ *
+ * 免登录时也能建库，是因为「建一个笔记本」这件事跟服务器没有任何关系——
+ * 此前 `createVault` 第一句就是「云同步需要登录」，把本地功能拿云端能力挡住了。
+ */
+export function nextLocalVaultId(vaults: Record<string, VaultMeta>): number {
+  let min = 0;
+  for (const k of Object.keys(vaults)) {
+    const id = Number(k);
+    if (Number.isFinite(id) && id < min) min = id;
+  }
+  return min - 1;
+}
+
 /** 把免登录本地库的元数据并进云端库（文件内容由 migrateFiles 复制） */
 export function mergeLocalIntoCloud(local: VaultMeta, cloud: VaultMeta): VaultMeta {
   const versions = { ...cloud.versions };

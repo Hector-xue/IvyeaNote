@@ -8,6 +8,7 @@
  * 同样是「底部菜单」，观感上完全不是一回事。分组和图标不是装饰：
  * 十几个动作平铺成一列时，人根本扫不出哪些是一类。
  */
+import { useEffect, useRef } from 'react';
 import { RibbonIcon, type IconName } from '../Icons';
 
 export interface SheetItem {
@@ -31,10 +32,27 @@ interface Props {
 }
 
 export function Sheet({ open, title, groups, onClose }: Props) {
+  /*
+   * v0.10.2：**刚弹出来的一瞬间不接受遮罩点击**。
+   *
+   * 长按呼出这张卡时，手指抬起后浏览器还会补一次 click，坐标就是刚才按住的位置——
+   * 那里此刻已经被遮罩盖住，于是「长按 → 卡片弹出 → 立刻自己关掉」，
+   * 看起来就是长按压根没反应。350ms 足够甩掉那次合成点击，又短到用户
+   * 感觉不出来（真想关就再点一下）。
+   */
+  const openedAt = useRef(0);
+  useEffect(() => {
+    if (open) openedAt.current = Date.now();
+  }, [open]);
+
   if (!open) return null;
   const shown = groups.filter((g) => g.length > 0);
+  const maskClick = () => {
+    if (Date.now() - openedAt.current < 350) return;
+    onClose();
+  };
   return (
-    <div className="m-sheet-mask" onClick={onClose}>
+    <div className="m-sheet-mask" onClick={maskClick}>
       <div
         className="m-sheet2"
         role="dialog"

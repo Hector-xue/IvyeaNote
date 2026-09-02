@@ -86,6 +86,10 @@ vi.mock('@codemirror/view', () => ({
     destroy() {}
     static updateListener = { of: () => ({}) };
     static theme = () => ({});
+    // v0.10.2：软换行扩展与 DOM 事件处理器。桩里缺了 domEventHandlers 会在
+    // 建实例时抛「is not a function」，整页渲染直接挂——补齐才对得上真 CM
+    static lineWrapping = {};
+    static domEventHandlers = () => ({});
   },
   ViewPlugin: { fromClass: () => ({}) },
   Decoration: {
@@ -251,6 +255,37 @@ describe('侧栏拖拽移动（E1）', () => {
     });
     expect(memFiles.has('a.md')).toBe(false);
     expect(memFiles.get('sub/a.md')).toBe('# A\n');
+  });
+
+  /**
+   * v0.10.2 回归：文件夹**展开后的内容区**此前是落区空档——拖到子文件上方松手，
+   * 事件一路冒泡到 .ft-root，笔记被移到库根而不是那个文件夹里。
+   */
+  it('拖到文件夹内容区（子文件上方）→ 落进该文件夹，不是库根', async () => {
+    await renderApp({ 'a.md': '# A\n', 'sub/b.md': '# B\n' });
+
+    const dt = fakeDataTransfer();
+    const src = fileNode('a.md')!;
+    fireEvent.dragStart(src, { dataTransfer: dt });
+    const inner = fileNode('sub/b.md')!; // 文件夹里的一个文件，不是文件夹那一行
+    fireEvent.dragOver(inner, { dataTransfer: dt });
+    fireEvent.drop(inner, { dataTransfer: dt });
+
+    await waitFor(() => {
+      expect(memFiles.has('sub/a.md')).toBe(true);
+    });
+    expect(memFiles.has('a.md')).toBe(false);
+  });
+
+  /** 拖到自己所在的文件夹上：不该被祖先接住而移到上一级 */
+  it('拖到自己所在的文件夹上 → 原地不动，绝不被移到上一级', async () => {
+    await renderApp({ 'sub/b.md': '# B\n', 'sub/c.md': '# C\n' });
+
+    dragOnto('sub/b.md', 'sub');
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(memFiles.has('sub/b.md')).toBe(true);
+    expect(memFiles.has('b.md')).toBe(false);
   });
 
   it('文件拖到空白处 → 移回库根', async () => {

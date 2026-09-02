@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  findBareUrls,
+  findInlineLinks,
   findFootnoteRefs,
   isHorizontalRule,
   isTableDivider,
@@ -112,5 +114,50 @@ describe('脚注', () => {
   });
   it('普通链接不是脚注', () => {
     expect(findFootnoteRefs('[标题](https://x)')).toHaveLength(0);
+  });
+});
+
+describe('findInlineLinks（v0.10.2 编辑态可点链接）', () => {
+  it('抓出普通行内链接的文字段与地址', () => {
+    const [hit] = findInlineLinks('见 [文档](https://a.com/b) 一节');
+    expect(hit).toMatchObject({ href: 'https://a.com/b' });
+    expect('见 [文档](https://a.com/b) 一节'.slice(hit.textFrom, hit.textTo)).toBe('文档');
+  });
+
+  it('图片 ![alt](src) 不算链接（点它应该看图，不是跳走）', () => {
+    expect(findInlineLinks('![图](a.png)')).toEqual([]);
+  });
+
+  it('[[双链]] 不被内层匹配吃掉（双链有自己的跳转）', () => {
+    expect(findInlineLinks('[[某笔记]](x)')).toEqual([]);
+  });
+
+  it('一行多个链接都抓到', () => {
+    expect(findInlineLinks('[a](1.md) 和 [b](2.md)').map((l) => l.href)).toEqual(['1.md', '2.md']);
+  });
+
+  it('带 title 的写法也认', () => {
+    expect(findInlineLinks('[a](https://x.com "标题")')[0].href).toBe('https://x.com');
+  });
+});
+
+describe('findBareUrls（v0.10.2）', () => {
+  it('抓出裸 URL', () => {
+    expect(findBareUrls('见 https://a.com/b 处').map((u) => u.href)).toEqual(['https://a.com/b']);
+  });
+
+  it('结尾中文句号不算地址的一部分', () => {
+    expect(findBareUrls('见 https://a.com/b。').map((u) => u.href)).toEqual(['https://a.com/b']);
+  });
+
+  it('多出来的右括号剔掉，成对的保留', () => {
+    expect(findBareUrls('(见 https://a.com/b)').map((u) => u.href)).toEqual(['https://a.com/b']);
+    expect(findBareUrls('见 https://a.com/x_(y) 处').map((u) => u.href)).toEqual([
+      'https://a.com/x_(y)',
+    ]);
+  });
+
+  it('Markdown 链接括号里的地址不重复抓（那边已有装饰）', () => {
+    expect(findBareUrls('[a](https://a.com)')).toEqual([]);
   });
 });

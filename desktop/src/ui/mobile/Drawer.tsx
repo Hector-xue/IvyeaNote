@@ -13,7 +13,7 @@
  * 底部五个文字按钮（新建笔记 / 新建文件夹 / 检查更新 / 新建笔记库 / 登录同步）。
  * 功能没少，但它读起来像一个设置页，不像一个文件浏览器。
  */
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { RibbonIcon } from '../Icons';
 import { buildFileTree, displayName, type TreeNode } from '../FileTree';
 import { searchNotes, type SearchDoc } from '../../lib/searchIndex';
@@ -61,10 +61,65 @@ export function Drawer(props: Props) {
     return set.size;
   }, [props.files, props.emptyDirs]);
 
-  /** 长按：触屏上没有右键，用 contextmenu 事件（浏览器把长按映射成它） */
-  const longPress = (kind: 'file' | 'dir' | 'pdf', path: string, name: string) => (e: React.MouseEvent) => {
-    e.preventDefault();
+  /**
+   * 长按呼出操作单。
+   *
+   * v0.10.2：**不能只靠 contextmenu**。安卓 WebView 上长按一段文字优先进入
+   * 文字选择，`contextmenu` 时有时无——用户的体感就是"长按没反应"，而这张单子
+   * 是手机上移动 / 重命名文件的唯一入口。所以自己计时：按住 500ms 不动就算长按，
+   * 手指一移动（>10px）或提前松开就取消。contextmenu 仍然保留，两条路都通。
+   */
+  const pressTimer = useRef<number | undefined>(undefined);
+  const pressFrom = useRef<{ x: number; y: number } | null>(null);
+  /** 长按已经触发过：随后的 click 不该再把文件打开一次 */
+  const pressFired = useRef(false);
+
+  const cancelPress = () => {
+    window.clearTimeout(pressTimer.current);
+    pressTimer.current = undefined;
+    pressFrom.current = null;
+  };
+
+  const fire = (kind: 'file' | 'dir' | 'pdf', path: string, name: string) => {
+    pressFired.current = true;
     props.onLongPress(kind, path, name);
+  };
+
+  const longPressHandlers = (kind: 'file' | 'dir' | 'pdf', path: string, name: string) => ({
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      cancelPress();
+      fire(kind, path, name);
+    },
+    onTouchStart: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      pressFrom.current = { x: t.clientX, y: t.clientY };
+      pressFired.current = false;
+      pressTimer.current = window.setTimeout(() => fire(kind, path, name), 500);
+    },
+    onTouchMove: (e: React.TouchEvent) => {
+      const from = pressFrom.current;
+      if (!from) return;
+      const t = e.touches[0];
+      // 滚动列表时手指必然在动，那不是长按
+      if (Math.abs(t.clientX - from.x) > 10 || Math.abs(t.clientY - from.y) > 10) cancelPress();
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      // 长按已经触发过：吞掉浏览器随后补的那次合成 click
+      // （React 里 touchend 不是 passive，preventDefault 有效）
+      if (pressFired.current) e.preventDefault();
+      cancelPress();
+    },
+    onTouchCancel: cancelPress,
+  });
+
+  /** 长按刚触发过就吞掉这次 click，否则松手瞬间又把笔记打开了 */
+  const clickUnlessPressed = (fn: () => void) => () => {
+    if (pressFired.current) {
+      pressFired.current = false;
+      return;
+    }
+    fn();
   };
 
   const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
@@ -77,8 +132,8 @@ export function Drawer(props: Props) {
           <div
             className="m-tree-row m-tree-dir"
             style={pad}
-            onClick={() => props.onToggleDir(node.path)}
-            onContextMenu={longPress('dir', node.path, node.name)}
+            onClick={clickUnlessPressed(() => props.onToggleDir(node.path))}
+            {...longPressHandlers('dir', node.path, node.name)}
           >
             <span className="m-tree-caret">
               <RibbonIcon name={open ? 'chevron-down' : 'chevron-right'} size={15} />
@@ -94,8 +149,8 @@ export function Drawer(props: Props) {
         key={node.path}
         className={`m-tree-row m-tree-file ${props.currentPath === node.path ? 'active' : ''}`}
         style={pad}
-        onClick={() => props.onSelect(node.path)}
-        onContextMenu={longPress('file', node.path, displayName(node.name, true))}
+        onClick={clickUnlessPressed(() => props.onSelect(node.path))}
+        {...longPressHandlers('file', node.path, displayName(node.name, true))}
       >
         <span className="m-tree-name">{displayName(node.name, true)}</span>
       </div>
@@ -186,8 +241,8 @@ export function Drawer(props: Props) {
                       key={p}
                       className="m-tree-row m-tree-file"
                       style={{ paddingLeft: '10px' }}
-                      onClick={() => props.onOpenPdf(p)}
-                      onContextMenu={longPress('pdf', p, p.split('/').pop() ?? p)}
+                      onClick={clickUnlessPressed(() => props.onOpenPdf(p))}
+                      {...longPressHandlers('pdf', p, p.split('/').pop() ?? p)}
                     >
                       <span className="m-tree-name">{p.split('/').pop()}</span>
                       <span className="m-tree-badge">PDF</span>

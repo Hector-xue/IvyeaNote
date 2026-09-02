@@ -4,6 +4,19 @@
  * - probeServer：测试连接并分类错误，给人话诊断
  */
 
+/**
+ * 内置默认服务器地址（构建期注入，见 vite.config.ts）。
+ * 空串＝这份构建没有默认服务器，登录时必须手填。
+ * 测试环境没有 define，取不到就当空串——不能让它抛 ReferenceError 把登录页炸掉。
+ */
+export function defaultServerUrl(): string {
+  try {
+    return typeof __DEFAULT_SERVER__ === 'string' ? __DEFAULT_SERVER__ : '';
+  } catch {
+    return '';
+  }
+}
+
 export interface ProbeResult {
   ok: boolean;
   /** 规范化后的 URL */

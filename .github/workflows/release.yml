@@ -73,7 +73,10 @@ jobs:
           args: ${{ matrix.args }}
           tagName: ${{ github.ref_name }}
           releaseName: 'Ivyea Note ${{ github.ref_name }}'
-          releaseBody: '桌面安装包：Windows 用 .msi/.exe，macOS 用 .dmg（Apple Silicon 选 aarch64），Linux 用 .deb/.AppImage'
+          releaseBody: |
+            桌面安装包：Windows 用 `-setup.exe`，macOS 用 `.dmg`（Apple Silicon 选 aarch64，Intel 选 x64），Linux 用 `.deb` 或 `.AppImage`。
+            安卓装 `Ivyea.Note_<版本>_universal.apk` 一个就够（含全部 CPU 架构）。
+            `.app.tar.gz` 是 macOS 应用内更新用的，手动安装请忽略。
           releaseDraft: false
           prerelease: false
 
@@ -155,29 +158,53 @@ jobs:
         run: cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
 
       # 版本号写入 Android 工程（与 tag 同步）
+      # v0.10.2：只出**一个**通用 APK。此前 --split-per-abi 会额外产出 arm64 / x86_64
+      # 两个分包，Release 里三个 APK 摆在一起，用户第一件事是猜自己该下哪个——
+      # 而通用包只比分包大 1~2 MB，这点体积换不来那份犹豫。
       - name: 构建通用 APK（含 arm64/armv7/x86/x86_64）
         working-directory: desktop
         run: |
           sudo apt-get update && sudo apt-get install -y gradle
           unset NDK_HOME
-          cargo tauri android build --apk --split-per-abi
+          cargo tauri android build --apk
           mkdir -p apk-out
-          find src-tauri/gen/android -name "*.apk" -exec cp {} apk-out/ \;
+          find src-tauri/gen/android -name "*universal*.apk" -exec cp {} apk-out/ \;
+          # 兜底：某些 tauri-cli 版本产物不带 universal 字样
+          if [ -z "$(ls -A apk-out)" ]; then
+            find src-tauri/gen/android -name "*.apk" -exec cp {} apk-out/ \;
+          fi
           ls -la apk-out
 
-      # 自签名：CI 临时生成 keystore 给 release APK 签名（未签名包安卓报「解析软件包失败」）
-      - name: 签名 APK（自签 keystore）
+      # ⚠️ 安卓的升级校验看的是**签名证书**：证书一换，系统就认为是另一个应用，
+      # 只报「应用未安装 / 签名不一致」，用户必须先卸载——而卸载会连同
+      # 内部存储里的笔记一起删掉。
+      #
+      # v0.10.2 之前这里是 `if [ ! -f /tmp/ivnote-release.keystore ]` 再 keytool 现生成。
+      # CI runner 每次都是全新的机器，那个条件**永远成立**，于是每发一个版本就换一把
+      # 新钥匙，每次更新都得卸载重装。这不是偶发问题，是必然。
+      #
+      # 现在密钥来自仓库 Secret，**一次生成、永久使用**。缺 Secret 就直接失败：
+      # 宁可不出包，也不能再出一个签名对不上的包。
+      - name: 签名 APK（固定发布密钥）
         working-directory: desktop/apk-out
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           set -euo pipefail
-          KS="/tmp/ivnote-release.keystore"
-          KP="ivnote-android"
-          if [ ! -f "$KS" ]; then
-            keytool -genkeypair -v -keystore "$KS" -alias ivnote \
-              -keyalg RSA -keysize 2048 -validity 10950 \
-              -storepass "$KP" -keypass "$KP" \
-              -dname "CN=Ivyea Note, OU=Ivyea, O=Ivyea, C=CN"
+          if [ -z "${ANDROID_KEYSTORE_B64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ]; then
+            echo "::error::缺少 ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD Secret。"
+            echo "::error::没有固定签名密钥就只能现生成一把，那会让所有老用户升级时报「签名不一致」。"
+            echo "::error::生成与配置方法见 docs/安卓签名密钥.md"
+            exit 1
           fi
+          KS="$RUNNER_TEMP/ivnote-release.keystore"
+          KP="$ANDROID_KEYSTORE_PASSWORD"
+          ALIAS="${ANDROID_KEY_ALIAS:-ivnote}"
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$KS"
+          # 校验密码/别名对不对——错了要在这里报，而不是产出一个签不上名的包
+          keytool -list -keystore "$KS" -storepass "$KP" -alias "$ALIAS" > /dev/null
           # 定位 build-tools：按 ANDROID_HOME → ANDROID_SDK_ROOT → 默认 SDK 路径解析，
           # 取 zipalign 所在目录的最新版本；全落空则 sdkmanager 兜底安装 34.0.0。
           # （旧写法 `ZIPS=$(ls ...*/zipalign)` 在 glob 未命中时 ls 返回 exit 2，
@@ -203,12 +230,19 @@ jobs:
             [ -e "$f" ] || continue
             # zipalign 必需 <align> 参数（4 = 32 位对齐）；漏写在 v0.3.3 run#20 打印 usage 后 exit 2
             "$BT/zipalign" -f -p 4 "$f" "$f.aligned"
-            "$BT/apksigner" sign --ks "$KS" --ks-key-alias ivnote \
+            "$BT/apksigner" sign --ks "$KS" --ks-key-alias "$ALIAS" \
               --ks-pass "pass:$KP" --key-pass "pass:$KP" \
               --out "$f.signed" "$f.aligned"
             mv "$f.signed" "$f"
             rm -f "$f.aligned"
           done
+          # 把证书指纹打进日志：以后再有人报「签名不一致」，
+          # 对一下各版本的 SHA-256 就知道是不是又换钥匙了
+          for f in *.apk; do
+            echo "== $f"
+            "$BT/apksigner" verify --print-certs "$f" | grep -i "SHA-256" || true
+          done
+          rm -f "$KS"
           ls -la
 
       - name: 重命名产物
@@ -225,6 +259,32 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/apk-out/*.apk
+
+  # 收尾：删掉 Release 上纯冗余的 .sig 资产。
+  # 应用内更新读的是 latest.json，签名以字符串形式**内联**在里面（platforms.*.signature），
+  # 这些 .sig 文件没有任何消费方，只是让下载页多出一半的条目。
+  # 必须等三个出包 job 都结束再删，否则会把后到的那批漏下。
+  tidy-release:
+    needs: [build, docker-image, android-apk]
+    if: always()
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: 移除 .sig 资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ids=$(gh api "repos/$REPO/releases/tags/$TAG" \
+            --jq '.assets[] | select(.name | endswith(".sig")) | "\(.id) \(.name)"')
+          if [ -z "$ids" ]; then echo "没有 .sig 资产，跳过"; exit 0; fi
+          echo "$ids" | while read -r id name; do
+            echo "删除 $name"
+            gh api -X DELETE "repos/$REPO/releases/assets/$id"
+          done
 
 # 说明：latest.json（应用内更新清单）由 tauri-action 在 build 矩阵里自动生成并上传到
 # Release —— 开启 createUpdaterArtifacts + 提供 TAURI_SIGNING_PRIVATE_KEY 即可，

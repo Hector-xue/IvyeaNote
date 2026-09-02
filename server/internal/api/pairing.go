@@ -10,7 +10,10 @@ package api
 
 import (
 	"crypto/rand"
+	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,12 +25,17 @@ type pairEntry struct {
 }
 
 type pairStore struct {
-	mu   sync.Mutex
-	codes map[string]*pairEntry
-	failUntil map[string]time.Time // IP -> 限速到该时间点
+	mu        sync.Mutex
+	codes     map[string]*pairEntry
+	fails     map[string]int       // 客户端 IP -> 连续失败次数
+	failUntil map[string]time.Time // 客户端 IP -> 限速到该时间点
 }
 
-var pairing = &pairStore{codes: map[string]*pairEntry{}, failUntil: map[string]time.Time{}}
+var pairing = &pairStore{
+	codes:     map[string]*pairEntry{},
+	fails:     map[string]int{},
+	failUntil: map[string]time.Time{},
+}
 
 const (
 	pairTTL      = 60 * time.Second
@@ -71,7 +79,7 @@ func (s *Server) handlePairCreate(w http.ResponseWriter, r *http.Request) {
 
 // handlePairClaim（无需登录）：凭配对码换会话。一次性 + 60 秒过期 + 按 IP 限速。
 func (s *Server) handlePairClaim(w http.ResponseWriter, r *http.Request) {
-	ip := r.RemoteAddr
+	ip := clientIP(r)
 	pairing.mu.Lock()
 	if until, bad := pairing.failUntil[ip]; bad && time.Now().Before(until) {
 		pairing.mu.Unlock()
@@ -80,16 +88,80 @@ func (s *Server) handlePairClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	e, ok := pairing.codes[r.URL.Query().Get("code")]
 	if !ok || e.used || e.expiresAt.Before(time.Now()) {
-		if failsExceeded(ip) {
+		locked := noteFailure(ip)
+		if locked {
 			pairing.failUntil[ip] = time.Now().Add(pairLockout)
 		}
+		left := pairMaxFails - pairing.fails[ip]
 		pairing.mu.Unlock()
-		writeErr(w, http.StatusUnauthorized, "pair_invalid", "配对码无效或已过期")
+		if locked {
+			writeErr(w, http.StatusTooManyRequests, "too_many", "尝试次数过多，请 5 分钟后再试")
+			return
+		}
+		// 说清楚还剩几次：不然用户不知道自己离被锁还有多远
+		writeErr(w, http.StatusUnauthorized, "pair_invalid",
+			fmt.Sprintf("配对码无效或已过期（还可尝试 %d 次）", left))
 		return
 	}
 	e.used = true // 一次性：无论后续登录是否成功，码立即作废
+	delete(pairing.fails, ip) // 成功即清零，别让之前的手滑攒到下一次
 	pairing.mu.Unlock()
 	s.issueSession(w, e.userID)
 }
 
-func failsExceeded(ip string) bool { return true } // 每次失败计数由限位器粗略处理；精确计数见下批改进
+/*
+ * 记一次失败，返回是否该锁定。**调用方必须已持有 pairing.mu**。
+ *
+ * v0.10.3 修：原实现是 `func failsExceeded(ip string) bool { return true }`——
+ * 恒为真，声明好的 pairMaxFails=5 一次都没被用上，于是**第一次输错就锁 5 分钟**。
+ * 配对码是手输的 6 位数字，手滑是常态而不是攻击，一次就锁等于这个功能不可用。
+ */
+func noteFailure(ip string) bool {
+	pairing.fails[ip]++
+	if pairing.fails[ip] >= pairMaxFails {
+		delete(pairing.fails, ip) // 锁定期本身就是惩罚，计数归零重新来过
+		return true
+	}
+	return false
+}
+
+/*
+ * 取真实客户端 IP。
+ *
+ * v0.10.3 修：原来直接用 r.RemoteAddr——**站在 nginx 后面它永远是 127.0.0.1**，
+ * 于是限速桶只有一个，任何人输错一次就把**所有人**一起锁掉 5 分钟。
+ *
+ * 只有当直连方是回环/内网（也就是我们自己的反代）时才采信转发头；
+ * 否则公网客户端可以随便伪造 X-Forwarded-For 来绕过限速。
+ */
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if !isTrustedProxy(host) {
+		return host
+	}
+	if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); v != "" {
+		return v
+	}
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		// 最左边是最初的客户端；中间可能有伪造，但链路上第一跳是我们信任的反代
+		if i := strings.IndexByte(v, ','); i >= 0 {
+			v = v[:i]
+		}
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return host
+}
+
+// isTrustedProxy：回环与私有网段视为自己的反代
+func isTrustedProxy(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}

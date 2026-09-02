@@ -16,6 +16,7 @@ import {
   LOCAL_VAULT_NAME,
   newVaultMeta,
   type PersistState,
+  nextLocalVaultId,
 } from './store';
 
 describe('免登录本地模式（v0.3.1）', () => {
@@ -74,5 +75,23 @@ describe('免登录本地模式（v0.3.1）', () => {
     expect(m.versions['旧.md']).toBe(7);
     expect(m.versions['新.md']).toBe(1);
     expect(m.tombstones?.['删.md']).toBe(4);
+  });
+});
+
+describe('nextLocalVaultId（v0.10.2 免登录建库）', () => {
+  it('空状态从 -1 开始', () => {
+    expect(nextLocalVaultId({})).toBe(-1);
+  });
+
+  it('已有默认本地库时给 -2，不与它撞车（OPFS 目录按 id 分）', () => {
+    expect(nextLocalVaultId({ '-1': {} as never })).toBe(-2);
+  });
+
+  it('云端正数 id 不影响本地取号', () => {
+    expect(nextLocalVaultId({ '-1': {} as never, '7': {} as never, '12': {} as never })).toBe(-2);
+  });
+
+  it('连开多个：一路往负数走', () => {
+    expect(nextLocalVaultId({ '-1': {} as never, '-2': {} as never, '-3': {} as never })).toBe(-4);
   });
 });
