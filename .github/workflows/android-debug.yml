@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - 'feat/android-saf**'
+      - 'feat/**'
       - 'fix/android**'
 
 jobs:
