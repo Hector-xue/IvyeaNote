@@ -238,6 +238,22 @@ describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
     expect(screen.getByText(/还没有服务器地址/)).toBeTruthy();
   });
 
+  /**
+   * v0.10.5：没有服务器地址时，配对码那一屏要给出「找找附近的电脑」。
+   *
+   * 服务端从 v0.7.0 起就在 UDP 9999 上应答发现广播，Rust 侧命令也一直都在，
+   * 但**界面上从来没有任何地方用过它**——对「Windows + 安卓」这个主场景，
+   * 这一条省掉的正是最难的一步：在手机键盘上敲 http://192.168.x.x:8080。
+   */
+  it('没有服务器地址时，配对码页给出「找找附近的电脑」', async () => {
+    await renderMain();
+    fireEvent.click(screen.getByTitle(/本地模式/));
+    fireEvent.click(screen.getByRole('tab', { name: '配对码' }));
+
+    expect(screen.getByText('找找附近的电脑')).toBeTruthy();
+    expect(screen.getByText(/同一个 Wi-Fi/)).toBeTruthy();
+  });
+
   /** 手机上默认落在「配对码」——在手机键盘上敲地址和密码本身就是劝退动作 */
   it('登录页给出配对码与邮箱密码两条路，且说明了配对码从哪来', async () => {
     await renderMain();

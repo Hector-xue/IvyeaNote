@@ -61,6 +61,25 @@ jobs:
         working-directory: desktop
         run: npx oxlint src && npx tsc -b && npx vitest run
 
+      # v0.10.5：**打包线也要设防**。这道扫描此前只在 ci.yml 里有，而 v0.10.3 把作者
+      # 自己的域名写死进产物、一路发到公开 Release 上，正是「打包这条线没人查」才发生的。
+      # 门禁挡的是 PR，发版走的是另一条路——两条都得有。
+      - name: 产物不得内置同步服务器域名
+        working-directory: desktop
+        shell: bash
+        run: |
+          if [ -n "${VITE_DEFAULT_SERVER:-}" ]; then
+            echo "设置了 VITE_DEFAULT_SERVER，跳过（私有构建）"; exit 0
+          fi
+          hits=$(grep -rhoE '(https?://)?[a-z0-9-]+\.(ivyea|example)\.[a-z]{2,}' dist/assets/*.js 2>/dev/null \
+                 | grep -v 'example\.com' | sort -u || true)
+          if [ -n "$hits" ]; then
+            echo "::error::构建产物里出现了硬编码域名——开源安装包不该指向任何人的私有服务器："
+            echo "$hits"
+            exit 1
+          fi
+          echo "产物干净：没有内置任何同步服务器域名"
+
       - name: Tauri 打包并发布 Release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -77,6 +96,11 @@ jobs:
             桌面安装包：Windows 用 `-setup.exe`，macOS 用 `.dmg`（Apple Silicon 选 aarch64，Intel 选 x64），Linux 用 `.deb` 或 `.AppImage`。
             安卓装 `Ivyea.Note_<版本>_universal.apk` 一个就够（含全部 CPU 架构）。
             `.app.tar.gz` 是 macOS 应用内更新用的，手动安装请忽略。
+
+            想自己搭同步服务器：下 `ivnote-server-<系统>-<架构>`，它是**单个可执行文件**，
+            默认用 SQLite、自动生成密钥和管理员账号，**不需要 Docker、不需要数据库**。
+            Windows 用户把它和 `IvyeaNote-deploy.zip` 里的 `ivnote-win-setup.ps1` 放一起，
+            重命名成 `ivnote-server.exe` 后双击那个 ps1 即可。
           releaseDraft: false
           prerelease: false
 
@@ -116,6 +140,51 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: IvyeaNote-deploy.zip
+
+  # 服务端独立二进制：让「不想碰 Docker 的人」能直接双击跑起来。
+  #
+  # 这条一直是断的：deploy/ivnote-win-setup.ps1（免 Docker 向导）从 v0.7.0 起就写着
+  # 「请先从 GitHub Release 下载 ivnote-server-windows-amd64.exe」——而这个文件
+  # **从来没有出现在任何一个 Release 里**。向导本身是好的，只是它依赖的东西没人发。
+  #
+  # 服务端默认后端就是 SQLite（IVNOTE_DB 默认 sqlite），密钥和管理员账号都会自动生成，
+  # 所以它真的就是「一个 exe 跑起来就完事」，Docker 是自找的。
+  # modernc 的 sqlite 是纯 Go 实现，CGO_ENABLED=0 直接交叉编译即可。
+  server-binaries:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: server/go.sum
+
+      - name: 交叉编译服务端
+        working-directory: server
+        run: |
+          set -euo pipefail
+          mkdir -p ../server-out
+          build() {
+            local os=$1 arch=$2 ext=${3:-}
+            echo "→ $os/$arch"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -ldflags="-s -w" \
+              -o "../server-out/ivnote-server-$os-$arch$ext" ./cmd/ivnote-server
+          }
+          build windows amd64 .exe
+          build windows arm64 .exe
+          build darwin  amd64
+          build darwin  arm64
+          build linux   amd64
+          build linux   arm64
+          ls -la ../server-out
+
+      - name: 上传服务端二进制到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: server-out/*
 
   # Android APK：Tauri 2 Mobile 构建（aarch64 真机为主 + 模拟器包），挂到同一 Release
   android-apk:
@@ -265,7 +334,7 @@ jobs:
   # 这些 .sig 文件没有任何消费方，只是让下载页多出一半的条目。
   # 必须等三个出包 job 都结束再删，否则会把后到的那批漏下。
   tidy-release:
-    needs: [build, docker-image, android-apk]
+    needs: [build, docker-image, android-apk, server-binaries]
     if: always()
     runs-on: ubuntu-22.04
     permissions:

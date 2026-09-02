@@ -16,6 +16,7 @@
 import { useRef, useState } from 'react';
 import { probeServer, normalizeServerUrl, isInsecurePublic, defaultServerUrl } from '../lib/serverConn';
 import { claimPairCode } from '../lib/pairing';
+import { discoverServers } from '../lib/discover';
 import logoUrl from '../assets/logo.png';
 
 interface Props {
@@ -87,6 +88,44 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
   // v0.6.0 H3/H4：连接探测与诊断
   const [probing, setProbing] = useState(false);
   const [probeMsg, setProbeMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  /**
+   * v0.10.5：**找找附近的电脑**。
+   *
+   * 服务端从 v0.7.0 起就在 UDP 9999 上应答 `IVYEA-DISCOVER` 广播，Rust 侧的
+   * `discover_servers` 命令也一直都在——但**界面上从来没有任何地方在用它**
+   * （跟配对码入口、免 Docker 向导一样，写了没接）。
+   *
+   * 对「家里一台 Windows + 一部安卓」这个主场景，这一条省掉的正是最难的一步：
+   * 在手机键盘上敲 `http://192.168.x.x:8080`。
+   */
+  const [scanning, setScanning] = useState(false);
+  const [scanMsg, setScanMsg] = useState('');
+
+  const doScan = async () => {
+    setScanMsg('');
+    setError('');
+    setScanning(true);
+    try {
+      const found = await discoverServers(2000);
+      if (found.length === 0) {
+        setScanMsg('没找到。请确认电脑上的 Ivyea Note 服务正在运行，且手机和电脑连的是同一个 Wi-Fi。');
+        return;
+      }
+      const url = found[0].url;
+      setServerUrl(url);
+      localStorage.setItem('ivnote.server', url);
+      setScanMsg(
+        found.length > 1
+          ? `找到 ${found.length} 台，已选中 ${serverLabel(url)}（其余可在「用自己的服务器」里手填）`
+          : `已找到 ${serverLabel(url)}`
+      );
+    } catch (err) {
+      setScanMsg(`扫描失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const doProbe = async () => {
     setProbeMsg(null);
@@ -210,6 +249,15 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
               在<b>已经登录过的那台设备</b>上打开「设置 → 同步 → 添加设备」，
               屏幕上会出现一个 6 位数字，60 秒内填到这里即可。
             </p>
+            {!serverUrl && (
+              <div className="scan-row">
+                <button type="button" className="btn ghost" disabled={scanning} onClick={() => void doScan()}>
+                  {scanning ? '正在找…' : '找找附近的电脑'}
+                </button>
+                <span className="scan-hint">和电脑连同一个 Wi-Fi 时可自动找到，不用打地址</span>
+              </div>
+            )}
+            {scanMsg && <p className="scan-msg">{scanMsg}</p>}
             <input
               className="pair-input"
               inputMode="numeric"

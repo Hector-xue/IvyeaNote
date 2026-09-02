@@ -1813,3 +1813,23 @@ button {
 .dlg-mask.dlg-mask-top {
   z-index: 70;
 }
+
+/* 「找找附近的电脑」：手机上省掉敲 http://192.168.x.x:8080 这一步 */
+.scan-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.scan-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.scan-msg {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
