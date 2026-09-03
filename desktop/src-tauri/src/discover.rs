@@ -53,7 +53,18 @@ pub async fn discover_servers(timeout_ms: u64) -> Result<Vec<DiscoveredServer>, 
                                     .collect()
                             })
                             .unwrap_or_default();
-                        let host = ips.first().cloned().unwrap_or_else(|| addr.ip().to_string());
+                        /*
+                         * 用**应答包的来源地址**当主机名，而不是应答里 `ips` 的第一项。
+                         *
+                         * 服务端把自己**所有**非环回 IPv4 都报了上来，顺序按网卡枚举——
+                         * 一台装了 Docker Desktop / WSL / VMware / VPN 的 Windows，
+                         * 第一项经常是 `172.17.0.1` 或 `192.168.56.1` 这类虚拟网卡地址，
+                         * 手机永远连不上，而界面还写着"已找到"。
+                         *
+                         * 而这个包刚刚**真的从那个地址走到了我这里**，可达性是被证明过的。
+                         * `ips` 仍然带回去，留给"这台连不上换一个试试"。
+                         */
+                        let host = addr.ip().to_string();
                         let url = format!("http://{}:{}", host, port);
                         if !found.iter().any(|f| f.url == url) {
                             found.push(DiscoveredServer { url, ips });

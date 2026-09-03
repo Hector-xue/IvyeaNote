@@ -66,6 +66,11 @@ interface Props {
    */
   onRequestMove?(path: string, isDir: boolean): void;
   onSync(): void;
+  /** v0.10.6：同步状态面板。桌面走命令面板，手机上此前完全没有入口 */
+  onOpenSyncStatus?(): void;
+  /** 待处理的同步冲突数。手机上此前既看不见也处理不了 */
+  conflictCount?: number;
+  onOpenConflicts?(): void;
   onCreateVault(): void;
   /** v0.10.2：打开设置面板（存储位置、外观、同步都在里面）。手机上此前没有任何入口 */
   onOpenSettings?(): void;
@@ -182,24 +187,41 @@ export function MobileView(props: Props) {
           ? { key: 'logout', icon: 'close', label: '退出登录', onClick: props.onLogout }
           : { key: 'login', icon: 'sync', label: '登录同步', onClick: props.onOpenLogin }
       );
-      return [
-        [
-          {
-            key: 'sync',
-            icon: 'sync',
-            label: props.syncDisabled ? '登录后可同步' : '立即同步',
-            disabled: props.syncing,
-            onClick: props.syncDisabled ? props.onOpenLogin : props.onSync,
-          },
-          {
-            key: 'theme',
-            icon: props.theme === 'light' ? 'moon' : 'sun',
-            label: props.theme === 'light' ? '深色主题' : '浅色主题',
-            onClick: props.onToggleTheme,
-          },
-        ],
-        second,
+      const syncGroup: SheetItem[] = [
+        {
+          key: 'sync',
+          icon: 'sync',
+          label: props.syncDisabled ? '登录后可同步' : '立即同步',
+          disabled: props.syncing,
+          onClick: props.syncDisabled ? props.onOpenLogin : props.onSync,
+        },
       ];
+      // 冲突和同步状态在手机上此前既看不见也点不到——而"两台设备同时改了同一篇"
+      // 正是多端同步最常撞上的事
+      if (!props.syncDisabled && (props.conflictCount ?? 0) > 0 && props.onOpenConflicts) {
+        syncGroup.push({
+          key: 'conflicts',
+          icon: 'alert',
+          label: `${props.conflictCount} 个冲突待处理`,
+          danger: true,
+          onClick: props.onOpenConflicts,
+        });
+      }
+      if (!props.syncDisabled && props.onOpenSyncStatus) {
+        syncGroup.push({
+          key: 'sync-status',
+          icon: 'outline',
+          label: '同步状态（哪些还没上去）',
+          onClick: props.onOpenSyncStatus,
+        });
+      }
+      syncGroup.push({
+        key: 'theme',
+        icon: props.theme === 'light' ? 'moon' : 'sun',
+        label: props.theme === 'light' ? '深色主题' : '浅色主题',
+        onClick: props.onToggleTheme,
+      });
+      return [syncGroup, second];
     }
     /*
      * v0.10.3：「更多」里必须能到设置。

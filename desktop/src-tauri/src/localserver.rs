@@ -191,14 +191,23 @@ pub fn start_local_server<R: Runtime>(
     ))
 }
 
+/// 停服务。给 `RunEvent::Exit` 复用，所以拆成不带 `State` 的一层。
+pub fn stop(state: &LocalServer) {
+    if let Ok(mut guard) = state.0.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 #[tauri::command]
 pub fn stop_local_server(state: State<'_, LocalServer>) -> Result<ServerInfo, String> {
-    let mut guard = state.0.lock().map_err(|_| "状态锁损坏")?;
-    if let Some(mut child) = guard.take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    Ok(info(false))
+    stop(&state);
+    // 端口说了算，不是我们说了算：原来这里无条件返回 `info(false)`，
+    // 于是"服务其实还在跑（比如是在应用之外起的、或 kill 没成功）"也会被
+    // 报成已停止——界面上开关滑回去了，服务照样占着 8080。
+    Ok(info(healthy()))
 }
 
 #[tauri::command]

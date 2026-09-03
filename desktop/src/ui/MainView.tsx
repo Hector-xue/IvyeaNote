@@ -259,6 +259,8 @@ export function MainView(props: Props) {
   const sameDoc = !!props.splitPath && props.splitPath === props.currentPath;
   /** v0.5.0 U4：字数统计 */
   const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
+  /** 上一次同步报告里有错 = 现在的状态不是"已同步"。别再一律写「已同步」 */
+  const syncFailed = !props.syncDisabled && (props.lastReport?.errors.length ?? 0) > 0;
 
   return (
     <>
@@ -535,19 +537,41 @@ export function MainView(props: Props) {
                 {props.conflictCount} 个冲突待处理
               </button>
             )}
+            {/*
+              这里此前只要登录了就永远写「已同步」：服务器关着、上一次同步整个报错，
+              状态栏照样一片祥和——而"电脑关了手机连不上"恰恰是本地服务器场景的
+              日常。状态得说实话，失败要能点开看原因。
+            */}
             <button
-              className={`st-item ${props.syncing ? 'busy' : ''}`}
-              onClick={props.syncDisabled ? props.onOpenLogin : (props.onSyncNow ?? props.onUpload)}
+              className={`st-item ${props.syncing ? 'busy' : ''} ${syncFailed ? 'st-fail' : ''}`}
+              onClick={
+                props.syncDisabled
+                  ? props.onOpenLogin
+                  : syncFailed && props.onOpenSyncStatus
+                    ? props.onOpenSyncStatus
+                    : (props.onSyncNow ?? props.onUpload)
+              }
               title={
                 props.syncDisabled
                   ? '本地模式：笔记只存在这台设备上，点此登录后多端同步'
                   : props.syncing
                     ? '同步中…'
-                    : '已自动同步；点击立即同步一次'
+                    : syncFailed
+                      ? `上次同步失败：${props.lastReport?.errors[0]}（点击查看还有什么没上去）`
+                      : '已自动同步；点击立即同步一次'
               }
             >
-              <RibbonIcon name={props.syncDisabled ? 'file' : 'sync'} size={13} />
-              {props.syncDisabled ? '本地模式' : props.syncing ? '同步中' : '已同步'}
+              <RibbonIcon
+                name={props.syncDisabled ? 'file' : syncFailed ? 'alert' : 'sync'}
+                size={13}
+              />
+              {props.syncDisabled
+                ? '本地模式'
+                : props.syncing
+                  ? '同步中'
+                  : syncFailed
+                    ? '同步失败'
+                    : '已同步'}
             </button>
             <span className="st-item st-count">
               {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符

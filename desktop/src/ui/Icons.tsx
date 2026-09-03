@@ -10,7 +10,9 @@ export type IconName =
   // 与桌面 ribbon 的线性图标是两套语言——「没有 Obsidian 影子」有一半出在这里。
   | 'sidebar' | 'more-vertical' | 'plus' | 'chevron-left' | 'chevron-right'
   | 'chevron-down' | 'book' | 'sort' | 'collapse' | 'folder-plus' | 'file-plus'
-  | 'backlink' | 'outline' | 'sync' | 'close' | 'move' | 'check' | 'text-format';
+  | 'backlink' | 'outline' | 'sync' | 'close' | 'move' | 'check' | 'text-format'
+  // v0.10.6：同步失败的状态图标。此前状态栏只有 sync 一个图标，成功失败长一个样
+  | 'alert';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   // ---- v0.10.0 移动端 ----
@@ -29,6 +31,14 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
   plus: <path d="M12 5v14M5 12h14" />,
+  /** 同步失败：三角警示 */
+  alert: (
+    <>
+      <path d="M12 3.5 1.8 20.5h20.4L12 3.5z" />
+      <path d="M12 10v4.5" />
+      <circle cx="12" cy="17.4" r="0.9" fill="currentColor" stroke="none" />
+    </>
+  ),
   'chevron-left': <path d="M15 6l-6 6 6 6" />,
   'chevron-right': <path d="M9 6l6 6-6 6" />,
   'chevron-down': <path d="M6 9l6 6 6-6" />,

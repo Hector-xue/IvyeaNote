@@ -62,6 +62,21 @@ export function localCred(): LocalCred {
   return cred;
 }
 
+/**
+ * 这个服务器地址是不是"本机内置服务端"。
+ * 停服务时要据此顺手退出登录——否则登录态还指着一个已经不存在的 127.0.0.1:8080，
+ * 自动同步会每 60 秒撞一次墙，而设置里仍然写着"已登录"。
+ */
+export function isLocalServerAccount(serverUrl: string | undefined | null): boolean {
+  if (!serverUrl) return false;
+  try {
+    const { hostname } = new URL(serverUrl);
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
 /** 这份构建里有没有附带服务端（源码构建/未来精简包可能没有） */
 export async function localServerAvailable(): Promise<boolean> {
   if (!isTauri()) return false;

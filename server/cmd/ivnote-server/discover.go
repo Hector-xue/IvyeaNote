@@ -1,12 +1,13 @@
 // v0.7.0 H9：局域网发现。
 // 服务端监听 UDP 9999 端口，收到 "IVYEA-DISCOVER" 探测包时回 JSON 应答
-//（含本机监听端口），客户端据此列出局域网内的 Ivyea Server。
+// （含本机监听端口），客户端据此列出局域网内的 Ivyea Server。
 package main
 
 import (
 	"encoding/json"
 	"log"
 	"net"
+	"sort"
 	"strings"
 )
 
@@ -20,9 +21,6 @@ func StartDiscoveryListener(httpPort string) {
 		log.Printf("局域网发现未启用（UDP 9999 占用或权限不足）: %v", err)
 		return
 	}
-	go func() {
-		<-make(chan struct{}) // 常驻
-	}()
 	defer pc.Close()
 	log.Printf("局域网发现已启用（UDP :9999）")
 
@@ -46,11 +44,21 @@ func StartDiscoveryListener(httpPort string) {
 	}
 }
 
+// localIPv4s 返回本机非环回 IPv4，**按"手机最可能连得上"排序**。
+//
+// 客户端过去直接取第一项当地址，而这里的顺序是网卡枚举顺序：一台装了
+// Docker Desktop / WSL / VMware / VirtualBox 的 Windows，排在前面的往往是
+// 172.17.x.x、192.168.56.x 这类只有本机能走的虚拟网卡 —— 手机拿到就连不上。
+// 家用局域网几乎都是 192.168.x.x，其次 10.x，虚拟网卡的常见网段排到最后。
 func localIPv4s() []string {
-	var out []string
+	type cand struct {
+		ip   string
+		rank int
+	}
+	var cands []cand
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return out
+		return nil
 	}
 	for _, iface := range ifaces {
 		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
@@ -58,10 +66,46 @@ func localIPv4s() []string {
 		}
 		addrs, _ := iface.Addrs()
 		for _, a := range addrs {
-			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-				out = append(out, ipnet.IP.String())
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.To4() == nil || ipnet.IP.IsLinkLocalUnicast() {
+				continue
 			}
+			cands = append(cands, cand{ipnet.IP.String(), rankIP(ipnet.IP, iface.Name)})
 		}
 	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rank < cands[j].rank })
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.ip)
+	}
 	return out
+}
+
+// rankIP：越小越可能是"手机也走得通"的那块网卡。
+func rankIP(ip net.IP, ifaceName string) int {
+	name := strings.ToLower(ifaceName)
+	for _, bad := range []string{"docker", "veth", "br-", "vmnet", "vboxnet", "wsl", "hyper-v", "virtual", "tailscale", "zt", "utun", "tun", "tap"} {
+		if strings.Contains(name, bad) {
+			return 90
+		}
+	}
+	v4 := ip.To4()
+	switch {
+	case v4[0] == 192 && v4[1] == 168:
+		// VirtualBox 默认 192.168.56.0/24、VMware 常用 192.168.x —— 56 单独降一档
+		if v4[2] == 56 {
+			return 40
+		}
+		return 10
+	case v4[0] == 10:
+		return 20
+	case v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31:
+		// 172.17.0.1 是 Docker 默认网桥，最不可能是家里的 Wi-Fi
+		if v4[1] == 17 || v4[1] == 18 {
+			return 80
+		}
+		return 30
+	default:
+		return 50
+	}
 }

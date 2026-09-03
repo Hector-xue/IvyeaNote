@@ -264,7 +264,9 @@ describe('R3：登录页开/关不再触发 hooks 数量变化崩溃', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: '配对码' }));
     expect(screen.getByLabelText('配对码')).toBeTruthy();
-    // 6 个格子不说清楚从哪来就没人知道填什么
-    expect(screen.getByText(/添加设备/)).toBeTruthy();
+    // 6 个格子不说清楚从哪来就没人知道填什么。
+    // 断言的是**另一台设备上要点的那个按钮名**，它必须和设置里真实的按钮字面一致
+    //（v0.10.6：设置里那颗按钮一直叫「生成配对码」，说明里却写着「添加设备」）
+    expect(screen.getByText(/生成配对码/)).toBeTruthy();
   });
 });
