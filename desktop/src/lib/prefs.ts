@@ -9,6 +9,8 @@
  * 能改，不是趁机换默认——一个从没打开过设置页的老用户，升级后必须一切照旧。
  */
 
+import type { AttachMode } from './attachPath';
+
 export interface Prefs {
   /** 打开笔记时的初始视图。默认 edit，与此前写死的行为一致 */
   defaultView: 'edit' | 'read';
@@ -22,6 +24,15 @@ export interface Prefs {
    * 于是「关掉后只能手动同步」是句假话（v0.9.2 修）。
    */
   autoSync: boolean;
+  /**
+   * 插入的图片存到哪。v0.10.7 起可选，默认**与笔记同一个文件夹**。
+   *
+   * ⚠️ 这一项是本文件开头那条「默认值必须等于改动前的行为」的**唯一例外**，
+   * 而且是用户自己点名要改的：此前写死在库根 `Attachments/`，
+   * 于是"把某个文件夹整个拷给别人"必然断图。已经躺在库根 Attachments/ 里的
+   * 老图片一张都不动、照常显示——变的只是以后新插入的落点。
+   */
+  attachMode: AttachMode;
 }
 
 export const PREF_DEFAULTS: Prefs = {
@@ -29,6 +40,7 @@ export const PREF_DEFAULTS: Prefs = {
   livePreview: true,
   titleSync: true,
   autoSync: true,
+  attachMode: 'beside',
 };
 
 const KEY = 'ivnote.prefs';
@@ -42,6 +54,10 @@ export function loadPrefs(): Prefs {
       livePreview: typeof raw.livePreview === 'boolean' ? raw.livePreview : PREF_DEFAULTS.livePreview,
       titleSync: typeof raw.titleSync === 'boolean' ? raw.titleSync : PREF_DEFAULTS.titleSync,
       autoSync: typeof raw.autoSync === 'boolean' ? raw.autoSync : PREF_DEFAULTS.autoSync,
+      attachMode:
+        raw.attachMode === 'vault' || raw.attachMode === 'subfolder' || raw.attachMode === 'beside'
+          ? raw.attachMode
+          : PREF_DEFAULTS.attachMode,
     };
   } catch {
     return { ...PREF_DEFAULTS };

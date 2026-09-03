@@ -12,20 +12,28 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FileIO } from '../lib/sync';
+import { attachmentDir, joinPath, type AttachMode } from '../lib/attachPath';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 
-/** 附件落盘的唯一取名出口：Attachments/日期-原名，重名加 -1 -2… */
+/**
+ * 附件落盘的唯一取名出口：`<目录>/日期-原名`，重名加 -1 -2…
+ *
+ * v0.10.7：目录从写死的 `Attachments/` 改成由调用方按设置算好传进来
+ * （见 `lib/attachPath.ts`）。取名规则一个字没动。
+ */
 export async function uniqueAttachmentPath(
   name: string,
-  exists: (rel: string) => Promise<boolean>
+  exists: (rel: string) => Promise<boolean>,
+  dir = 'Attachments'
 ): Promise<string> {
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  let rel = `Attachments/${stamp}-${name.replace(/[\\/]/g, '_')}`;
+  const safe = `${stamp}-${name.replace(/[\\/]/g, '_')}`;
+  let rel = joinPath(dir, safe);
   let i = 1;
   while (await exists(rel)) {
-    rel = rel.replace(/(\.[a-z0-9]+)$/i, `-${i}$1`);
+    rel = joinPath(dir, safe.replace(/(\.[a-z0-9]+)$/i, `-${i}$1`));
     i++;
   }
   return rel;
@@ -50,16 +58,21 @@ export interface AttachmentsDeps {
   toast(msg: string, kind: 'ok' | 'error'): void;
   /** 要显示 PDF 了：主区是互斥的，调用方借此清空编辑器 */
   onShowPdf(): void;
+  /** 附件存放位置（设置项）。落点算法在 lib/attachPath.ts */
+  attachMode: AttachMode;
   errText(e: unknown): string;
 }
 
 export interface Attachments {
   /** 非 null 时主区显示 PDF（值是 blob URL） */
   pdfView: string | null;
-  /** 选图 → 拷进 Attachments/ → 返回相对路径（null = 取消或无库） */
-  insertImage(): Promise<string | null>;
-  /** 粘贴 / 拖入的图片存进 Attachments/ → 返回相对路径 */
-  saveImageFile(file: File): Promise<string | null>;
+  /**
+   * 选图 → 按设置落盘 → 返回**库内**相对路径（null = 取消或无库）。
+   * `notePath` 决定落在哪：附件要跟着笔记走，就得知道是哪一篇。
+   */
+  insertImage(notePath: string | null): Promise<string | null>;
+  /** 粘贴 / 拖入的图片按设置落盘 → 返回库内相对路径 */
+  saveImageFile(file: File, notePath: string | null): Promise<string | null>;
   /** 阅读态：相对路径 → 可显示的 blob URL */
   resolveImage(rel: string): Promise<string | null>;
   openPdf(path: string): Promise<void>;
@@ -67,7 +80,7 @@ export interface Attachments {
 }
 
 export function useAttachments(deps: AttachmentsDeps): Attachments {
-  const { vaultPath, io, refreshFiles, doSync, toast, onShowPdf, errText } = deps;
+  const { vaultPath, io, refreshFiles, doSync, toast, onShowPdf, errText, attachMode } = deps;
   const [pdfView, setPdfView] = useState<string | null>(null);
   const pdfUrlRef = useRef<string | null>(null);
   const imgCache = useRef<Map<string, string>>(new Map());
@@ -90,7 +103,7 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
     [io, root]
   );
 
-  const insertImage = useCallback(async (): Promise<string | null> => {
+  const insertImage = useCallback(async (notePath: string | null): Promise<string | null> => {
     if (!hasVault) return null;
     const picked: { name: string; data: Uint8Array }[] = [];
     if (isTauri) {
@@ -117,24 +130,24 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
     }
     if (picked.length === 0) return null;
     const first = picked[0];
-    const rel = await uniqueAttachmentPath(first.name, exists);
+    const rel = await uniqueAttachmentPath(first.name, exists, attachmentDir(attachMode, notePath));
     await io.writeBinary(root, rel, first.data);
     await refreshFiles();
     doSync();
     return rel;
-  }, [hasVault, io, root, exists, refreshFiles, doSync]);
+  }, [hasVault, io, root, exists, refreshFiles, doSync, attachMode]);
 
   const saveImageFile = useCallback(
-    async (file: File): Promise<string | null> => {
+    async (file: File, notePath: string | null): Promise<string | null> => {
       if (!hasVault) return null;
       const data = new Uint8Array(await file.arrayBuffer());
-      const rel = await uniqueAttachmentPath(file.name, exists);
+      const rel = await uniqueAttachmentPath(file.name, exists, attachmentDir(attachMode, notePath));
       await io.writeBinary(root, rel, data);
       await refreshFiles();
       doSync();
       return rel;
     },
-    [hasVault, io, root, exists, refreshFiles, doSync]
+    [hasVault, io, root, exists, refreshFiles, doSync, attachMode]
   );
 
   const resolveImage = useCallback(

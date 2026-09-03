@@ -37,6 +37,7 @@ import { autocompletion } from '@codemirror/autocomplete';
 import { wikiCompletion } from '../lib/wikiComplete';
 import { renderWikiLinks } from '../lib/wikilink';
 import { classifyLink, headingSlug, openExternal, resolveVaultPath } from '../lib/links';
+import { encodeHref, noteRelative } from '../lib/attachPath';
 
 export interface MarkdownEditorProps {
   doc: string;
@@ -46,7 +47,7 @@ export interface MarkdownEditorProps {
   /** 移动端：工具栏置底、触控目标加大 */
   mobile?: boolean;
   /** 插图：返回要插入的相对路径（null=取消） */
-  onInsertImage?: () => Promise<string | null>;
+  onInsertImage?: (notePath: string | null) => Promise<string | null>;
   /** 阅读模式图片解析：相对路径 → 可显示的 URL */
   resolveImage?: (rel: string) => Promise<string | null>;
   /** v0.7.0 F3：双链——点击 [[目标]] 的回调（App 负责查找/创建并跳转） */
@@ -54,7 +55,7 @@ export interface MarkdownEditorProps {
   /** v0.7.1 F6：[[ 补全候选（全部笔记标题） */
   wikiTitles?: { path: string; title: string }[];
   /** v0.7.1 F7：粘贴/拖拽图片落盘，返回要插入的相对路径 */
-  onPasteImage?: (file: File) => Promise<string | null>;
+  onPasteImage?: (file: File, notePath: string | null) => Promise<string | null>;
   /**
    * v0.8.2 E9：锁死为阅读模式（不给切换按钮）。
    * 分栏里「同文档双视图」用它——同一个文件开两个可编辑视图会各写各的，
@@ -536,12 +537,28 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       for (const img of imgs) {
         const src = img.getAttribute('src') ?? '';
         if (/^(https?:|data:|blob:)/.test(src)) continue;
+        /*
+         * v0.10.7：**按笔记自己的位置解析**，而不是拿库根去拼。
+         *
+         * Markdown 里的相对路径本来就是相对文件自己的，`<a href>` 那条路
+         * 早就走 `resolveVaultPath` 了，图片这条却一直漏着 —— 于是写入侧
+         * 写库根相对、读取侧也读库根相对，两头一起错、自洽，但只在这个应用里自洽。
+         * 第二次尝试是给 v0.10.6 及以前存量笔记的兜底：那些确实是库根相对。
+         */
+        const noteRel = resolveVaultPath(props.currentPath, src);
+        let url: string | null = null;
         try {
-          const url = await props.resolveImage!(decodeURIComponent(src));
-          if (!cancelled && url) img.src = url;
+          url = await props.resolveImage!(noteRel);
         } catch {
-          img.alt = `${img.alt}（图片加载失败）`;
+          try {
+            url = await props.resolveImage!(decodeURIComponent(src));
+          } catch {
+            url = null;
+          }
         }
+        if (cancelled) break;
+        if (url) img.src = url;
+        else img.alt = `${img.alt}（图片加载失败：${src}）`;
       }
       // v0.7.3 P4b：图片点击全屏预览（轻量 lightbox，点任意处关闭）
       if (cancelled) return;
@@ -557,17 +574,18 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       cancelled = true;
       el.removeEventListener('click', onLinkClick);
     };
-  }, [mode, props.doc, props.resolveImage]);
+  }, [mode, props.doc, props.resolveImage, props.currentPath]);
 
   /** v0.7.1 F7：粘贴/拖入图片 → 落盘 Attachments/ → 在光标处插入引用 */
   const insertDroppedImage = async (file: File, insertAt?: number) => {
     if (!props.onPasteImage || !file.type.startsWith('image/')) return;
     const view = viewRef.current;
     try {
-      const rel = await props.onPasteImage(file);
+      const rel = await props.onPasteImage(file, props.currentPath);
       if (!rel || !view) return;
       const pos = insertAt ?? view.state.selection.main.from;
-      const text = `![](${rel})`;
+      // 写进正文的必须是**相对这篇笔记**的路径，rel 是库内路径
+      const text = `![](${encodeHref(noteRelative(props.currentPath, rel))})`;
       view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
       view.focus();
     } catch {
@@ -696,13 +714,13 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (!props.onInsertImage || imgBusy) return;
     setImgBusy(true);
     try {
-      const rel = await props.onInsertImage();
+      const rel = await props.onInsertImage(props.currentPath);
       if (!rel) return;
       const view = viewRef.current;
       if (!view) return;
       const { from, to } = view.state.selection.main;
       const text = view.state.doc.toString();
-      const r = insertImage(text, { from, to }, rel);
+      const r = insertImage(text, { from, to }, rel, encodeHref(noteRelative(props.currentPath, rel)));
       view.dispatch({
         changes: { from: 0, to: text.length, insert: r.text },
         selection: { anchor: r.sel.from, head: r.sel.to },

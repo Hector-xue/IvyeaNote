@@ -12,6 +12,7 @@
 import { RibbonIcon } from './Icons';
 import { DEFAULTS, LIMITS, type Appearance, type ReadFont, type ThemeMode } from '../lib/appearance';
 import { SHORTCUTS, type Prefs } from '../lib/prefs';
+import type { AttachMode } from '../lib/attachPath';
 
 interface Props {
   value: Appearance;
@@ -115,6 +116,31 @@ export function accountLabel(email: string, serverUrl: string | null): string {
   if (/^paired-user-\d+$/.test(email)) return '已通过配对码连上';
   return `已登录 ${email}`;
 }
+
+/**
+ * 附件存放位置。措辞照 Obsidian 的同名设置，因为用户多半是从那边过来的。
+ *
+ * 每一项都直接给出**正文里会写成什么**——附件设置最容易让人犯迷糊的
+ * 恰恰是这一步，而这个应用刚好在这里错过一次（写库根相对、读也库根相对，
+ * 两头一起错所以自己看不出来，换 Obsidian 打开就全是断图）。
+ */
+const ATTACH_MODES: { id: AttachMode; label: string; hint: string }[] = [
+  {
+    id: 'beside',
+    label: '与笔记同一个文件夹',
+    hint: '笔记 项目/周报.md 的图片存成 项目/图.png，正文写 ![](图.png)。整个文件夹拷走或发给别人都不会断图',
+  },
+  {
+    id: 'subfolder',
+    label: '笔记同级的 Attachments/',
+    hint: '笔记 项目/周报.md 的图片存成 项目/Attachments/图.png。图片集中，但仍跟着笔记走',
+  },
+  {
+    id: 'vault',
+    label: '库根的 Attachments/',
+    hint: '所有图片都堆在库根 Attachments/。整个库一起搬才不会断——单独拷一个子文件夹会丢图',
+  },
+];
 
 const THEMES: { id: ThemeMode; label: string }[] = [
   { id: 'light', label: '浅色' },
@@ -300,6 +326,30 @@ export function SettingsView(props: Props) {
               checked={p.titleSync}
               onChange={(x) => setPref({ titleSync: x })}
             />
+
+            <div className="set-row">
+              <label className="set-label">
+                插入的图片存到哪
+                <span className="set-hint">
+                  只影响以后新插入的图片；已经在库里的一张都不动
+                </span>
+              </label>
+              <div className="seg">
+                {ATTACH_MODES.map((m) => (
+                  <button
+                    key={m.id}
+                    className={`seg-btn ${p.attachMode === m.id ? 'on' : ''}`}
+                    title={m.hint}
+                    onClick={() => setPref({ attachMode: m.id })}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <p className="set-hint">
+                {ATTACH_MODES.find((m) => m.id === p.attachMode)?.hint}
+              </p>
+            </div>
           </section>
 
           <section className="set-section">

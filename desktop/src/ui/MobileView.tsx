@@ -5,7 +5,7 @@
  * - 手势：主区右滑呼出抽屉；Android 返回键逐级回退（气泡→大纲→图片→抽屉→无）
  * - 主区：CodeMirror 编辑器 + 选区气泡工具栏 + 大纲浮层 + 图片全屏预览 + 反链区块
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
 import { RibbonIcon } from './Icons';
@@ -85,7 +85,7 @@ interface Props {
   sortMode: SortMode;
   onSortChange(m: SortMode): void;
   onOpenPdf(path: string): void;
-  onInsertImage?: () => Promise<string | null>;
+  onInsertImage?: (notePath: string | null) => Promise<string | null>;
   resolveImage?: (rel: string) => Promise<string | null>;
 }
 
@@ -117,6 +117,14 @@ export function MobileView(props: Props) {
   const [formatOpen, setFormatOpen] = useState(false);
   /** 编辑器交出来的「按 key 施加格式」入口 */
   const [applyFormat, setApplyFormat] = useState<((key: string) => void) | null>(null);
+  /*
+   * **必须是稳定引用**。编辑器那个 exposeFormat 的 effect 依赖它，内联箭头
+   * 每次渲染都是新函数 → effect 重跑 → setApplyFormat 换成新的回调 → 再渲染，
+   * 永远停不下来（v0.10.7 桌面接这条线时当场撞上：整个测试进程挂死）。
+   */
+  const exposeFormat = useCallback((fn: ((key: string) => void) | null) => {
+    setApplyFormat(() => fn);
+  }, []);
   /** 当前打开的底部菜单：note=笔记动作 / app=应用与账号 / vault=库 / sort=排序 */
   const [menu, setMenu] = useState<'note' | 'app' | 'vault' | 'sort' | null>(null);
   const [query, setQuery] = useState('');
@@ -487,7 +495,7 @@ export function MobileView(props: Props) {
               theme={props.theme}
               mode={mode}
               onModeChange={setMode}
-              exposeFormat={(fn) => setApplyFormat(() => fn)}
+              exposeFormat={exposeFormat}
               onInsertImage={props.onInsertImage}
               resolveImage={props.resolveImage}
               onOpenPath={props.onOpenPath}
