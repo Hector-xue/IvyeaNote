@@ -419,10 +419,11 @@ describe('侧栏搜索（E7）', () => {
     // 点标题＝打开，点命中行＝打开并跳到那一行
     const head = document.querySelector<HTMLElement>('.sp-hit-head')!;
     fireEvent.click(head);
-    // 点开后编辑区状态栏应指向被点的那篇
-    // v0.10.0：文件名不再重复写在状态栏（标签栏已经说明是哪一篇）
+    // 点开后要能看出现在是哪一篇。
+    // v0.10.7：标签栏删掉了，「开着哪一篇」重新回到状态栏左侧（.st-path），
+    // 而且写的是**完整库内路径**——它比文件名多说一件事：这篇在哪个目录
     await waitFor(() => {
-      expect(document.querySelector('.tabs-bar')?.textContent).toBeTruthy();
+      expect(document.querySelector('.st-path')?.textContent).toBe('AI/agent.md');
     });
   });
 
@@ -441,7 +442,7 @@ describe('侧栏搜索（E7）', () => {
     expect(line.querySelector('.sp-line-no')?.textContent).toBe('3');
     fireEvent.click(line);
     await waitFor(() => {
-      expect(document.querySelector('.tabs-bar')?.textContent).toMatch(/agent/);
+      expect(document.querySelector('.st-path')?.textContent).toBe('AI/agent.md');
     });
   });
 
@@ -472,6 +473,54 @@ describe('侧栏搜索（E7）', () => {
  * 下面每一条对应的都是**真机上一点就废、而 428 条既有测试全绿**的缺陷——
  * 共同点是它们都不在纯函数里，而在"分支顺序 / state 有没有落盘 / 弹层挂在哪棵树上"。
  */
+describe('顶栏删除与插入图片（v0.10.7）', () => {
+  function ribbon2(label: string): HTMLElement | null {
+    return document.querySelector<HTMLElement>(`.ribbon-btn[aria-label="${label}"]`);
+  }
+
+  it('顶部标签栏没了，「开着哪一篇」在状态栏左侧', async () => {
+    await renderApp({ 'AI/agent.md': '# Agent\n' });
+    openNote('AI/agent.md');
+    await waitFor(() => {
+      expect(document.querySelector('.st-path')?.textContent).toBe('AI/agent.md');
+    });
+    expect(document.querySelector('.tabs-bar')).toBeNull();
+  });
+
+  it('「插入图片」按钮在状态栏那一行——桌面此前一个入口都没有', async () => {
+    // 能力从 v0.7.1 就写好了（useAttachments.insertImage + 编辑器 doInsertImage），
+    // 但桌面从不渲染工具条、也从不传 exposeFormat，于是那段代码是死的
+    await renderApp({ 'a.md': '# A\n' });
+    openNote('a.md');
+    await waitFor(() => {
+      expect(document.querySelector('.status-bar [aria-label="插入图片"]')).toBeTruthy();
+    });
+  });
+
+  it('接 exposeFormat 不能把渲染带进死循环', async () => {
+    /*
+     * 接这条线时当场撞上：父组件传的是内联箭头，每次渲染都是新引用，
+     * 编辑器那个 effect 依赖它 → 重跑 → setState → 再渲染，永远停不下来
+     * （表现是整个测试进程挂死、worker 吃到 1.7GB）。
+     * 这里断言渲染能收敛：能稳定读到状态栏，就说明没有在无限重渲染。
+     */
+    await renderApp({ 'a.md': '# A\n' });
+    openNote('a.md');
+    await waitFor(() => expect(document.querySelector('.st-path')?.textContent).toBe('a.md'));
+    const before = document.querySelector('.status-bar')?.textContent;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(document.querySelector('.st-path')?.textContent).toBe('a.md');
+    expect(document.querySelector('.status-bar')?.textContent).toBe(before);
+  });
+
+  it('设置里能选附件存放位置，默认是「与笔记同一个文件夹」', async () => {
+    await renderApp({ 'a.md': '# A\n' });
+    fireEvent.click(ribbon2('设置')!);
+    const btn = await screen.findByText('与笔记同一个文件夹');
+    expect(btn.className).toMatch(/\bon\b/);
+  });
+})
+
 describe('首启与同步（v0.10.6 修复的回归）', () => {
   function ribbon(label: string): HTMLElement | null {
     return document.querySelector<HTMLElement>(`.ribbon-btn[aria-label="${label}"]`);

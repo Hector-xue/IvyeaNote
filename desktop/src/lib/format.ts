@@ -113,8 +113,15 @@ export function insertLink(text: string, sel: Sel): EditResult {
 }
 
 /** 图片引用：在光标处插入 ![alt](path) */
-export function insertImage(text: string, sel: Sel, relPath: string): EditResult {
-  const snippet = `![${relPath.split('/').pop()!.replace(/\.[a-z0-9]+$/i, '')}](${relPath})`;
+/**
+ * 插入图片引用。
+ *
+ * `relPath` 是**库内**路径（只拿来取 alt 文字），`href` 才是写进括号里的东西——
+ * 它必须是**相对这篇笔记**的路径。v0.10.6 及以前两者是同一个值，于是子目录里的
+ * 笔记全都写出了 Obsidian 解析不了的链接（见 `lib/attachPath.ts`）。
+ */
+export function insertImage(text: string, sel: Sel, relPath: string, href = relPath): EditResult {
+  const snippet = `![${relPath.split('/').pop()!.replace(/\.[a-z0-9]+$/i, '')}](${href})`;
   const next = text.slice(0, sel.from) + snippet + text.slice(sel.to);
   const pos = sel.from + snippet.length;
   return { text: next, sel: { from: pos, to: pos } };

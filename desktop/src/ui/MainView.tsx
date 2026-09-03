@@ -1,8 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import logoUrl from '../assets/logo.png';
 import { MarkdownEditor } from './MarkdownEditor';
 import { FileTree, buildFileTree } from './FileTree';
-import { TabsBar } from './TabsBar';
 import { RibbonIcon } from './Icons';
 import { InlineTitle } from './InlineTitle';
 import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
@@ -110,7 +109,7 @@ interface Props {
   pdfView: string | null;
   onClosePdf(): void;
   /** v0.3.4：插图与图片解析（透传给编辑器） */
-  onInsertImage?: () => Promise<string | null>;
+  onInsertImage?: (notePath: string | null) => Promise<string | null>;
   resolveImage?: (rel: string) => Promise<string | null>;
   /** v0.4.0 T4：Obsidian 导入进度（null=未在导入） */
   importProgress?: { done: number; total: number } | null;
@@ -121,11 +120,6 @@ interface Props {
   collapsedDirs: Set<string>;
   onToggleDir(dir: string): void;
   onCreateFolder(parent?: string): void;
-  /** v0.5.0 U2：多标签页 */
-  tabs?: string[];
-  activeTab?: string | null;
-  onSelectTab?(path: string): void;
-  onCloseTab?(path: string): void;
   /** v0.5.0 U5：ribbon 动作（预留扩展；当前仅 files） */
   onRibbonAction?(action: 'files'): void;
   /** v0.6.1 H6: add-device pairing */
@@ -135,7 +129,7 @@ interface Props {
   /** v0.7.1 F6: [[ completion candidates */
   wikiTitles?: { path: string; title: string }[];
   /** v0.7.1 F7: paste/drop image handler */
-  onPasteImage?(file: File): Promise<string | null>;
+  onPasteImage?(file: File, notePath: string | null): Promise<string | null>;
   /** v0.7.1 F8: graph view */
   onOpenGraph?(): void;
   /** v0.7.0 F4: tags panel */
@@ -261,6 +255,16 @@ export function MainView(props: Props) {
   const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
   /** 上一次同步报告里有错 = 现在的状态不是"已同步"。别再一律写「已同步」 */
   const syncFailed = !props.syncDisabled && (props.lastReport?.errors.length ?? 0) > 0;
+  /** 编辑器交出来的「按 key 施加格式」入口。桌面只用它的 'image' 一路 */
+  const [applyFormat, setApplyFormat] = useState<((key: string) => void) | null>(null);
+  /*
+   * **必须是稳定引用**。编辑器那个 exposeFormat 的 effect 依赖它，内联箭头
+   * 每次渲染都是新函数 → effect 重跑 → setApplyFormat 换成新的回调 → 再渲染，
+   * 永远停不下来（v0.10.7 桌面接这条线时当场撞上：整个测试进程挂死）。
+   */
+  const exposeFormat = useCallback((fn: ((key: string) => void) | null) => {
+    setApplyFormat(() => fn);
+  }, []);
 
   return (
     <>
@@ -437,27 +441,16 @@ export function MainView(props: Props) {
 
       <div className={`panel-resizer ${sideW.dragging ? 'dragging' : ''}`} {...sideW.handleProps} />
       <main className="editor-pane">
-        {/* v0.5.0 U2：标签栏 */}
-        {props.tabs && props.tabs.length > 0 && props.onSelectTab && props.onCloseTab && (
-          <TabsBar
-            tabs={props.tabs}
-            active={props.activeTab ?? props.currentPath}
-            onSelect={props.onSelectTab}
-            onClose={props.onCloseTab}
-            right={
-              props.onOpenSplit && !props.pdfView && props.currentPath ? (
-                <button
-                  className="icon-btn"
-                  title={props.splitPath ? '关闭分栏' : '左右分栏'}
-                  aria-label="左右分栏"
-                  onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
-                >
-                  <RibbonIcon name="sidebar" size={15} />
-                </button>
-              ) : null
-            }
-          />
-        )}
+        {/*
+          v0.10.7：**顶部标签栏删掉了**（用户：「顶栏太丑了，删掉吧，把对应按钮
+          放在下面那一行」）。编辑区上方从此一条横栏都没有，正文直接顶到窗口边。
+
+          它原来担着两件事，都搬到底部状态栏那一行去了：
+          - 「现在开着哪一篇」→ 状态栏左侧（那个位置本来就是空的，
+            旧注释写着「文件名在标签栏已经有了」，现在标签栏没了，它就该回来）；
+          - 右端那颗「分栏」按钮 → 状态栏右侧的动作区。
+          切换笔记走侧栏文件树与 Ctrl+O 快速切换，和 Obsidian 关掉标签栏后一样。
+        */}
         {/* v0.10.0：删掉了编辑区上方那行文件名——标签栏已经说明是哪一篇，
             再写一遍就是重复。PDF 预览时仍需要一行来放「关闭预览」。 */}
         {props.pdfView && (
@@ -496,6 +489,9 @@ export function MainView(props: Props) {
                 onOpenPath={props.onOpenPath}
                 wikiTitles={props.wikiTitles}
                 onPasteImage={props.onPasteImage}
+                /* 桌面此前从不传 exposeFormat，于是编辑器里的 doInsertImage
+                   是彻头彻尾的死代码。状态栏那颗「插入图片」就靠它 */
+                exposeFormat={exposeFormat}
               />
             </div>
             {props.splitPath && (
@@ -529,9 +525,41 @@ export function MainView(props: Props) {
         {/* v0.10.0：同步从侧栏那个大绿按钮降级到这里。Obsidian 的同步状态就待在
             右下角状态栏，安静、可点、不抢视线；侧栏留给文件树 */}
         <div className="status-bar">
-          {/* 左侧留空：文件名在标签栏已经有了，状态栏只放「状态」类信息 */}
-          <span className="st-path" />
+          {/* v0.10.7：标签栏没了，「现在开着哪一篇」就归这里。
+              显示完整库内路径——它比文件名多告诉一件事：这篇在哪个目录 */}
+          <span className="st-path" title={props.currentPath ?? ''}>
+            {props.currentPath ?? ''}
+          </span>
           <span className="st-right">
+            {/*
+              **插入图片**。这条能力从 v0.7.1 起就写好了（`useAttachments.insertImage`
+              + 编辑器里的 `doInsertImage`），但桌面端**根本没有渲染过任何工具条**，
+              `exposeFormat` 只有移动端会传——于是桌面上只能靠粘贴和拖入，
+              用户的原话是「我的 ivyeanote 怎么无法插入图片啊，obsidian 就可以」。
+              这是这个仓库第六次「能力写好了、入口没接」。
+            */}
+            {props.onInsertImage && props.currentPath && !props.pdfView && (
+              <button
+                className="st-item"
+                title="插入图片（也可以直接粘贴或拖进来）"
+                aria-label="插入图片"
+                onClick={() => applyFormat?.('image')}
+              >
+                <RibbonIcon name="image" size={13} />
+                插入图片
+              </button>
+            )}
+            {props.onOpenSplit && !props.pdfView && props.currentPath && (
+              <button
+                className={`st-item ${props.splitPath ? 'on' : ''}`}
+                title={props.splitPath ? '关闭分栏' : '左右分栏'}
+                aria-label="左右分栏"
+                onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
+              >
+                <RibbonIcon name="sidebar" size={13} />
+                {props.splitPath ? '关闭分栏' : '分栏'}
+              </button>
+            )}
             {(props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (
               <button className="st-item st-conflict" onClick={props.onOpenConflicts}>
                 {props.conflictCount} 个冲突待处理

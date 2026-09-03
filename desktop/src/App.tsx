@@ -5,7 +5,7 @@ import { MainView } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
-import { useTabs } from './hooks/useTabs';
+import { useOpenNote } from './hooks/useOpenNote';
 import { useCommands } from './hooks/useCommands';
 import { useAttachments } from './hooks/useAttachments';
 import { useObsidianImport } from './hooks/useObsidianImport';
@@ -346,6 +346,7 @@ export default function App() {
     toast,
     onShowPdf,
     errText,
+    attachMode: prefs.attachMode,
   });
 
 
@@ -594,15 +595,8 @@ export default function App() {
     });
   }, []);
 
-  /** 多标签页（v0.7.8：整块搬进 hooks/useTabs） */
-  const onTabsEmpty = useCallback(() => {
-    setCurrentPath(null);
-    setDoc(null);
-  }, []);
-  const { openTabs, activeTab, openInTab: openFileInTab, closeTab, remap: remapTabs } = useTabs({
-    openFile,
-    onEmpty: onTabsEmpty,
-  });
+  /** 当前打开的笔记（v0.10.7：顶部标签栏删掉后，useTabs 收成 useOpenNote） */
+  const { open: openFileInTab, remap: remapTabs } = useOpenNote({ openFile });
 
   /**
    * v0.4.0 T3：标题跟随——编辑防抖落盘后，若正文首个 H1 与当前文件名不一致，
@@ -1922,10 +1916,6 @@ export default function App() {
         onUpload={() => void doUpload()}
         onDownload={() => void doDownload()}
         onImportObsidian={() => void onImportObsidian()}
-        tabs={openTabs}
-        activeTab={activeTab}
-        onSelectTab={(p) => void openFileInTab(p)}
-        onCloseTab={closeTab}
         theme={theme}
         onToggleTheme={toggleTheme}
         onBindFolder={() => void onBindFolder()}
