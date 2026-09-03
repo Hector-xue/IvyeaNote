@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -129,7 +130,14 @@ func main() {
 	}
 
 	if getbool("IVNOTE_DISCOVERY", true) {
-		go StartDiscoveryListener(strings.TrimPrefix(listen, ":"))
+		// TrimPrefix 只认 ":8080" 这一种写法；IVNOTE_LISTEN 写成 "0.0.0.0:8080"
+		// 时它原样透传，发现应答里的 port 就成了 "0.0.0.0:8080"，
+		// 客户端拼出 http://ip:0.0.0.0:8080 —— 一个连不上的地址。
+		port := strings.TrimPrefix(listen, ":")
+		if _, p, err := net.SplitHostPort(listen); err == nil && p != "" {
+			port = p
+		}
+		go StartDiscoveryListener(port)
 	}
 
 	httpSrv := &http.Server{

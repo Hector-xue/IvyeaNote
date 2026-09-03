@@ -4,7 +4,7 @@
  * 全部免登录可用；仅当用户主动点「登录同步」才进入登录流程。
  */
 import { RibbonIcon, type IconName } from './Icons';
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import logoUrl from '../assets/logo.png';
 
 export interface WelcomeActions {
@@ -12,6 +12,12 @@ export interface WelcomeActions {
   onImportObsidian(): void;
   onCreateBlank(): void;
   onOpenLogin(): void;
+  /**
+   * 「跳过」。此前这里是组件**自己**的 `dismissed` state，`return null` 之后
+   * App 那一支照样 early-return，屏幕上只剩一个空的 `.app` —— 点一下就白屏，
+   * 而且 markWelcomed 没写，刷新才回得来。收起欢迎页是 App 的事，得往上报。
+   */
+  onDismiss(): void;
 }
 
 /** 首启标记：完成任一动作后不再显示 */
@@ -25,13 +31,10 @@ export function markWelcomed(): void {
 }
 
 export function WelcomeView(props: WelcomeActions) {
-  const [dismissed, setDismissed] = useState(false);
   const wrap = useCallback((fn: () => void) => () => {
     markWelcomed();
     fn();
   }, []);
-
-  if (dismissed) return null;
 
   const cards: { icon: IconName; title: string; desc: string; action: () => void; primary?: boolean }[] = [
     {
@@ -73,7 +76,7 @@ export function WelcomeView(props: WelcomeActions) {
           ))}
         </div>
         <div className="welcome-foot">
-          <button className="btn ghost" onClick={() => setDismissed(true)}>
+          <button className="btn ghost" onClick={wrap(props.onDismiss)}>
             跳过，先随便看看
           </button>
           <button className="btn link" onClick={wrap(props.onOpenLogin)}>

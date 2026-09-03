@@ -73,6 +73,9 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
    * 没有 onPairLogin（旧调用方）时只能走密码，否则会出现一个点了没反应的标签。
    */
   const canPair = !!onPairLogin;
+  /** 只有 Tauri（桌面 / 安卓 App）能发 UDP 广播；浏览器版扫不到，别让人白等 */
+  const canDiscover =
+    typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const [tab, setTab] = useState<'pair' | 'password'>(
     canPair && preferPairing ? 'pair' : 'password'
   );
@@ -101,25 +104,34 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
    */
   const [scanning, setScanning] = useState(false);
   const [scanMsg, setScanMsg] = useState('');
+  /** 扫到的候选。一台就自动选中，多台要**列出来让人挑**——
+   *  原来是闷头取 found[0] 再让用户"其余请手填"，可他根本不知道其余是什么地址。 */
+  const [found, setFound] = useState<{ url: string; ips: string[] }[]>([]);
+
+  const pickServer = (url: string) => {
+    setServerUrl(url);
+    localStorage.setItem('ivnote.server', url);
+    setScanMsg(`已选中 ${serverLabel(url)}`);
+  };
 
   const doScan = async () => {
     setScanMsg('');
     setError('');
     setScanning(true);
+    setFound([]);
     try {
-      const found = await discoverServers(2000);
-      if (found.length === 0) {
-        setScanMsg('没找到。请确认电脑上的 Ivyea Note 服务正在运行，且手机和电脑连的是同一个 Wi-Fi。');
+      const list = await discoverServers(2000);
+      if (list.length === 0) {
+        setScanMsg(
+          canDiscover
+            ? '没找到。请确认电脑上的 Ivyea Note 已在设置里打开「在这台电脑上开启同步」，且手机和电脑连的是同一个 Wi-Fi（有些路由器开了「AP 隔离」会挡住互相发现，这时手填地址即可）。'
+            : '这个版本没法自动搜索（浏览器不能发广播包）。请在下面手填电脑上显示的地址。'
+        );
         return;
       }
-      const url = found[0].url;
-      setServerUrl(url);
-      localStorage.setItem('ivnote.server', url);
-      setScanMsg(
-        found.length > 1
-          ? `找到 ${found.length} 台，已选中 ${serverLabel(url)}（其余可在「用自己的服务器」里手填）`
-          : `已找到 ${serverLabel(url)}`
-      );
+      setFound(list);
+      if (list.length === 1) pickServer(list[0].url);
+      else setScanMsg(`找到 ${list.length} 台，选一台：`);
     } catch (err) {
       setScanMsg(`扫描失败：${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -214,10 +226,20 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
   return (
     <div className="login-wrap">
       <form className="login-card" onSubmit={submit}>
+        {/*
+          返回入口。此前唯一的出口是卡片**底部**一个无边框的 ghost 文字按钮，
+          手机上它经常在首屏之外，看上去也不像个按钮——于是"点开开启同步之后
+          就出不来了"。返回是第一位的，放左上角，永远在首屏。
+        */}
+        {onCancel && (
+          <button type="button" className="login-back" onClick={onCancel} aria-label="返回">
+            ← 返回
+          </button>
+        )}
         <img src={logoUrl} alt="" className="login-logo" />
         <h1>开启同步</h1>
         <p className="sub">
-          同步只影响"笔记能不能在多台设备之间流动"。不开也能一直用，笔记本来就在你自己手上。
+          同步只影响「笔记能不能在多台设备之间流动」。不开也能一直用，笔记本来就在你自己手上。
         </p>
 
         {canPair && (
@@ -246,18 +268,36 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
         {tab === 'pair' ? (
           <>
             <p className="pair-how">
-              在<b>已经登录过的那台设备</b>上打开「设置 → 同步 → 添加设备」，
+              在<b>已经登录过的那台设备</b>上打开「设置 → 同步」，点<b>生成配对码</b>，
               屏幕上会出现一个 6 位数字，60 秒内填到这里即可。
             </p>
-            {!serverUrl && (
-              <div className="scan-row">
-                <button type="button" className="btn ghost" disabled={scanning} onClick={() => void doScan()}>
-                  {scanning ? '正在找…' : '找找附近的电脑'}
-                </button>
-                <span className="scan-hint">和电脑连同一个 Wi-Fi 时可自动找到，不用打地址</span>
-              </div>
-            )}
+            {/*
+              这个按钮原来用 `!serverUrl` 门控：只要 localStorage 里存过一次地址
+              （哪怕是错的、或是换了 Wi-Fi 之后失效的），它就再也不出现了，
+              而"重新找一遍"恰恰是换网络之后最需要的动作。改成常驻。
+            */}
+            <div className="scan-row">
+              <button type="button" className="btn outline" disabled={scanning} onClick={() => void doScan()}>
+                {scanning ? '正在找…' : serverUrl ? '重新找附近的电脑' : '找找附近的电脑'}
+              </button>
+              <span className="scan-hint">和电脑连同一个 Wi-Fi 时可自动找到，不用打地址</span>
+            </div>
             {scanMsg && <p className="scan-msg">{scanMsg}</p>}
+            {found.length > 1 && (
+              <ul className="scan-list">
+                {found.map((f) => (
+                  <li key={f.url}>
+                    <button
+                      type="button"
+                      className={`btn outline ${normalizeServerUrl(serverUrl) === f.url ? 'on' : ''}`}
+                      onClick={() => pickServer(f.url)}
+                    >
+                      {serverLabel(f.url)}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <input
               className="pair-input"
               inputMode="numeric"
@@ -319,7 +359,7 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
         </button>
 
         {onCancel && (
-          <button type="button" className="btn ghost" onClick={onCancel}>
+          <button type="button" className="btn outline" onClick={onCancel}>
             先不同步，直接记笔记 →
           </button>
         )}
@@ -354,7 +394,7 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
             <div className="probe-row">
               <button
                 type="button"
-                className="btn ghost"
+                className="btn outline"
                 disabled={probing || !serverUrl.trim()}
                 onClick={() => void doProbe()}
               >
@@ -368,7 +408,7 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
               </div>
             )}
 
-            <button type="button" className="btn ghost import-btn" onClick={() => fileRef.current?.click()}>
+            <button type="button" className="btn outline import-btn" onClick={() => fileRef.current?.click()}>
               导入账号文件（IvyeaNote-账号.txt）
             </button>
             <button type="button" className="link paste-toggle" onClick={() => setPasteMode((v) => !v)}>
@@ -385,7 +425,7 @@ export function LoginView({ onLogin, onShowGuide, onCancel, onPairLogin, preferP
                 />
                 <button
                   type="button"
-                  className="btn ghost import-btn"
+                  className="btn outline import-btn"
                   onClick={() => {
                     const acc = parseAccountText(pasteText);
                     if (!acc.serverUrl && !acc.email && !acc.password) {

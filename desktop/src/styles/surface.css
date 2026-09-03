@@ -556,9 +556,33 @@
   align-items: center;
   gap: var(--sp-3);
 }
+/*
+ * 「标题 + 一句说明 + 右边一个按钮」这一行。
+ *
+ * `.set-label` 本身是 flex row（那是给"主题 / 当前值"那种行用的），
+ * 到了这里，标题文字和长长的说明成了同一行里的两个 flex item：
+ * 屏幕一窄，标题就被挤成 min-content —— 手机上「添加设备」竖着排成
+ * 「添 / 加 / 设 / 备」四行。这里改成上下堆叠，标题永远占满一行。
+ */
 .set-about .set-label {
   margin: 0;
   flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+.set-about .set-label .set-hint {
+  margin-top: 4px;
+}
+/* 窄屏：按钮换行到下面，别再回头挤标题 */
+@media (max-width: 480px) {
+  .set-about {
+    flex-wrap: wrap;
+  }
+  .set-about > .btn {
+    margin-left: auto;
+  }
 }
 .set-reset {
   margin-top: var(--sp-4);

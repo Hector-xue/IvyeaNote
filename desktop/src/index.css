@@ -1833,3 +1833,88 @@ button {
   line-height: 1.7;
   margin-bottom: 12px;
 }
+
+/* ============ v0.10.6：同步相关的界面修补 ============ */
+
+/*
+ * 「次级按钮」。
+ * `.btn.ghost` 在 surface.css 里被去掉了边框（`border-color: transparent`），
+ * 于是登录页上的「先不同步，直接记笔记」「找找附近的电脑」「测试连接」
+ * 全都渲染成一行纯文字——用户反馈的"点开开启同步之后没有返回按钮"，
+ * 说的就是它：按钮在，但看着不像按钮。ghost 保持原样（它在工具栏里是对的），
+ * 这里给"必须被看见"的那几个单独一档描边样式。
+ */
+.btn.outline {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn.outline:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+.btn.outline.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 登录页左上角的返回。它必须在首屏，不能只在卡片底部 */
+.login-card {
+  position: relative;
+}
+.login-back {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  line-height: 1.2;
+}
+.login-back:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 扫到多台时列出来挑，而不是替用户选第一台再让他"其余手填" */
+.scan-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.scan-list .btn {
+  width: 100%;
+}
+
+/* 过期的配对码不能看着还像有效的 */
+.pair-code.expired {
+  color: var(--muted);
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+/* 设置里的同步子区块：把"设备级设施"和"账号"在视觉上分开 */
+.set-sub {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px 12px 10px;
+  margin-bottom: 14px;
+}
+.set-lan {
+  font-family: ui-monospace, Consolas, monospace;
+  user-select: all;
+}
+.set-hint.set-err {
+  color: var(--danger, #c2453f);
+}
+
+/* 状态栏：同步失败要一眼看得出来，而不是和"已同步"共用一套灰 */
+.status-bar .st-item.st-fail {
+  color: var(--danger, #c2453f);
+}

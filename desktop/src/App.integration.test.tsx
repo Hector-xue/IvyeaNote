@@ -465,3 +465,107 @@ describe('侧栏搜索（E7）', () => {
     });
   });
 })
+
+/**
+ * v0.10.6：同步与首启这一片的回归护栏。
+ *
+ * 下面每一条对应的都是**真机上一点就废、而 428 条既有测试全绿**的缺陷——
+ * 共同点是它们都不在纯函数里，而在"分支顺序 / state 有没有落盘 / 弹层挂在哪棵树上"。
+ */
+describe('首启与同步（v0.10.6 修复的回归）', () => {
+  function ribbon(label: string): HTMLElement | null {
+    return document.querySelector<HTMLElement>(`.ribbon-btn[aria-label="${label}"]`);
+  }
+
+  /** 造一个"已登录 + 有一个云端库"的持久化状态，模拟重启后的冷启动 */
+  function seedLoggedIn() {
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'http://127.0.0.1:8080',
+          email: 'me@example.com',
+          userId: 1,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: {
+          '7': { id: 7, name: 'Ivyea Note', localPath: 'opfs://7', cursor: 0, versions: {}, bases: {} },
+        },
+      })
+    );
+  }
+
+  it('已登录用户重启后直接进完整界面，而不是没有设置按钮的空壳', async () => {
+    // 此前 vaultId 是纯内存 state（初值 null），登录态下 activeVaultId 没有兜底，
+    // 于是每次重启都落进 `!vault` 分支：没有设置 / 回收站 / 标签 / 图谱，
+    // 「新建笔记」是个 () => undefined，只能先去下拉框里把库重选一遍。
+    seedLoggedIn();
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => {
+      expect(ribbon('设置')).toBeTruthy();
+    });
+    expect(ribbon('回收站')).toBeTruthy();
+    expect(localStorage.getItem('ivnote.activeVault')).toBe('7');
+  });
+
+  it('选中的笔记库会落盘，下次启动照原样恢复', async () => {
+    localStorage.setItem('ivnote.activeVault', '7');
+    seedLoggedIn();
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => expect(ribbon('设置')).toBeTruthy());
+    expect(localStorage.getItem('ivnote.activeVault')).toBe('7');
+  });
+
+  it('存的库在服务端没了 → 自动落到还剩下的那个，而不是卡成空壳', async () => {
+    localStorage.setItem('ivnote.activeVault', '999'); // 已经不存在了
+    seedLoggedIn();
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => expect(ribbon('设置')).toBeTruthy());
+    expect(localStorage.getItem('ivnote.activeVault')).toBe('7');
+  });
+
+  it('欢迎页「已有账号？登录同步」真的能打开登录页', async () => {
+    // 欢迎页那一支排在登录页之前，只 setShowLogin(true) 的话欢迎页原样留着，
+    // 点下去像完全没反应——从 v0.4.0 起就这样
+    localStorage.removeItem('ivnote.welcomed');
+    render(<App />);
+    const btn = await screen.findByText('已有账号？登录同步');
+    fireEvent.click(btn);
+    await waitFor(() => {
+      expect(document.querySelector('.login-card')).toBeTruthy();
+    });
+    expect(document.querySelector('.welcome-card')).toBeNull();
+  });
+
+  it('登录页有一个首屏就能看见的返回按钮', async () => {
+    localStorage.removeItem('ivnote.welcomed');
+    render(<App />);
+    fireEvent.click(await screen.findByText('已有账号？登录同步'));
+    const back = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>('.login-back');
+      if (!el) throw new Error('登录页没有返回按钮');
+      return el;
+    });
+    fireEvent.click(back);
+    await waitFor(() => {
+      expect(document.querySelector('.login-card')).toBeNull();
+    });
+  });
+
+  it('欢迎页「跳过」不会留下一个空白页面', async () => {
+    // 此前 WelcomeView 自己 return null，而 App 那一支照样 early-return，
+    // 屏幕上只剩一个空的 .app —— 点一下就白屏，只能刷新
+    localStorage.removeItem('ivnote.welcomed');
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    fireEvent.click(await screen.findByText('跳过，先随便看看'));
+    await waitFor(() => {
+      expect(document.querySelector('.ribbon')).toBeTruthy();
+    });
+    expect(localStorage.getItem('ivnote.welcomed')).toBe('1');
+  });
+})

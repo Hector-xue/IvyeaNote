@@ -4,7 +4,7 @@
  * 手机登录页点「我有配对码」→ 填服务器地址 + 配对码 → claim 成功直接登录，
  * 免输账号密码。
  */
-import { SyncClient } from '../lib/api';
+import { apiBase, SyncClient } from '../lib/api';
 
 export interface PairClaimResult {
   accessToken: string;
@@ -14,7 +14,9 @@ export interface PairClaimResult {
 
 /** 用服务器地址 + 配对码换取会话 */
 export async function claimPairCode(serverUrl: string, code: string): Promise<PairClaimResult> {
-  const res = await fetch(`${serverUrl}/api/v1/pairing/claim?code=${encodeURIComponent(code)}`, {
+  // 走 apiBase 而不是自己拼 `/api/v1`：老配置里存的地址可能**已经**带了 `/api/v1`
+  //（v0.2.0 那阵的口径），自己拼就成了 /api/v1/api/v1，配对必失败。
+  const res = await fetch(`${apiBase(serverUrl)}/pairing/claim?code=${encodeURIComponent(code)}`, {
     method: 'POST',
   });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;

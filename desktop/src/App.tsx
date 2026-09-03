@@ -45,6 +45,7 @@ import {
   localServerStatus,
   startLocalServer,
   stopLocalServer,
+  isLocalServerAccount,
   type LocalServerInfo,
 } from './lib/localServer';
 import {
@@ -66,6 +67,8 @@ import {
   nextLocalVaultId,
   type PersistState,
   type VaultMeta,
+  loadActiveVaultId,
+  saveActiveVaultId,
 } from './lib/store';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -107,7 +110,7 @@ export default function App() {
     const s = loadState();
     return s.account ? s : ensureLocalVault(s);
   });
-  const [vaultId, setVaultId] = useState<number | null>(null);
+  const [vaultId, setVaultId] = useState<number | null>(loadActiveVaultId);
   /** v0.3.4：PDF 列表与元数据（排序） */
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   /** 同步拉取后要重读当前文件，但 currentPath 不能进 useSyncEngine 的依赖——
@@ -221,6 +224,28 @@ export default function App() {
    */
   const activeVaultId = state.account ? vaultId : vaultId && vaultId < 0 ? vaultId : LOCAL_VAULT_ID;
   const vault: VaultMeta | null = activeVaultId ? state.vaults[String(activeVaultId)] ?? null : null;
+
+  // 选中的库要跟着落盘，否则下次启动又回到"没选库"
+  useEffect(() => {
+    saveActiveVaultId(vaultId);
+  }, [vaultId]);
+
+  /**
+   * 兜底选库：登录着、却没有一个有效的选中库时，自动挑一个。
+   * 这条路会在三种情况下走到——第一次登录完、存下的库在服务端被删了、
+   * 以及升级上来的老用户（他们的 localStorage 里根本没有这个键）。
+   * 没有它，界面就停在 `!vault` 那个什么都点不动的空壳上。
+   */
+  useEffect(() => {
+    if (!state.account) return;
+    if (vaultId && state.vaults[String(vaultId)]) return;
+    const ids = Object.keys(state.vaults)
+      .map(Number)
+      .filter((n) => Number.isFinite(n))
+      // 云端库（正数 id）优先：登录之后本地库通常已经并进去了
+      .sort((a, b) => (a > 0 ? 0 : 1) - (b > 0 ? 0 : 1) || a - b);
+    if (ids.length > 0) setVaultId(ids[0]);
+  }, [state.account, state.vaults, vaultId]);
 
   // 文件 IO：绑定了本地文件夹且在 Tauri 里 → 真实磁盘；否则 OPFS
   const io: FileIO = useMemo(() => {
@@ -939,6 +964,8 @@ export default function App() {
   /** v0.6.1 H6: add-device pairing code dialog */
   const [pairInfo, setPairInfo] = useState<{ code: string; expiresIn: number } | null>(null);
   const [pairBusy, setPairBusy] = useState(false);
+  /** 配对码剩余秒数（0 = 已过期） */
+  const [pairLeft, setPairLeft] = useState(0);
   /** v0.7.0 F4: tags panel */
   const [showTagPanel, setShowTagPanel] = useState(false);
   /** 移动端点标签后要搜的词（命令面板在手机上不渲染，得走抽屉里的全文搜索） */
@@ -962,6 +989,16 @@ export default function App() {
    * 现在服务端随桌面包一起发，这里负责起停 + **起完自动登录**——
    * 少了自动登录这一步，用户还是要面对账号密码，"点点点"就断在最后一米。
    */
+  const onLogout = useCallback(() => {
+    // 只清登录态，保留全部本地笔记（含免登录本地库），下次登录可继续迁移
+    clearAccount();
+    setState((s) => ({ ...s, account: undefined }));
+    setShowLogin(false);
+    setCurrentPath(null);
+    setDoc(null);
+    setLastReport(null);
+  }, [setLastReport]);
+
   const [localSrv, setLocalSrv] = useState<LocalServerInfo | null>(null);
   const [localSrvBusy, setLocalSrvBusy] = useState(false);
   const [localSrvOk, setLocalSrvOk] = useState(false);
@@ -979,8 +1016,15 @@ export default function App() {
       setLocalSrvBusy(true);
       try {
         if (!next) {
-          setLocalSrv(await stopLocalServer());
-          toast('已停止本机同步服务', 'ok');
+          const info = await stopLocalServer();
+          setLocalSrv(info);
+          /*
+           * 服务停了，登录态却还指着 http://127.0.0.1:8080——自动同步会每 60 秒
+           * 往一个已经不存在的服务器上撞一次，屏幕上是一连串"连不上"，
+           * 而设置里仍然写着"已登录"。停服务就等于这台设备退出同步。
+           */
+          if (isLocalServerAccount(stateRef.current.account?.serverUrl)) onLogout();
+          toast(info.running ? '本机同步服务仍在运行（可能是在应用之外启动的）' : '已停止本机同步服务', info.running ? 'error' : 'ok');
           return;
         }
         const { info, cred } = await startLocalServer();
@@ -997,7 +1041,7 @@ export default function App() {
         setLocalSrvBusy(false);
       }
     },
-    [onLogin, toast]
+    [onLogin, onLogout, toast]
   );
 
   /** v0.7.0 F4: open tags panel */
@@ -1010,12 +1054,24 @@ export default function App() {
     try {
       const r = await client.createPairCode();
       setPairInfo({ code: r.code, expiresIn: r.expires_in });
+      setPairLeft(r.expires_in);
     } catch (e) {
       toast(`生成配对码失败：${errText(e)}`, 'error');
     } finally {
       setPairBusy(false);
     }
   }, [client, toast]);
+
+  /*
+   * 配对码只活 60 秒（服务端 pairTTL），可弹层上写的是一句静态的「60 秒内有效」——
+   * 过期之后屏幕上那串数字看着照样有效，用户在手机上一遍遍输、一遍遍报错。
+   * 这里给它真倒计时，归零就换成「重新生成」。
+   */
+  useEffect(() => {
+    if (!pairInfo || pairLeft <= 0) return;
+    const t = window.setInterval(() => setPairLeft((n) => (n > 0 ? n - 1 : 0)), 1000);
+    return () => window.clearInterval(t);
+  }, [pairInfo, pairLeft]);
   const conflictFiles = lastReport?.conflicts ?? [];
   /**
    * 从副本名反解原路径。原来这里自己写了一份正则且**把 .md 一起吃掉了**
@@ -1209,15 +1265,6 @@ export default function App() {
     await refreshFiles();
   }, [vault, patchVault, confirm, refreshFiles]);
 
-  const onLogout = useCallback(() => {
-    // 只清登录态，保留全部本地笔记（含免登录本地库），下次登录可继续迁移
-    clearAccount();
-    setState((s) => ({ ...s, account: undefined }));
-    setShowLogin(false);
-    setCurrentPath(null);
-    setDoc(null);
-    setLastReport(null);
-  }, []);
 
   /** v0.7.0 F3: open or create a wiki link target */
   const onOpenWiki = useCallback(
@@ -1382,6 +1429,52 @@ export default function App() {
   });
 
   /**
+   * **Esc 关最上面那一层**。
+   *
+   * 设置里的快捷键表一直写着「Esc 关闭当前浮层」，可实际上只有设置、命令面板、
+   * 右键菜单和 prompt 弹框吃这个键——图谱、标签、回收站、冲突、配对码、
+   * 同步状态、移动到…全都不吃，按了没反应。
+   *
+   * 与其给七个组件各挂一个 window 监听（那样多层叠着时会一起塌），
+   * 不如在这里按「谁在最上面」的顺序只关一层。命令面板和 prompt 弹框自己
+   * 处理，这里让开。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // 这两个自带 Esc（还要吃输入框里的 Esc），交给它们
+      if (paletteMode || dialogEl) return;
+      const layers: [boolean, () => void][] = [
+        [trash.open, () => trash.setOpen(false)],
+        [!!moving, () => setMoving(null)],
+        [!!pairInfo, () => setPairInfo(null)],
+        [showConflict, () => setShowConflict(false)],
+        [showSyncStatus, () => setShowSyncStatus(false)],
+        [showTagPanel, () => setShowTagPanel(false)],
+        [showGraph, () => setShowGraph(false)],
+        [showSettings, () => setShowSettings(false)],
+      ];
+      const top = layers.find(([open]) => open);
+      if (!top) return;
+      e.preventDefault();
+      top[1]();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    paletteMode,
+    dialogEl,
+    trash,
+    moving,
+    pairInfo,
+    showConflict,
+    showSyncStatus,
+    showTagPanel,
+    showGraph,
+    showSettings,
+  ]);
+
+  /**
    * 点标签 → 搜这个标签。桌面走命令面板的搜索模式；面板的输入框是非受控的，
    * 只能用原生 setter + input 事件把值灌进去（React 不认直接赋 value）。
    */
@@ -1434,6 +1527,8 @@ export default function App() {
               setShowLogin(true);
             },
             onAddDevice: () => void showPairCode(),
+            lastError: lastReport?.errors?.[0] ?? null,
+            onLogout,
             localServer: localSrvOk
               ? {
                   running: !!localSrv?.running,
@@ -1468,6 +1563,112 @@ export default function App() {
         />
   ) : null;
 
+  /*
+   * 配对码与冲突两个弹层此前**只写在桌面主分支里**。手机上「设置 → 同步 →
+   * 生成配对码」点下去，state 置了、屏幕上什么都不出现——而"用手机连电脑"
+   * 恰恰是这两个弹层唯一的用武之地。抽成变量，两端一起挂。
+   */
+  const pairEl = pairInfo ? (
+    /*
+     * v0.10.3：**必须盖在设置面板之上**。配对码是从「设置 → 同步 → 生成配对码」
+     * 点出来的，两个弹层都是 .dlg-mask（z-index 50），按 DOM 顺序设置卡片反而在上面——
+     * 于是屏幕上唯一要读的那串数字被压在毛玻璃后面看不清。
+     */
+    <div
+      className="dlg-mask dlg-mask-top"
+      onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}
+    >
+      <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="添加设备">
+        <h2 className="dlg-title">添加设备</h2>
+        <p className="dlg-desc">
+          在新设备（手机 / 另一台电脑）上打开 Ivyea Note，选「配对码」，
+          把下面这 6 位数字填进去就行——不用输服务器地址，也不用输密码。
+        </p>
+        <div className={`pair-code ${pairLeft === 0 ? 'expired' : ''}`}>{pairInfo.code}</div>
+        <p className="dlg-desc">
+          {pairLeft > 0 ? `${pairLeft} 秒后过期，仅可使用一次` : '这个码已经过期了，点「重新生成」再来一次'}
+        </p>
+        {localSrv?.running && localSrv.lanUrl && (
+          <p className="dlg-desc">
+            新设备若问服务器地址，填 <b>{localSrv.lanUrl}</b>（同一个 Wi-Fi 下也可以让它自己「找找附近的电脑」）。
+          </p>
+        )}
+        <div className="dlg-actions">
+          <button
+            className="btn ghost"
+            disabled={pairLeft === 0}
+            onClick={() => {
+              void navigator.clipboard?.writeText(pairInfo.code);
+              toast('配对码已复制', 'ok');
+            }}
+          >
+            复制配对码
+          </button>
+          <button className="btn" disabled={pairBusy} onClick={() => void showPairCode()}>
+            {pairBusy ? '生成中…' : '重新生成'}
+          </button>
+          <button className="btn primary" onClick={() => setPairInfo(null)}>
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const syncStatusEl = showSyncStatus ? (
+    <SyncStatusPanel
+      loading={syncStatusBusy}
+      list={syncStatusList}
+      summary={summarize(syncStatusList)}
+      errors={lastReport?.errors ?? []}
+      syncing={syncing}
+      onRefresh={() => void refreshSyncStatus()}
+      onSyncNow={async () => {
+        await doSync();
+        await refreshSyncStatus();
+      }}
+      onOpen={(p) => {
+        setShowSyncStatus(false);
+        void openFileInTab(p);
+      }}
+      onClose={() => setShowSyncStatus(false)}
+    />
+  ) : null;
+
+  const conflictEl = showConflict && conflictFiles.length > 0 ? (
+        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowConflict(false)}>
+          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="同步冲突">
+            <h2 className="dlg-title">同步冲突（{conflictFiles.length}）</h2>
+            <p className="dlg-desc">
+              两台设备同时改了同一篇笔记。选择保留哪个版本；两个版本内容不同，建议先打开确认再选。
+            </p>
+            <ul className="trash-list">
+              {conflictFiles.map((copy) => (
+                <li key={copy} className="trash-item conflict-item">
+                  <span className="ti-name" title={copy}>
+                    {originalOf(copy)}
+                  </span>
+                  <button className="btn ghost" onClick={() => void openFile(copy)} title="先看看副本内容">
+                    查看副本
+                  </button>
+                  <button className="btn ghost" onClick={() => void resolveKeepMine(copy)}>
+                    保留我的
+                  </button>
+                  <button className="btn primary" onClick={() => void resolveUseCopy(copy)}>
+                    用副本内容
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="dlg-actions">
+              <button className="btn primary" onClick={() => setShowConflict(false)}>
+                稍后处理
+              </button>
+            </div>
+          </div>
+        </div>
+  ) : null;
+
   // ---------- 渲染 ----------
 
   if (!state.account && showWelcome) {
@@ -1486,27 +1687,17 @@ export default function App() {
             setShowWelcome(false);
             void onCreateNote('');
           }}
-          onOpenLogin={() => setShowLogin(true)}
+          onDismiss={() => setShowWelcome(false)}
+          /*
+           * 收欢迎页必须和开登录页一起发生：这个分支排在登录分支**前面**，
+           * 只 setShowLogin(true) 的话欢迎页原样留在屏幕上，点了像没反应
+           * （从 v0.4.0 起就这样）。
+           */
+          onOpenLogin={() => {
+            setShowWelcome(false);
+            setShowLogin(true);
+          }}
         />
-        {showSyncStatus && (
-          <SyncStatusPanel
-            loading={syncStatusBusy}
-            list={syncStatusList}
-            summary={summarize(syncStatusList)}
-            errors={lastReport?.errors ?? []}
-            syncing={syncing}
-            onRefresh={() => void refreshSyncStatus()}
-            onSyncNow={async () => {
-                await doSync();
-                await refreshSyncStatus();
-            }}
-            onOpen={(p) => {
-                setShowSyncStatus(false);
-                void openFileInTab(p);
-            }}
-            onClose={() => setShowSyncStatus(false)}
-          />
-        )}
         {dialogEl}
         {toastEl}
       </div>
@@ -1578,6 +1769,9 @@ export default function App() {
           backlinks={wikiLinks.back}
           onCheckUpdate={checkUpdateNow}
           onSync={() => void doSync()}
+          onOpenSyncStatus={openSyncStatus}
+          conflictCount={conflictFiles.length}
+          onOpenConflicts={() => setShowConflict(true)}
           onCreateVault={createVault}
           theme={theme}
           onToggleTheme={toggleTheme}
@@ -1618,6 +1812,11 @@ export default function App() {
           />
         )}
         {settingsEl}
+        {/* 这三个弹层此前只挂在桌面分支上：手机点「生成配对码」什么都不出现，
+            冲突和同步状态在手机上则完全没有出口 */}
+        {pairEl}
+        {conflictEl}
+        {syncStatusEl}
         {dialogEl}
         {toastEl}
       </div>
@@ -1637,7 +1836,6 @@ export default function App() {
           lastReport={null}
           onSelect={() => undefined}
           onEdit={() => undefined}
-          onCreateNote={() => undefined}
           onNewFolderNote={() => undefined}
           onDeleteFile={() => undefined}
           onUpload={() => undefined}
@@ -1675,7 +1873,12 @@ export default function App() {
           collapsedDirs={collapsedDirs}
           onToggleDir={toggleDir}
           onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
+          /* 这一支此前连设置都进不去：一个既不能建笔记、也改不了任何东西的空壳。
+             真走到这里（账号下一个库都没有）至少得留着设置和新建库两条出路 */
+          onOpenSettings={() => setShowSettings(true)}
+          onCreateNote={() => void createVault()}
         />
+        {settingsEl}
         {dialogEl}
         {toastEl}
       </div>
@@ -1810,75 +2013,8 @@ export default function App() {
           }}
         />
       )}
-      {pairInfo && (
-        /*
-         * v0.10.3：**必须盖在设置面板之上**。配对码是从「设置 → 同步 → 生成配对码」
-         * 点出来的，两个弹层都是 .dlg-mask（z-index 50），按 DOM 顺序设置卡片反而在上面——
-         * 于是屏幕上唯一要读的那串数字被压在毛玻璃后面看不清。
-         */
-        <div
-          className="dlg-mask dlg-mask-top"
-          onMouseDown={(e) => e.target === e.currentTarget && setPairInfo(null)}
-        >
-          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="添加设备">
-            <h2 className="dlg-title">添加设备</h2>
-            <p className="dlg-desc">
-              在新设备（手机 / 另一台电脑）上打开 Ivyea Note，选「配对码」，
-              把下面这 6 位数字填进去就行——不用输服务器地址，也不用输密码。
-            </p>
-            <div className="pair-code">{pairInfo.code}</div>
-            {/* v0.10.0 定的规矩是清掉装饰性 emoji（字形在各平台不一致，Windows 上还会变黑白），这里漏了一个 */}
-            <p className="dlg-desc">{pairInfo.expiresIn} 秒内有效，仅可使用一次</p>
-            <div className="dlg-actions">
-              <button
-                className="btn ghost"
-                onClick={() => {
-                  void navigator.clipboard?.writeText(pairInfo.code);
-                  toast('配对码已复制', 'ok');
-                }}
-              >
-                复制配对码
-              </button>
-              <button className="btn primary" onClick={() => setPairInfo(null)}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {showConflict && conflictFiles.length > 0 && (
-        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && setShowConflict(false)}>
-          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="同步冲突">
-            <h2 className="dlg-title">同步冲突（{conflictFiles.length}）</h2>
-            <p className="dlg-desc">
-              两台设备同时改了同一篇笔记。选择保留哪个版本；两个版本内容不同，建议先打开确认再选。
-            </p>
-            <ul className="trash-list">
-              {conflictFiles.map((copy) => (
-                <li key={copy} className="trash-item conflict-item">
-                  <span className="ti-name" title={copy}>
-                    {originalOf(copy)}
-                  </span>
-                  <button className="btn ghost" onClick={() => void openFile(copy)} title="先看看副本内容">
-                    查看副本
-                  </button>
-                  <button className="btn ghost" onClick={() => void resolveKeepMine(copy)}>
-                    保留我的
-                  </button>
-                  <button className="btn primary" onClick={() => void resolveUseCopy(copy)}>
-                    用副本内容
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="dlg-actions">
-              <button className="btn primary" onClick={() => setShowConflict(false)}>
-                稍后处理
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {pairEl}
+      {conflictEl}
       {settingsEl}
       {trash.open && (
         <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && trash.setOpen(false)}>
@@ -1924,25 +2060,7 @@ export default function App() {
           }}
         />
       )}
-      {showSyncStatus && (
-        <SyncStatusPanel
-          loading={syncStatusBusy}
-          list={syncStatusList}
-          summary={summarize(syncStatusList)}
-          errors={lastReport?.errors ?? []}
-          syncing={syncing}
-          onRefresh={() => void refreshSyncStatus()}
-          onSyncNow={async () => {
-            await doSync();
-            await refreshSyncStatus();
-          }}
-          onOpen={(p) => {
-            setShowSyncStatus(false);
-            void openFileInTab(p);
-          }}
-          onClose={() => setShowSyncStatus(false)}
-        />
-      )}
+      {syncStatusEl}
       {dialogEl}
       {toastEl}
     </div>

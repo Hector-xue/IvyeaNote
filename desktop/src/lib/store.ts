@@ -71,6 +71,30 @@ export function clearAccount(): void {
   saveState(s);
 }
 
+/**
+ * 当前选中的笔记库 id。
+ *
+ * **这个此前根本没存过**：`vaultId` 是个纯内存 state，初值 null。未登录时
+ * `activeVaultId` 有 `?? LOCAL_VAULT_ID` 兜底所以看不出来，可一旦登录，
+ * 表达式变成 `state.account ? vaultId : ...` —— 重启（网页版就是刷新）之后
+ * vaultId 是 null，vault 就是 null，App 掉进 `!vault` 那个空壳分支：
+ * 没有设置、没有回收站/标签/图谱，「新建笔记」是个 `() => undefined`。
+ * 用户每次开软件都得先去顶部下拉框里把库重选一遍才有完整界面。
+ */
+const ACTIVE_KEY = 'ivnote.activeVault';
+
+export function loadActiveVaultId(): number | null {
+  const raw = localStorage.getItem(ACTIVE_KEY);
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n !== 0 ? n : null;
+}
+
+export function saveActiveVaultId(id: number | null): void {
+  if (id === null) localStorage.removeItem(ACTIVE_KEY);
+  else localStorage.setItem(ACTIVE_KEY, String(id));
+}
+
 // ---------- 免登录本地模式（v0.3.1） ----------
 
 /** 本地库固定 id：负数永不与云端自增 id 冲突 */
