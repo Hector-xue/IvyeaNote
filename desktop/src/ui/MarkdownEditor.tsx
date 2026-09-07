@@ -391,7 +391,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   resolveImageRef.current = props.resolveImage;
   const imageApiRef = useRef<ImageApi | null>(null);
   if (!imageApiRef.current) {
-    const key = (src: string) => `${pathRef.current ?? ''} ${src}`;
+    const key = (src: string) => `${pathRef.current ?? ''}\u0000${src}`;
     imageApiRef.current = {
       get: (src) => imgCache.current.get(key(src)),
       request: (src) => {

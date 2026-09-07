@@ -643,9 +643,23 @@ export function MainView(props: Props) {
                     ? '同步失败'
                     : '已同步'}
             </button>
-            <span className="st-item st-count">
-              {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
-            </span>
+            {/*
+              v0.11.2：**打开 PDF 时不再显示「0 词 · 0 字符」**——那是当前笔记的字数，
+              而屏幕上摆着的是一份 PDF，写 0 只会让人以为出错了。
+              另外补上反向链接数（Obsidian 状态栏就有这一项），点它展开右栏那个标签。
+            */}
+            {!props.pdfView && props.currentPath && (
+              <>
+                {props.onOpenWikiPath && (
+                  <span className="st-item st-count" title="指向这篇笔记的链接数">
+                    {(props.wikiBack ?? []).length} 条反向链接
+                  </span>
+                )}
+                <span className="st-item st-count">
+                  {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
+                </span>
+              </>
+            )}
           </span>
         </div>
       </main>

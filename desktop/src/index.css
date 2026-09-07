@@ -493,16 +493,47 @@ button {
 .ribbon-spacer { flex: 1; }
 
 /* v0.5.0 U4：底部状态栏 */
+/*
+ * 状态栏（v0.11.2 重做）。
+ *
+ * 此前是一条**占满整行**的横条，左边空着、右边挂三四个小字——用户原话是
+ * 「状态栏的利用率还是不够高，你看下 obsidian 怎么做的」。Obsidian 的做法是
+ * 它**根本不占一行**：几个状态项浮在右下角、压在内容之上，没有底色也没有分割线。
+ * 于是那一行的高度还给了正文，而状态项该在的地方一个没少。
+ *
+ * 浮在内容上不会挡字：编辑区 `.cm-content` 本来就有 40vh 的底部留白，
+ * 阅读区下面另外补了 padding。
+ */
 .status-bar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 3px 14px;
+  gap: 12px;
+  padding: 4px 12px;
   font-size: 11.5px;
   color: var(--muted);
-  border-top: 1px solid var(--border);
-  background: var(--bg, #fafafa);
   user-select: none;
+  pointer-events: none;
+  /* 浮在内容之上就必须自带底：白色 PDF 页面上，灰字直接压上去是看不清的。
+     设计系统里「毛玻璃只给真浮层」——一个浮在正文上的状态栏正是真浮层。 */
+  background: var(--blur-bg);
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-top-left-radius: var(--r-2);
+}
+/* 只有真正能点的那几个接收事件，其余让位给正文（选中文字不该被状态栏挡住） */
+.status-bar > * {
+  pointer-events: auto;
+}
+.editor-pane {
+  position: relative;
+}
+/* 阅读态底部留出状态栏的高度，最后一行不会被压在它下面 */
+.md-preview {
+  padding-bottom: calc(var(--sp-7) + 24px);
 }
 .status-bar .st-right { margin-left: auto; }
 
@@ -1693,14 +1724,24 @@ button {
   gap: var(--sp-3);
   padding: var(--sp-4) var(--sp-3) var(--sp-6);
 }
-/* 页面在渲染完成前也要占住位置，否则滚动条会一边滚一边跳 */
+/*
+ * 页面在渲染完成前也要占住位置，否则滚动条会一边滚一边跳。
+ *
+ * ⚠️ `flex: 0 0 auto` 是**必须的**，不是装饰：`.pdf-scroll` 是纵向 flex 容器，
+ * 而 flex item 默认 `flex-shrink: 1`——三页 A4 加起来远超容器高度，于是每一页
+ * 被压成两百来像素，canvas 仍是原尺寸顶出去、上下页互相盖住。
+ * 用户看到的就是「PDF 内容显示不完全」。实测：容器 205px / canvas 1102px。
+ *
+ * 同理不能给 `width: 100%` 和 `max-width`：宽高都由 renderPage 按渲染出来的
+ * viewport 写成行内样式，CSS 再夹一道就会露出半张页面（实测容器 720 / canvas 779）。
+ */
 .pdf-page {
+  flex: 0 0 auto;
   background: #fff;
   box-shadow: var(--shadow-pop);
   border-radius: 2px;
   min-height: 200px;
-  width: 100%;
-  max-width: 720px;
+  max-width: 100%;
 }
 .pdf-page canvas {
   display: block;
