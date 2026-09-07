@@ -453,30 +453,42 @@ const frameless = await evaluate(`(() => {
   root.classList.remove('frameless', 'win-maximized');
   return out;
 })()`);
+// 顶栏：有内容、整条可拖、窗口按钮长在它右端（v0.11.4 照 Obsidian 布局）
+const topBar = await evaluate(`(() => {
+  const bar = document.querySelector('.top-bar');
+  if (!bar) return null;
+  const r = bar.getBoundingClientRect();
+  const app = document.querySelector('.app').getBoundingClientRect();
+  return {
+    top: Math.round(r.top), height: Math.round(r.height),
+    fullWidth: Math.round(r.width) === Math.round(window.innerWidth),
+    crumb: bar.querySelector('.tb-crumb')?.textContent?.trim() ?? null,
+    // 整条可拖：容器与面包屑上都要有 data-tauri-drag-region
+    dragRegions: bar.querySelectorAll('[data-tauri-drag-region]').length,
+    barIsDrag: bar.hasAttribute('data-tauri-drag-region'),
+    appTop: Math.round(app.top),
+  };
+})()`);
+check('顶栏在窗口最上方、通栏，且 .app 紧接其下', topBar && topBar.top === 0 &&
+  topBar.fullWidth && topBar.appTop === topBar.height, topBar);
+check('顶栏里有内容（面包屑），不是一条空白横带', !!topBar && (topBar.crumb ?? '').length > 0, topBar?.crumb);
+check('整条顶栏可拖窗口（v0.11.3 就是丢了这个，用户点哪都拖不动）',
+  !!topBar && topBar.barIsDrag && topBar.dragRegions >= 2, topBar && { barIsDrag: topBar.barIsDrag, n: topBar.dragRegions });
+
 const chromeGeom = await evaluate(`(() => {
   const root = document.documentElement;
   root.classList.add('frameless');
-  const chrome = document.querySelector('.win-chrome');
-  const cs = chrome ? getComputedStyle(chrome) : null;
-  const ribbon = document.querySelector('.ribbon');
   const out = {
-    chromeExists: !!chrome,
-    position: cs?.position ?? null,
-    // 没有横栏 = 左边第一列（图标条）从窗口第 0 像素开始
-    ribbonTop: ribbon ? Math.round(ribbon.getBoundingClientRect().top) : null,
-    sidebarTop: Math.round(document.querySelector('.sidebar').getBoundingClientRect().top),
-    rightPanelPadTop: (() => { const rp = document.querySelector('.right-panel');
-      return rp ? getComputedStyle(rp).paddingTop : null; })(),
+    // 浏览器里不是 frameless，所以顶栏右端不该出现窗口按钮
+    winButtons: document.querySelectorAll('.win-buttons .win-btn').length,
+    winButtonsVisible: (() => { const b = document.querySelector('.win-buttons');
+      return b ? getComputedStyle(b).display !== 'none' : false; })(),
   };
   root.classList.remove('frameless');
   return out;
 })()`);
-check('frameless 下不再有顶部横栏：图标条与侧栏都从窗口第 0 像素开始',
-  chromeGeom.ribbonTop === 0 && chromeGeom.sidebarTop === 0, chromeGeom);
-check('窗口按钮是浮层（position: fixed），不占布局',
-  chromeGeom.position === null || chromeGeom.position === 'fixed', chromeGeom.position);
-check('右栏顶部让开按钮的位置（唯一会被压到的地方）',
-  chromeGeom.rightPanelPadTop === '32px', chromeGeom.rightPanelPadTop);
+check('非 frameless（浏览器 / Linux / macOS）时顶栏右端不显示窗口按钮',
+  chromeGeom.winButtonsVisible === false, chromeGeom);
 
 check('frameless：#root 有圆角且裁切内容，body 让出背景（否则圆角外还是白的）',
   frameless.radius === '10px' && frameless.overflow === 'hidden' &&

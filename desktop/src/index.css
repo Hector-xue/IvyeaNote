@@ -29,49 +29,84 @@ html.frameless.win-maximized #root {
   border-radius: 0;
   box-shadow: none;
 }
-/* 只有这两处会长在右上角，给它们让开按钮的位置；其余地方一寸都不占 */
-html.frameless .right-panel {
-  padding-top: 32px;
-}
-html.frameless .pdf-bar {
-  padding-right: 150px;
-}
 #root {
   display: flex;
   flex-direction: column;
 }
-/* 侧栏顶部那行库名是第二处拖动区（见 WindowChrome 注释），别让文字被选中 */
-html.frameless .side-head {
-  -webkit-user-select: none;
-  user-select: none;
-}
 
 /*
- * v0.11.3：**窗口按钮浮在右上角，不再占一行。**
+ * 顶栏（v0.11.4）—— 照 Obsidian 的布局。
  *
- * v0.11.0 是一条空白横条、v0.11.1 往里放了品牌标记和笔记路径，两次的反馈都是
- * 「顶栏依旧存在」。用户要的不是更好看的顶栏，是没有那一行——所以整条 flex 行删掉，
- * 只留 fixed 在右上角的三颗按钮，侧栏与正文从窗口第 0 像素开始。
+ * 前三版的教训：v0.11.0 是空白横条、v0.11.1 塞了品牌标记和路径、v0.11.3 干脆
+ * 整条删掉让按钮浮在右上角——反馈依次是「顶栏依旧存在」「顶栏依旧存在」
+ * 「顶部怪怪的 / 按钮突兀 / 拖不动了」。
+ * 结论：**一条栏让人嫌不是因为它存在，是因为它是空的**。Obsidian 有顶栏且没人嫌，
+ * 因为里面装的是真东西，窗口按钮长在右端，整条空白都能拖。
+ *
+ * 所以：中间面包屑、右端视图动作 + 窗口按钮、整条可拖。
  */
-.win-chrome {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 60;
+.top-bar {
+  flex: 0 0 38px;
+  height: 38px;
   display: flex;
-  align-items: stretch;
-  height: 32px;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-left: var(--sp-4);
+  background: var(--bg);
   user-select: none;
 }
-/* 按钮左边留一段透明拖动区：没有它，窗口顶边就只剩侧栏那一处能拖 */
-.win-drag {
-  width: 120px;
+.tb-crumb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.tb-dir {
+  color: var(--muted);
+}
+.tb-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-sep {
+  margin: 0 6px;
+  color: var(--n-4);
+}
+.tb-empty {
+  color: var(--n-4);
+}
+.tb-actions {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+}
+.tb-btn {
+  width: 34px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-1);
+  margin-right: var(--sp-2);
+}
+.tb-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
 }
 .win-buttons {
   display: flex;
 }
 .win-btn {
   width: 46px;
+  height: 38px;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -91,6 +126,10 @@ html.frameless .side-head {
 /* 圆角窗口的右上角：关闭键的外角要跟着圆，否则会有一小块方角戳出去 */
 html.frameless:not(.win-maximized) .win-btn.danger:hover {
   border-top-right-radius: 10px;
+}
+/* 非 frameless（Linux/macOS/浏览器）时顶栏只有面包屑，右端不留窗口按钮的位置 */
+html:not(.frameless) .win-buttons {
+  display: none;
 }
 /* 关掉 shadow 之后系统那圈 1px 方框没有了（它正是把圆角框成方角的元凶），
    窗口边界就只剩我们自己这条内描边 */

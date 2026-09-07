@@ -1,5 +1,8 @@
 /**
- * 自绘窗口边框（v0.11.0，仅 Windows 桌面端）。
+ * 「这份运行环境要不要自绘窗口边框」的唯一判定（v0.11.0；v0.11.4 起只剩这一个函数）。
+ *
+ * 窗口按钮的渲染搬进了 `TopBar`——它们本来就该长在顶栏右端（Obsidian 就是这样），
+ * 而不是自己占一条横栏或者浮在半空。
  *
  * # 用户说的是哪一条
  *
@@ -18,9 +21,6 @@
  *
  * 非 Windows / 非 Tauri（浏览器、安卓）一律返回 null：那些环境本来就没有我们该画的边框。
  */
-import { useEffect, useState } from 'react';
-import { RibbonIcon } from './Icons';
-
 /** 这份运行环境需不需要自绘边框 */
 export function needsCustomChrome(): boolean {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
@@ -28,97 +28,4 @@ export function needsCustomChrome(): boolean {
   // 安卓的 UA 里也有 "Windows"？没有；但保险起见先排除移动端
   if (/Android|iPhone|iPad/i.test(navigator.userAgent)) return false;
   return /Windows/i.test(navigator.userAgent);
-}
-
-export function WindowChrome() {
-  const [enabled] = useState(needsCustomChrome);
-  const [maximized, setMaximized] = useState(false);
-
-  useEffect(() => {
-    if (!enabled) return;
-    let un: (() => void) | undefined;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        const w = getCurrentWindow();
-        const sync = async () => {
-          const m = await w.isMaximized();
-          if (!cancelled) setMaximized(m);
-        };
-        await sync();
-        // onResized 覆盖了最大化/还原/贴边三种情况；单听 maximize 会漏掉 Win+↑
-        un = await w.onResized(() => void sync());
-      } catch {
-        /* 拿不到窗口就保持"未最大化"的样子，按钮仍然可点 */
-      }
-    })();
-    return () => {
-      cancelled = true;
-      un?.();
-    };
-  }, [enabled]);
-
-  // 圆角要跟着最大化状态走，而画圆角的是 #root，所以状态挂在 <html> 上
-  useEffect(() => {
-    if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-    root.classList.toggle('frameless', enabled);
-    root.classList.toggle('win-maximized', enabled && maximized);
-    return () => {
-      root.classList.remove('frameless', 'win-maximized');
-    };
-  }, [enabled, maximized]);
-
-  if (!enabled) return null;
-
-  const call = async (fn: 'minimize' | 'toggleMaximize' | 'close') => {
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow()[fn]();
-    } catch {
-      /* 忽略：窗口已经在关了 */
-    }
-  };
-
-  /*
-   * v0.11.3：**这里不再是一条横栏，而是浮在右上角的三颗按钮。**
-   *
-   * 前两版都栽在同一件事上：v0.11.0 做成"什么都不画的 32px 白带"，
-   * v0.11.1 往里塞了品牌标记和笔记路径想让它"像是设计的一部分"。
-   * 两次的反馈都是同一句——**「顶栏依旧存在」**。
-   * 结论很清楚：用户要的不是"一条更好看的顶栏"，是**没有那一行**。
-   * 所以现在整条 flex 行去掉，只留三颗按钮绝对定位在右上角，
-   * 侧栏和正文从窗口第 0 像素开始；窗口路径回到状态栏。
-   *
-   * 拖动窗口靠两处：这三颗按钮左边留出的一段透明区，以及侧栏顶部那行库名
-   * （`.side-head` 上打了 data-tauri-drag-region）。两处都在窗口顶边，
-   * 是手会自然去够的地方。
-   */
-  return (
-    <div className="win-chrome" onDoubleClick={() => void call('toggleMaximize')}>
-      <div className="win-drag" data-tauri-drag-region />
-      <div className="win-buttons">
-        <button className="win-btn" title="最小化" aria-label="最小化" onClick={() => void call('minimize')}>
-          <RibbonIcon name="win-min" size={16} stroke={1.1} />
-        </button>
-        <button
-          className="win-btn"
-          title={maximized ? '向下还原' : '最大化'}
-          aria-label={maximized ? '向下还原' : '最大化'}
-          onClick={() => void call('toggleMaximize')}
-        >
-          <RibbonIcon name={maximized ? 'win-restore' : 'win-max'} size={16} stroke={1.1} />
-        </button>
-        <button
-          className="win-btn danger"
-          title="关闭"
-          aria-label="关闭"
-          onClick={() => void call('close')}
-        >
-          <RibbonIcon name="win-close" size={16} stroke={1.1} />
-        </button>
-      </div>
-    </div>
-  );
 }

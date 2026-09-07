@@ -14,6 +14,8 @@ import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
+import { allowVaultPath } from './lib/fsScope';
+import { TopBar } from './ui/TopBar';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import type { FileIO } from './lib/sync';
@@ -113,6 +115,12 @@ export default function App() {
   const [vaultId, setVaultId] = useState<number | null>(loadActiveVaultId);
   /** v0.3.4：PDF 列表与元数据（排序） */
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  /**
+   * 阅读 / 编辑视图模式。**由 App 持有**，顶栏那个开关和编辑器共用同一份——
+   * MarkdownEditor 本来就支持受控 `mode`（移动端一直这么用）。
+   * 不这么做的话顶栏只能靠合成一个 Ctrl+E 键盘事件去戳编辑器，那是个脆弱的桥。
+   */
+  const [viewMode, setViewMode] = useState<'edit' | 'read'>('edit');
   /** 同步拉取后要重读当前文件，但 currentPath 不能进 useSyncEngine 的依赖——
    *  否则每切换一次笔记就重建一次同步引擎。用 ref 旁路。 */
   const currentPathRef = useRef<string | null>(null);
@@ -247,6 +255,24 @@ export default function App() {
       .sort((a, b) => (a > 0 ? 0 : 1) - (b > 0 ? 0 : 1) || a - b);
     if (ids.length > 0) setVaultId(ids[0]);
   }, [state.account, state.vaults, vaultId]);
+
+  /*
+   * v0.11.4：**每次激活一个磁盘上的笔记库，都把它递归加进 fs 作用域。**
+   *
+   * 不做这件事的后果极其隐蔽：已有笔记读写全正常，唯独在子目录里新建附件被拒
+   * （`forbidden path: …`）。因为绑定文件夹那次的作用域是对话框插件顺手给的，
+   * 而它只放行库根那一层。「粘贴图片没反应」连报四轮，根因就在这儿。
+   * 放在这里而不是"绑定文件夹"那一处：每次启动恢复上次的库时同样需要。
+   */
+  useEffect(() => {
+    void allowVaultPath(vault?.localPath);
+  }, [vault?.localPath]);
+
+  // 换一篇笔记就回到设置里的默认视图（此前这件事在 MarkdownEditor 内部做，
+  // 模式提上来之后要跟着提上来，否则打开新笔记会停在上一篇的视图）
+  useEffect(() => {
+    setViewMode(prefs.defaultView ?? 'edit');
+  }, [currentPath, prefs.defaultView]);
 
   // 文件 IO：绑定了本地文件夹且在 Tauri 里 → 真实磁盘；否则 OPFS
   const io: FileIO = useMemo(() => {
@@ -1700,11 +1726,26 @@ export default function App() {
         </div>
   ) : null;
 
+  /*
+   * 顶栏（v0.11.4）。**必须在每一个桌面分支里都挂**——窗口按钮长在它右端，
+   * 漏挂哪一支，那一屏就关不掉窗口。抽成变量而不是复制四遍，正是这个仓库
+   * 「弹层挂错树」那条老毛病的解法。移动端不挂：MobileView 自带顶栏。
+   */
+  const topBarEl = (
+    <TopBar
+      currentPath={pdfPath ?? currentPath}
+      mode={pdfView || !currentPath ? null : viewMode}
+      onToggleMode={() => setViewMode((m) => (m === 'edit' ? 'read' : 'edit'))}
+    />
+  );
+
   // ---------- 渲染 ----------
 
   if (!state.account && showWelcome) {
     return (
-      <div className="app">
+      <>
+        {topBarEl}
+        <div className="app">
         <WelcomeView
           onOpenFolder={() => {
             setShowWelcome(false);
@@ -1731,7 +1772,8 @@ export default function App() {
         />
         {dialogEl}
         {toastEl}
-      </div>
+        </div>
+      </>
     );
   }
 
@@ -1862,7 +1904,9 @@ export default function App() {
 
   if (!vault) {
     return (
-      <div className="app">
+      <>
+        {topBarEl}
+        <div className="app">
         <MainView
           vault={{ id: -1, name: 'Ivyea Note', cursor: 0, versions: {}, bases: {} }}
           files={[]}
@@ -1918,12 +1962,15 @@ export default function App() {
         {settingsEl}
         {dialogEl}
         {toastEl}
-      </div>
+        </div>
+      </>
     );
   }
 
   return (
-    <div className="app">
+    <>
+      {topBarEl}
+      <div className="app">
       <MainView
         vault={vault}
         files={files}
@@ -1935,6 +1982,8 @@ export default function App() {
         onRenameFile={(p, name) => void onRenameFile(p, name)}
         jumpTo={jumpTo}
         defaultView={prefs.defaultView}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         livePreviewOn={prefs.livePreview}
         onOpenSyncStatus={openSyncStatus}
         onOpenAt={(p, line) => {
@@ -2101,6 +2150,7 @@ export default function App() {
       {imageViewEl}
       {dialogEl}
       {toastEl}
-    </div>
+      </div>
+    </>
   );
 }

@@ -5,6 +5,8 @@ pub use discover::discover_servers;
 pub mod localserver;
 // v0.11.0：Windows 防火墙放行。「电脑网线 + 手机 WiFi 同步不了」十有八九卡在这
 pub mod firewall;
+// v0.11.4：把笔记库目录递归加进 fs 作用域。不加的话子目录里新建附件会被拒（粘贴图片失效）
+pub mod fsscope;
 
 // `AppHandle::state()` 来自 Manager trait，退出钩子里要用
 use tauri::Manager;
@@ -28,7 +30,8 @@ pub fn run() {
             localserver::local_server_status,
             localserver::local_server_available,
             firewall::firewall_status,
-            firewall::fix_firewall
+            firewall::fix_firewall,
+            fsscope::allow_vault_path
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
