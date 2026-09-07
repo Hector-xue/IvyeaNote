@@ -1,7 +1,6 @@
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ErrorBoundary } from './ui/ErrorBoundary';
-import { WindowChrome } from './ui/WindowChrome';
 // 样式分三层加载，顺序即优先级：
 //   tokens    —— 唯一的尺寸/颜色来源
 //   index     —— 历史累加的组件样式（按 v0.x 分区，逐步往上面两层迁）
@@ -20,8 +19,6 @@ applyAppearance();
 // ErrorBoundary（v0.3.3）：渲染异常时显示友好错误页，不再整页白屏
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>
-    {/* 自绘窗口边框（只有 Windows 桌面端会渲染出东西，见 WindowChrome） */}
-    <WindowChrome />
     <App />
   </ErrorBoundary>
 );

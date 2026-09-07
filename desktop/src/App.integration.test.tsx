@@ -159,6 +159,20 @@ function fileNode(path: string): HTMLElement | null {
   );
 }
 
+/**
+ * 「现在开着哪一篇」——v0.11.4 起显示在顶栏的面包屑里（Obsidian 的 view header
+ * 就在那儿），此前在状态栏左侧的 `.st-path`。断言的是同一件事，只是换了位置。
+ * 面包屑不带 `.md` 后缀、用 ` / ` 分隔，这里还原成库内路径好和用例里的写法对上。
+ */
+function openedNotePath(): string | null {
+  const crumb = document.querySelector('.top-bar .tb-crumb');
+  if (!crumb) return null;
+  const parts = [...crumb.querySelectorAll('.tb-dir, .tb-name')].map(
+    (e) => (e.textContent ?? '').replace(/\s*\/\s*$/, '')
+  );
+  return parts.length > 0 ? `${parts.join('/')}.md` : null;
+}
+
 /** 文件树里的某个文件夹节点 */
 function dirNode(name: string): HTMLElement | null {
   return (
@@ -423,10 +437,10 @@ describe('侧栏搜索（E7）', () => {
     const head = document.querySelector<HTMLElement>('.sp-hit-head')!;
     fireEvent.click(head);
     // 点开后要能看出现在是哪一篇。
-    // v0.10.7：标签栏删掉了，「开着哪一篇」重新回到状态栏左侧（.st-path），
+    // v0.10.7：标签栏删掉了；v0.11.4 起「开着哪一篇」在顶栏的面包屑里，
     // 而且写的是**完整库内路径**——它比文件名多说一件事：这篇在哪个目录
     await waitFor(() => {
-      expect(document.querySelector('.st-path')?.textContent).toBe('AI/agent.md');
+      expect(openedNotePath()).toBe('AI/agent.md');
     });
   });
 
@@ -445,7 +459,7 @@ describe('侧栏搜索（E7）', () => {
     expect(line.querySelector('.sp-line-no')?.textContent).toBe('3');
     fireEvent.click(line);
     await waitFor(() => {
-      expect(document.querySelector('.st-path')?.textContent).toBe('AI/agent.md');
+      expect(openedNotePath()).toBe('AI/agent.md');
     });
   });
 
@@ -481,11 +495,11 @@ describe('顶栏删除与插入图片（v0.10.7）', () => {
     return document.querySelector<HTMLElement>(`.ribbon-btn[aria-label="${label}"]`);
   }
 
-  it('顶部标签栏没了，「开着哪一篇」在状态栏左侧', async () => {
+  it('顶部标签栏没了，「开着哪一篇」看得见（v0.11.4 起在顶栏面包屑）', async () => {
     await renderApp({ 'AI/agent.md': '# Agent\n' });
     openNote('AI/agent.md');
     await waitFor(() => {
-      expect(document.querySelector('.st-path')?.textContent).toBe('AI/agent.md');
+      expect(openedNotePath()).toBe('AI/agent.md');
     });
     expect(document.querySelector('.tabs-bar')).toBeNull();
   });
@@ -509,10 +523,10 @@ describe('顶栏删除与插入图片（v0.10.7）', () => {
      */
     await renderApp({ 'a.md': '# A\n' });
     openNote('a.md');
-    await waitFor(() => expect(document.querySelector('.st-path')?.textContent).toBe('a.md'));
+    await waitFor(() => expect(openedNotePath()).toBe('a.md'));
     const before = document.querySelector('.status-bar')?.textContent;
     await new Promise((r) => setTimeout(r, 300));
-    expect(document.querySelector('.st-path')?.textContent).toBe('a.md');
+    expect(openedNotePath()).toBe('a.md');
     expect(document.querySelector('.status-bar')?.textContent).toBe(before);
   });
 

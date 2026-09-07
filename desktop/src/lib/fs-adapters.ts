@@ -15,8 +15,18 @@ import {
 import type { FileIO, FileMeta } from './sync';
 import type { VaultMeta } from './store';
 
+/**
+ * 拼库内绝对路径。
+ *
+ * v0.11.4：在 Windows 上用反斜杠。此前一律用 `/`，于是拼出
+ * `E:\obsidian\obsidian/亚马逊/图.png` 这种两种分隔符混着的路径——
+ * 它能用，但报错信息难读，作用域匹配也多一层不确定性。
+ */
+const SEP = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent) ? '\\' : '/';
+
 function join(base: string, rel: string): string {
-  return base.endsWith('/') ? base + rel : `${base}/${rel}`;
+  const b = base.replace(/[\\/]+$/, '');
+  return b + SEP + (SEP === '\\' ? rel.replace(/\//g, '\\') : rel);
 }
 
 function parentOf(abs: string): string {
