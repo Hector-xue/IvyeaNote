@@ -84,8 +84,12 @@ export interface Attachments {
   /** 阅读态：相对路径 → 可显示的 blob URL */
   resolveImage(rel: string): Promise<string | null>;
   openPdf(path: string): Promise<void>;
-  /** 交给系统 PDF 应用打开（只有绑定了磁盘文件夹的库才可能成功） */
-  openPdfExternal(path: string): Promise<void>;
+  /**
+   * 交给系统应用打开库内的任意文件（只有绑定了磁盘文件夹的库才可能成功）。
+   * v0.11.1 起不只服务 PDF：文件树现在显示全部文件，docx/zip 这类我们不打算
+   * 自己渲染的，点开就该交给系统。
+   */
+  openWithSystemApp(path: string): Promise<void>;
   closePdf(): void;
 }
 
@@ -181,7 +185,7 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
    * PDF），现在降级成一个可选动作：应用内已经有 pdf.js 阅读器了，三端一致。
    * 只有绑了磁盘文件夹才可能成功——OPFS 库的文件在浏览器沙箱里，系统看不见。
    */
-  const openPdfExternal = useCallback(
+  const openWithSystemApp = useCallback(
     async (path: string) => {
       if (!vaultPath || vaultPath.startsWith('opfs://')) {
         toast('这个库存在应用内部，系统应用打不开；请先在设置里绑定磁盘文件夹', 'error');
@@ -191,7 +195,7 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
         const { openPath } = await import('@tauri-apps/plugin-opener');
         await openPath(`${vaultPath.replace(/\/$/, '')}/${path}`);
       } catch (e) {
-        toast(`无法打开 PDF：${errText(e)}`, 'error');
+        toast(`无法打开：${errText(e)}`, 'error');
       }
     },
     [vaultPath, toast, errText]
@@ -226,5 +230,5 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
     setPdfPath(null);
   }, []);
 
-  return { pdfView, pdfPath, insertImage, saveImageFile, resolveImage, openPdf, openPdfExternal, closePdf };
+  return { pdfView, pdfPath, insertImage, saveImageFile, resolveImage, openPdf, openWithSystemApp, closePdf };
 }

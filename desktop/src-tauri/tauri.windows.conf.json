@@ -10,7 +10,8 @@
         "minHeight": 600,
         "dragDropEnabled": false,
         "decorations": false,
-        "transparent": true
+        "transparent": true,
+        "shadow": false
       }
     ]
   }

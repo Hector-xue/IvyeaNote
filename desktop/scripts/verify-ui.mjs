@@ -266,6 +266,28 @@ await new Promise((r) => setTimeout(r, 500));
 // ---------- 7. 自绘边框：非 Tauri 环境必须不渲染 ----------
 check('浏览器里不画自绘边框（只给 Windows 桌面端）',
   (await evaluate(`document.querySelectorAll('.win-chrome').length`)) === 0);
+
+/*
+ * 自绘边框的 CSS 半边可以在这里验：手动给 <html> 加上 frameless（正常由
+ * WindowChrome 在 Windows+Tauri 下加），看圆角与透明底有没有真的生效。
+ * 不能靠注入 __TAURI_INTERNALS__ 来整体模拟——那会让 fs-adapters 切到 tauriIO，
+ * 整个文件系统当场瘫掉，测出来的东西就不是这一屏了。
+ */
+const frameless = await evaluate(`(() => {
+  const root = document.documentElement;
+  root.classList.add('frameless');
+  const cs = getComputedStyle(document.getElementById('root'));
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  const out = { radius: cs.borderRadius, overflow: cs.overflow, rootBg: cs.backgroundColor, bodyBg };
+  root.classList.add('win-maximized');
+  out.maximizedRadius = getComputedStyle(document.getElementById('root')).borderRadius;
+  root.classList.remove('frameless', 'win-maximized');
+  return out;
+})()`);
+check('frameless：#root 有圆角且裁切内容，body 让出背景（否则圆角外还是白的）',
+  frameless.radius === '10px' && frameless.overflow === 'hidden' &&
+  /rgba\(0, 0, 0, 0\)|transparent/.test(frameless.bodyBg), frameless);
+check('最大化时圆角收成直角（不收四角会露出桌面）', frameless.maximizedRadius === '0px', frameless.maximizedRadius);
 check('没有自绘边框时布局不塌（状态栏仍在窗口内）', await evaluate(`(() => {
   const sb = document.querySelector('.status-bar');
   if (!sb) return false;

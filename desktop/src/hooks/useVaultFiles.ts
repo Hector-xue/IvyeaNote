@@ -32,6 +32,16 @@ export interface VaultFiles {
   files: string[];
   /** .pdf 列表，已按 sortMode 排序 */
   pdfs: string[];
+  /**
+   * 库里**全部可见文件**（.md / .pdf / 图片 / 任何附件），已排序，不含 `.keep` 占位。
+   *
+   * v0.11.1 新增：侧栏文件树此前只由 `.md` 构建，PDF 是钉在侧栏最底下的一个
+   * 扁平分组——几十篇笔记的库里它被压在整棵树下面老远，而且
+   * `obsidian/文章/x.pdf` 会脱离所在文件夹只剩个文件名。用户的原话是
+   * 「pdf 依旧识别不到」，其实一直都"在"，只是没人找得到。Obsidian 是把
+   * 所有文件都摆在它所在的文件夹里的，现在对齐它。
+   */
+  allFiles: string[];
   /** 可索引文件的指纹快照，驱动全库正文索引的增量对账 */
   mdStamps: FileStamp[];
   /** 只有 .keep 占位的空文件夹，供侧栏建树 */
@@ -50,6 +60,7 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
   // 不会连带触发一次全盘重扫（把排序塞进 refresh 的依赖里就会）
   const [rawMd, setRawMd] = useState<string[]>([]);
   const [rawPdf, setRawPdf] = useState<string[]>([]);
+  const [rawAll, setRawAll] = useState<string[]>([]);
   const [mdStamps, setMdStamps] = useState<FileStamp[]>([]);
   const [emptyDirs, setEmptyDirs] = useState<string[]>([]);
   const [sortMode, setSortModeState] = useState<SortMode>(loadSortMode);
@@ -66,6 +77,8 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
         .filter((p) => !HIDDEN_PREFIXES.some((h) => p.startsWith(h)));
       setRawMd(visible.filter((p) => /\.md$/i.test(p)));
       setRawPdf(visible.filter((p) => /\.pdf$/i.test(p)));
+      // `.keep` 是空文件夹的占位，它本身不该出现在树里（目录由 emptyDirs 单独给）
+      setRawAll(visible.filter((p) => !p.endsWith(KEEP)));
       setMdStamps(
         metas
           .filter((m) => isIndexable(m.path))
@@ -100,6 +113,7 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
 
   const files = useMemo(() => sortList(rawMd), [rawMd, sortList]);
   const pdfs = useMemo(() => sortList(rawPdf), [rawPdf, sortList]);
+  const allFiles = useMemo(() => sortList(rawAll), [rawAll, sortList]);
 
   const setSortMode = useCallback((m: SortMode) => {
     setSortModeState(m);
@@ -113,7 +127,7 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
   const metaOf = useCallback((path: string) => metasRef.current.get(path), []);
 
   return useMemo(
-    () => ({ files, pdfs, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh }),
-    [files, pdfs, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh]
+    () => ({ files, pdfs, allFiles, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh }),
+    [files, pdfs, allFiles, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh]
   );
 }

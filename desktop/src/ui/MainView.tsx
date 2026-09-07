@@ -9,6 +9,7 @@ import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
 import { PdfViewer } from './PdfViewer';
+import { needsCustomChrome } from './WindowChrome';
 import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
@@ -60,6 +61,14 @@ interface Props {
   onCloseSplit?(): void;
   /** v0.3.4：PDF 文件列表 */
   pdfs: string[];
+  /**
+   * v0.11.1：库内**全部可见文件**。文件树改由它构建（此前只用 `.md`），
+   * PDF / 图片 / 其它附件从此待在它们真正所在的文件夹里，而不是侧栏最底下
+   * 一个脱离目录结构的扁平分组。不传就退回只显示笔记（移动端仍走 files）。
+   */
+  allFiles?: string[];
+  /** v0.11.1：点开既不是笔记也不是 PDF 的文件（图片预览 / 交给系统应用） */
+  onOpenAttachment?(path: string): void;
   currentPath: string | null;
   doc: string | null;
   syncing: boolean;
@@ -154,8 +163,22 @@ interface Props {
 export function MainView(props: Props) {
   /** v0.5.0 U3：递归树由扁平路径构建 */
   const fileTree = useMemo(
-    () => buildFileTree(props.files, props.emptyDirs ?? []),
-    [props.files, props.emptyDirs]
+    () => buildFileTree(props.allFiles ?? props.files, props.emptyDirs ?? []),
+    [props.allFiles, props.files, props.emptyDirs]
+  );
+
+  /**
+   * 点树里的一个文件该干什么，**只有这一处判定**。
+   * 侧栏、右键菜单的「打开」都走它——两处各写一份就会长歪（这个仓库的老毛病）。
+   */
+  const openTreeFile = useCallback(
+    (path: string) => {
+      if (/\.(md|markdown)$/i.test(path)) props.onSelect(path);
+      else if (/\.pdf$/i.test(path)) props.onOpenPdf(path);
+      else props.onOpenAttachment?.(path);
+    },
+    // props 整体做依赖：这几个回调都来自 App，且 App 每次渲染都会给新引用
+    [props]
   );
   const [rightCollapsed, setRightCollapsed] = useState(loadRightPanelCollapsed);
   /** 方案 §4.4：侧栏与右栏可拖拽调宽，宽度持久化 */
@@ -258,7 +281,7 @@ export function MainView(props: Props) {
             { id: 'copy', label: '复制路径', icon: 'copy', run: () => props.onCopyPath?.(node.path) },
           ]
         : [
-            { id: 'open', label: '打开', icon: 'file', run: () => props.onSelect(node.path) },
+            { id: 'open', label: '打开', icon: 'file', run: () => openTreeFile(node.path) },
             ...(props.onOpenSplit
               ? ([{ id: 'split', label: '在右侧打开', icon: 'sidebar', run: () => props.onOpenSplit?.(node.path) }] as MenuAnchor['items'])
               : []),
@@ -273,7 +296,6 @@ export function MainView(props: Props) {
           ];
     setMenu({ x, y, items });
   };
-  const pdfTree = buildTree(props.pdfs);
   /** 分栏里两边是同一篇：右栏走只读实时预览（见下） */
   const sameDoc = !!props.splitPath && props.splitPath === props.currentPath;
   /** v0.5.0 U4：字数统计 */
@@ -428,34 +450,24 @@ export function MainView(props: Props) {
           {/* v0.5.0 U3：递归文件树（隐藏后缀 / hover 操作 / 多层折叠） */}
           <FileTree
             nodes={fileTree}
-            currentPath={props.currentPath}
+            /* 打开的是 PDF 时，高亮的应该是那个 PDF 而不是上一篇笔记 */
+            currentPath={props.pdfPath ?? props.currentPath}
             collapsed={props.collapsedDirs}
             onToggleDir={props.onToggleDir}
-            onSelectFile={props.onSelect}
+            onSelectFile={openTreeFile}
             onNewNoteIn={props.onNewFolderNote}
             onNewFolderIn={props.onCreateFolder}
             onDeleteFile={props.onDeleteFile}
             onMovePath={props.onMovePath}
             onContextMenu={openMenu}
           />
-          {/* v0.3.4：PDF 列表 */}
-          {props.pdfs.length > 0 && (
-            <div className="dir-group">
-              <div className="dir-label pdf-label">PDF</div>
-              {[...pdfTree.entries()].map(([, nodes]) =>
-                nodes.map((n) => (
-                  <div
-                    key={n.path}
-                    className={`file pdf-file ${props.pdfPath === n.path ? 'active' : ''}`}
-                    onClick={() => props.onOpenPdf(n.path)}
-                  >
-                    <span className="file-name">{n.name}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-          {props.files.length === 0 && props.pdfs.length === 0 && (
+          {/*
+            v0.11.1：**删掉侧栏底部那个扁平的「PDF」分组**。
+            它从 v0.3.4 起就钉在整棵树下面，`obsidian/文章/x.pdf` 在那里只剩一个
+            文件名、脱离所在目录，几十篇笔记的库里根本滚不到——用户的原话是
+            「pdf 依旧识别不到」。现在 PDF 和其它附件都在树里它们自己的文件夹中。
+          */}
+          {(props.allFiles ?? props.files).length === 0 && (
             <div className="empty">还没有笔记。可「新建笔记」或从 Obsidian 一键导入。</div>
           )}
           </>
@@ -552,10 +564,14 @@ export function MainView(props: Props) {
             右下角状态栏，安静、可点、不抢视线；侧栏留给文件树 */}
         <div className="status-bar">
           {/* v0.10.7：标签栏没了，「现在开着哪一篇」就归这里。
-              显示完整库内路径——它比文件名多告诉一件事：这篇在哪个目录 */}
-          <span className="st-path" title={props.currentPath ?? ''}>
-            {props.currentPath ?? ''}
-          </span>
+              显示完整库内路径——它比文件名多告诉一件事：这篇在哪个目录。
+              v0.11.1：Windows 自绘标题栏已经在顶部写了同一条路径，
+              两处都写就是这个仓库被骂过的「上下重复」。谁有标题栏谁显示。 */}
+          {!needsCustomChrome() && (
+            <span className="st-path" title={props.currentPath ?? ''}>
+              {props.currentPath ?? ''}
+            </span>
+          )}
           <span className="st-right">
             {/*
               **插入图片**。这条能力从 v0.7.1 起就写好了（`useAttachments.insertImage`

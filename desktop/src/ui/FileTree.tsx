@@ -65,9 +65,30 @@ export function buildFileTree(paths: string[], dirs: readonly string[] = []): Tr
   return root.children ?? [];
 }
 
-/** 显示名：文件隐藏 .md/.markdown 后缀 */
+/** 显示名：文件隐藏 .md/.markdown 后缀，其余文件连后缀一起去掉（后缀改由角标显示） */
 export function displayName(name: string, isFile: boolean): string {
-  return isFile ? name.replace(/\.(md|markdown)$/i, '') : name;
+  if (!isFile) return name;
+  const md = name.replace(/\.(md|markdown)$/i, '');
+  if (md !== name) return md;
+  // 非 Markdown：`报表.2026.xlsx` → `报表.2026`，后缀交给 fileBadge
+  const i = name.lastIndexOf('.');
+  return i > 0 ? name.slice(0, i) : name;
+}
+
+/**
+ * 非 Markdown 文件右侧的类型角标（`PDF` / `PNG` / `DOCX`…），Obsidian 同款。
+ *
+ * v0.11.1：文件树此前**只由 `.md` 构建**，PDF 被单独钉在侧栏最底下一个扁平分组里。
+ * 现在全部文件都进树、待在它们真正所在的文件夹里，于是必须一眼分得出哪些不是笔记
+ * ——角标就是干这个的，比给每种类型画一个图标便宜也更耐看。
+ * Markdown 返回 null：库里绝大多数是笔记，给它们全挂一个 `MD` 只是噪声。
+ */
+export function fileBadge(name: string): string | null {
+  const m = /\.([a-z0-9]{1,5})$/i.exec(name);
+  if (!m) return null;
+  const ext = m[1].toLowerCase();
+  if (ext === 'md' || ext === 'markdown') return null;
+  return ext.toUpperCase();
 }
 
 /** 拖拽载荷。用组件内 ref 传递而不是只靠 dataTransfer——后者在 WebView2/安卓
@@ -274,6 +295,7 @@ export function FileTree(props: Props) {
         <span className="ft-file-name" title={node.path}>
           {displayName(node.name, true)}
         </span>
+        {fileBadge(node.name) && <span className="ft-badge">{fileBadge(node.name)}</span>}
         <span className="ft-actions">
           <button
             title="删除"

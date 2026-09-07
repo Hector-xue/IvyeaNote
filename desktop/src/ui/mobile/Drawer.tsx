@@ -15,7 +15,7 @@
  */
 import { useMemo, useRef } from 'react';
 import { RibbonIcon } from '../Icons';
-import { buildFileTree, displayName, type TreeNode } from '../FileTree';
+import { buildFileTree, displayName, fileBadge, type TreeNode } from '../FileTree';
 import { searchNotes, type SearchDoc } from '../../lib/searchIndex';
 
 interface Props {
@@ -23,6 +23,10 @@ interface Props {
   vaultName: string;
   files: string[];
   pdfs: string[];
+  /** v0.11.1：库内全部可见文件。树改由它构建，PDF/附件回到各自的文件夹 */
+  allFiles?: string[];
+  /** v0.11.1：点开既不是笔记也不是 PDF 的文件 */
+  onOpenAttachment?(path: string): void;
   emptyDirs: string[];
   currentPath: string | null;
   collapsedDirs: Set<string>;
@@ -49,8 +53,8 @@ export function Drawer(props: Props) {
     [searching, props.searchDocs, props.query]
   );
   const tree = useMemo(
-    () => buildFileTree(props.files, props.emptyDirs),
-    [props.files, props.emptyDirs]
+    () => buildFileTree(props.allFiles ?? props.files, props.emptyDirs),
+    [props.allFiles, props.files, props.emptyDirs]
   );
   const dirCount = useMemo(() => {
     const set = new Set(props.emptyDirs);
@@ -122,6 +126,13 @@ export function Drawer(props: Props) {
     fn();
   };
 
+  /** 点树里的文件该干什么，与桌面 MainView 的 openTreeFile 同一套判定 */
+  const openTreeFile = (path: string) => {
+    if (/\.(md|markdown)$/i.test(path)) props.onSelect(path);
+    else if (/\.pdf$/i.test(path)) props.onOpenPdf(path);
+    else props.onOpenAttachment?.(path);
+  };
+
   const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
     // 层级引导线：靠左内边距 + 一条竖线，让嵌套关系一眼可见（Obsidian 就是这么画的）
     const pad = { paddingLeft: `${10 + depth * 15}px` };
@@ -149,10 +160,11 @@ export function Drawer(props: Props) {
         key={node.path}
         className={`m-tree-row m-tree-file ${props.currentPath === node.path ? 'active' : ''}`}
         style={pad}
-        onClick={clickUnlessPressed(() => props.onSelect(node.path))}
+        onClick={clickUnlessPressed(() => openTreeFile(node.path))}
         {...longPressHandlers('file', node.path, displayName(node.name, true))}
       >
         <span className="m-tree-name">{displayName(node.name, true)}</span>
+        {fileBadge(node.name) && <span className="m-tree-badge">{fileBadge(node.name)}</span>}
       </div>
     );
   };
@@ -171,7 +183,7 @@ export function Drawer(props: Props) {
           </button>
         </div>
         <div className="m-dr-count">
-          {props.files.length + props.pdfs.length} 个文件，{dirCount} 个文件夹
+          {(props.allFiles ?? props.files).length} 个文件，{dirCount} 个文件夹
         </div>
 
         <div className="m-dr-actions">
@@ -233,24 +245,8 @@ export function Drawer(props: Props) {
           ) : (
             <>
               {tree.map((n) => renderNode(n, 0))}
-              {props.pdfs.length > 0 && (
-                <>
-                  <div className="m-dr-hint">PDF</div>
-                  {props.pdfs.map((p) => (
-                    <div
-                      key={p}
-                      className="m-tree-row m-tree-file"
-                      style={{ paddingLeft: '10px' }}
-                      onClick={clickUnlessPressed(() => props.onOpenPdf(p))}
-                      {...longPressHandlers('pdf', p, p.split('/').pop() ?? p)}
-                    >
-                      <span className="m-tree-name">{p.split('/').pop()}</span>
-                      <span className="m-tree-badge">PDF</span>
-                    </div>
-                  ))}
-                </>
-              )}
-              {props.files.length === 0 && props.pdfs.length === 0 && (
+              {/* v0.11.1：删掉底部那个扁平的「PDF」分组，PDF 现在在树里自己的文件夹中 */}
+              {(props.allFiles ?? props.files).length === 0 && (
                 <p className="m-dr-empty">还没有笔记，点上面的「新建笔记」开始</p>
               )}
             </>
