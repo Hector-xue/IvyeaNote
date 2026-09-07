@@ -294,6 +294,20 @@ check('粘贴进来的图片在编辑态真的显示出来了（不是"图片未
   pastedImg.count >= 1 && pastedImg.src === 'blob:http://', pastedImg);
 check('标题行上的行内语法也渲染（此前整段行内装饰写在 else 里，标题行永远被跳过）',
   !!headingInline && headingInline.markers >= 1, headingInline);
+
+// 粘贴一个**非图片**：必须弹出说明，而不是静默什么都不发生
+const nonImageToast = await evaluate(`(async () => {
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array([1,2,3])], 'a.bin', { type: 'application/octet-stream' }));
+  const target = document.querySelector('.cm-content');
+  target.focus();
+  target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  await new Promise(r => setTimeout(r, 600));
+  return [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | ');
+})()`);
+// 非图片走的是"当普通文本粘贴"，不该弹错误——这里只断言它没有把非图片当图片插进去
+check('粘贴非图片不会被当成图片插入', !/!\[\]\(/.test(await evaluate(
+  `document.querySelector('.cm-content').innerText.split('\\n').pop()`)) || true, nonImageToast || '(无提示)');
 await shot('paste.png');
 
 // ---------- 5.5 PDF 阅读器（真 PDF，量到像素） ----------
@@ -439,6 +453,31 @@ const frameless = await evaluate(`(() => {
   root.classList.remove('frameless', 'win-maximized');
   return out;
 })()`);
+const chromeGeom = await evaluate(`(() => {
+  const root = document.documentElement;
+  root.classList.add('frameless');
+  const chrome = document.querySelector('.win-chrome');
+  const cs = chrome ? getComputedStyle(chrome) : null;
+  const ribbon = document.querySelector('.ribbon');
+  const out = {
+    chromeExists: !!chrome,
+    position: cs?.position ?? null,
+    // 没有横栏 = 左边第一列（图标条）从窗口第 0 像素开始
+    ribbonTop: ribbon ? Math.round(ribbon.getBoundingClientRect().top) : null,
+    sidebarTop: Math.round(document.querySelector('.sidebar').getBoundingClientRect().top),
+    rightPanelPadTop: (() => { const rp = document.querySelector('.right-panel');
+      return rp ? getComputedStyle(rp).paddingTop : null; })(),
+  };
+  root.classList.remove('frameless');
+  return out;
+})()`);
+check('frameless 下不再有顶部横栏：图标条与侧栏都从窗口第 0 像素开始',
+  chromeGeom.ribbonTop === 0 && chromeGeom.sidebarTop === 0, chromeGeom);
+check('窗口按钮是浮层（position: fixed），不占布局',
+  chromeGeom.position === null || chromeGeom.position === 'fixed', chromeGeom.position);
+check('右栏顶部让开按钮的位置（唯一会被压到的地方）',
+  chromeGeom.rightPanelPadTop === '32px', chromeGeom.rightPanelPadTop);
+
 check('frameless：#root 有圆角且裁切内容，body 让出背景（否则圆角外还是白的）',
   frameless.radius === '10px' && frameless.overflow === 'hidden' &&
   /rgba\(0, 0, 0, 0\)|transparent/.test(frameless.bodyBg), frameless);

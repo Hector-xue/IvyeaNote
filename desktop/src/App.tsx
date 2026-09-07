@@ -14,7 +14,6 @@ import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
-import { setWindowSubtitle } from './lib/windowTitle';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import type { FileIO } from './lib/sync';
@@ -114,9 +113,6 @@ export default function App() {
   const [vaultId, setVaultId] = useState<number | null>(loadActiveVaultId);
   /** v0.3.4：PDF 列表与元数据（排序） */
   const [currentPath, setCurrentPath] = useState<string | null>(null);
-  useEffect(() => {
-    setWindowSubtitle(currentPath ?? '');
-  }, [currentPath]);
   /** 同步拉取后要重读当前文件，但 currentPath 不能进 useSyncEngine 的依赖——
    *  否则每切换一次笔记就重建一次同步引擎。用 ref 旁路。 */
   const currentPathRef = useRef<string | null>(null);
@@ -176,11 +172,6 @@ export default function App() {
   /** 轻提示：替代 window.alert（安卓 WebView 里 alert 阻塞且割裂） */
   const { toast, toastEl } = useToast();
 
-  /*
-   * 自绘标题栏要显示「现在开着哪一篇」。WindowChrome 挂在 App **外面**
-   * （它必须永远在，App 却是一串 early-return 分支），所以走 windowTitle 这个小 store。
-   * 放在这里而不是某个分支里：这个 effect 无论最后渲染哪一支都会跑。
-   */
   /** 编辑防抖计时器：替代旧的「函数对象挂属性」写法（重构即坏、类型不安全） */
   /**
    * 落盘防抖定时器，**按路径分桶**。

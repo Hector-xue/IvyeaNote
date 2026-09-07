@@ -15,6 +15,7 @@ const actions = (): EditorMenuActions => ({
   heading: vi.fn(),
   insertBlock: vi.fn(),
   insertImage: vi.fn(),
+  insertClipboardImage: vi.fn(),
   link: vi.fn(),
   externalLink: vi.fn(),
   clearFormat: vi.fn(),
@@ -89,6 +90,19 @@ describe('buildEditorMenu', () => {
   it('没有当前笔记时「插入图片」置灰——附件不知道该落在哪', () => {
     const m = buildEditorMenu({ ...base, canInsertImage: false }, actions());
     expect(find(m, 'image')!.disabled).toBe(true);
+    expect(find(m, 'clip-image')!.disabled).toBe(true);
+  });
+
+  /*
+   * v0.11.3：粘贴键在某些 WebView 上拿不到剪贴板里的位图，所以「插入」里必须有一条
+   * 主动去读剪贴板的路——它绕开 paste 事件，是粘贴失灵时唯一还能走通的入口。
+   */
+  it('「插入」里有「剪贴板里的图片」，且与「图片…」是两个不同的动作', () => {
+    const act = actions();
+    const m = buildEditorMenu(base, act);
+    find(m, 'clip-image')!.run!();
+    expect(act.insertClipboardImage).toHaveBeenCalledTimes(1);
+    expect(act.insertImage).not.toHaveBeenCalled();
   });
 
   it('右键点在链接上时，最前面是「打开链接 / 复制链接地址」', () => {

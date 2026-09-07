@@ -31,6 +31,8 @@ export interface EditorMenuActions {
   /** 插入块：table / hr / codeblock / callout / date / time */
   insertBlock(kind: 'table' | 'hr' | 'codeblock' | 'callout' | 'date' | 'time'): void;
   insertImage(): void;
+  /** 主动读系统剪贴板里的图片（粘贴键在某些 WebView 上拿不到图时的可靠入口） */
+  insertClipboardImage(): void;
   /** 新增链接（选区作为链接文字） */
   link(): void;
   /** 新增外部链接（带 https:// 占位） */
@@ -124,6 +126,13 @@ export function buildEditorMenu(ctx: EditorMenuCtx, act: EditorMenuActions): Men
             icon: 'image',
             disabled: !ctx.canInsertImage,
             run: act.insertImage,
+          },
+          {
+            id: 'clip-image',
+            label: '剪贴板里的图片',
+            icon: 'paste',
+            disabled: !ctx.canInsertImage,
+            run: act.insertClipboardImage,
           },
           { id: 'table', label: '表格', icon: 'table', run: () => act.insertBlock('table') },
           { id: 'hr', label: '分隔线', icon: 'minus', run: () => act.insertBlock('hr') },
