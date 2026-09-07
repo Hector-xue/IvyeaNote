@@ -158,4 +158,4 @@ scripts/conformance.sh         # 同步一致性场景 C1~C8
 
 ## 许可
 
-尚未选定开源许可证。在此之前，本仓库代码保留所有权利（All rights reserved）。
+[MIT](LICENSE)
