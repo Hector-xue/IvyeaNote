@@ -66,6 +66,21 @@ export function normalizeServerUrl(raw: string): string {
   return `https://${u}`;
 }
 
+/**
+ * `fetch` 失败时该说什么。
+ *
+ * ⚠️ 这句话此前只写「域名解析失败或服务未启动」，把人往完全错误的方向带了一整轮：
+ * 真实原因是**跨域被浏览器拦掉**——桌面端/安卓端的 WebView 源是
+ * `http://tauri.localhost`，而服务端在 v0.11.5 之前一个 CORS 头都不给，
+ * 于是 `fetch` 抛 `TypeError: Failed to fetch`，与"服务器没起来"长得一模一样。
+ * 浏览器出于安全不会把跨域细节告诉 JS，所以客户端**无法区分**这三种情况，
+ * 那就必须三种都说出来，而不是只报最像的那一种。
+ */
+export const FETCH_FAIL_HINT =
+  '可能是①服务端版本太旧（v0.11.5 起才允许桌面/手机跨域访问，升级服务端即可）；' +
+  '②域名解析失败或服务没启动；③被防火墙/代理拦了。' +
+  '先用浏览器直接打开这个地址试试：能看到状态页就说明是第①种。';
+
 /** 是否公网 http（明文） */
 export function isInsecurePublic(url: string): boolean {
   try {
@@ -111,11 +126,7 @@ export async function probeServer(rawUrl: string): Promise<ProbeResult> {
       return { ok: false, url, message: '连接超时：服务端没响应。检查它是否已启动、防火墙是否放行端口' };
     }
     if (/failed to fetch|network|load failed/i.test(msg)) {
-      return {
-        ok: false,
-        url,
-        message: '连不上：域名解析失败或服务未启动。本机部署填 http://127.0.0.1:8080；外网访问需要配置穿透（见部署引导）',
-      };
+      return { ok: false, url, message: `连不上：${FETCH_FAIL_HINT}` };
     }
     return { ok: false, url, message: `连接失败：${msg}` };
   } finally {

@@ -2,6 +2,7 @@
 // 只依赖 fetch/WebSocket，浏览器与 Tauri 通用。
 
 import type { Tokens } from './store';
+import { FETCH_FAIL_HINT } from './serverConn';
 
 export interface LoginResult {
   access_token: string;
@@ -110,7 +111,20 @@ export class SyncClient {
   }
 
   private async req<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
-    const res = await this.raw(path, init);
+    let res: Response;
+    try {
+      res = await this.raw(path, init);
+    } catch (e) {
+      /*
+       * `fetch` 直接抛 = 请求压根没发出去或响应被拦掉。最常见的是**跨域被拦**
+       * （服务端 v0.11.5 之前没有 CORS，桌面端连自己的服务器都会栽在这里），
+       * 而浏览器不会把跨域细节告诉 JS，原始错误只有一句 `Failed to fetch`。
+       * 原样抛出去的话，用户看到的就是这四个词——这正是「登录报 Failed to fetch」
+       * 查了一整轮才定位的原因。
+       */
+      const raw = e instanceof Error ? e.message : String(e);
+      throw new ApiError(0, 'network_error', `连不上服务器（${raw}）。${FETCH_FAIL_HINT}`);
+    }
     if (res.status === 401 && !retried && this.tokens.refresh) {
       await this.ensureRefreshed();
       return this.req<T>(path, init, true);
