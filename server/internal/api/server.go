@@ -67,7 +67,51 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/mcp/tokens", s.authed(s.handleMCPTokenList))
 	mux.Handle("DELETE /api/v1/mcp/tokens/{id}", s.authed(s.handleMCPTokenDelete))
 	mux.Handle("GET /ws", s.authedWS(s.hub.HandleWS))
-	return mux
+	return withCORS(mux)
+}
+
+/*
+withCORS 让**桌面端与安卓端**能连上这台服务器。
+
+# 为什么以前没有也"没问题"
+
+桌面端 / 安卓端的 WebView 源是 `http://tauri.localhost`（Linux 上是 `tauri://localhost`），
+它去请求 `https://note.example.com/api/v1/...` 是**跨域**请求。服务端一个
+`Access-Control-Allow-Origin` 都不给，浏览器就把响应整个拦掉，客户端拿到的是
+`TypeError: Failed to fetch`——而客户端把这一类错误报成「域名解析失败或服务未启动」，
+于是现象看起来像"服务器没起来"，实际上服务器 200 得好好的。
+
+这条路**从来没通过**，而它一直没被发现，是因为历次端到端验证都跑在网页版
+（`/app/` 由这台服务器自己托管）上——**同源，恰好绕开了 CORS**。
+教训：验证方式必须覆盖真实客户端的来源，否则"验证通过"只证明了被验证的那条路。
+
+# 为什么可以反射任意 Origin
+
+这套 API 是 **Bearer 令牌**鉴权，不用 Cookie，因此不存在"浏览器自动带上凭据"
+这一类 CSRF 风险：恶意页面拿不到别的源里存着的令牌，没有令牌这些接口一律 401。
+所以这里反射请求方的 Origin 并**不**声明 `Allow-Credentials`——
+这正是令牌鉴权 API 的标准姿势。静态页面（状态页 / 网页版）同源访问，加不加都无所谓。
+*/
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			h := w.Header()
+			h.Set("Access-Control-Allow-Origin", origin)
+			// 响应随 Origin 变化，必须告诉缓存别串台
+			h.Add("Vary", "Origin")
+			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			h.Set("Access-Control-Max-Age", "86400")
+		}
+		// 预检。此前没有任何 OPTIONS 路由，net/http 的 mux 直接回 405，
+		// 于是带自定义头（Authorization / Content-Type）的请求连发都发不出去。
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ---------- 通用工具 ----------
