@@ -326,7 +326,8 @@ jobs:
           if [ -z "${ANDROID_KEYSTORE_B64:-}" ] || [ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ]; then
             echo "::error::缺少 ANDROID_KEYSTORE_B64 / ANDROID_KEYSTORE_PASSWORD Secret。"
             echo "::error::没有固定签名密钥就只能现生成一把，那会让所有老用户升级时报「签名不一致」。"
-            echo "::error::生成与配置方法见 docs/安卓签名密钥.md"
+            echo "::error::请用 keytool 生成 RSA 密钥库，再配成三个仓库 Secret："
+            echo "::error::  ANDROID_KEYSTORE_B64（base64 -w0 的密钥库）/ ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS"
             exit 1
           fi
           KS="$RUNNER_TEMP/ivnote-release.keystore"
