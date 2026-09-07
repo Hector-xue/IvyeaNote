@@ -68,6 +68,41 @@ func TestCORSPreflightNotRejected(t *testing.T) {
 	}
 }
 
+/*
+v0.11.6：**回显浏览器要求的头**。
+
+v0.11.5 第一版把 Allow-Headers 写死成 "Authorization, Content-Type"，
+结果登录成功、同步全挂——同步的每条请求都带 X-Device-Id，浏览器逐条比对，
+缺一个整个请求就发不出去。这条用例锁住"客户端加了新头也不会再挂"。
+*/
+func TestCORSPreflightEchoesRequestedHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/sync/push", nil)
+	req.Header.Set("Origin", "http://tauri.localhost")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	req.Header.Set("Access-Control-Request-Headers", "authorization,content-type,x-device-id")
+	rec := httptest.NewRecorder()
+	corsHandler().ServeHTTP(rec, req)
+
+	got := rec.Header().Get("Access-Control-Allow-Headers")
+	if got != "authorization,content-type,x-device-id" {
+		t.Fatalf("期望原样回显请求的头，实际 %q", got)
+	}
+	if v := rec.Header().Values("Vary"); len(v) < 2 {
+		t.Fatalf("回显了请求头就必须 Vary 上它，实际 Vary=%v", v)
+	}
+}
+
+// 客户端要读 X-Ivyea-Version 显示服务端版本；跨域下不显式 expose 就读不到
+func TestCORSExposesVersionHeader(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	req.Header.Set("Origin", "http://tauri.localhost")
+	rec := httptest.NewRecorder()
+	corsHandler().ServeHTTP(rec, req)
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "X-Ivyea-Version" {
+		t.Fatalf("期望暴露 X-Ivyea-Version，实际 %q", got)
+	}
+}
+
 func TestCORSNoOriginNoHeaders(t *testing.T) {
 	// 同源请求与 curl 不带 Origin，不该平白多出一组 CORS 头
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
