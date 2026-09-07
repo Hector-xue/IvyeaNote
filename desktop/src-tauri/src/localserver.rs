@@ -47,7 +47,7 @@ pub struct ServerInfo {
 ///
 /// 打包后 Tauri 会把 `ivnote-server-<target-triple>` 复制成 `ivnote-server`（Windows 带 .exe）
 /// 放在主程序旁边；`tauri dev` 下则还留在 `src-tauri/binaries/`，两处都找一下。
-fn sidecar_path() -> Result<PathBuf, String> {
+pub(crate) fn sidecar_path() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe
         .parent()

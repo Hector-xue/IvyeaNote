@@ -3,6 +3,8 @@ pub mod discover;
 pub use discover::discover_servers;
 // v0.10.5：内置同步服务端（sidecar 起停）。Windows+安卓这个主场景不该要求用户先搭服务器
 pub mod localserver;
+// v0.11.0：Windows 防火墙放行。「电脑网线 + 手机 WiFi 同步不了」十有八九卡在这
+pub mod firewall;
 
 // `AppHandle::state()` 来自 Manager trait，退出钩子里要用
 use tauri::Manager;
@@ -24,7 +26,9 @@ pub fn run() {
             localserver::start_local_server,
             localserver::stop_local_server,
             localserver::local_server_status,
-            localserver::local_server_available
+            localserver::local_server_available,
+            firewall::firewall_status,
+            firewall::fix_firewall
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

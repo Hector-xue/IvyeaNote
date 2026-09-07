@@ -15,7 +15,6 @@ import type { FileIO } from '../lib/sync';
 import { attachmentDir, joinPath, type AttachMode } from '../lib/attachPath';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 
 /**
  * 附件落盘的唯一取名出口：`<目录>/日期-原名`，重名加 -1 -2…
@@ -67,6 +66,15 @@ export interface Attachments {
   /** 非 null 时主区显示 PDF（值是 blob URL） */
   pdfView: string | null;
   /**
+   * 正在预览的 PDF 的**库内路径**。
+   *
+   * v0.11.0 新增，因为只有 `pdfView` 时消费方拿不到路径，于是两处都错着：
+   * 编辑区上方那行面包屑打印的是 `blob:tauri://…` 一长串，而侧栏
+   * 「哪个 PDF 是当前打开的」判定写的是 `pdfView === n.path`——
+   * 一个 blob URL 永远不等于一个相对路径，高亮从来没亮过。
+   */
+  pdfPath: string | null;
+  /**
    * 选图 → 按设置落盘 → 返回**库内**相对路径（null = 取消或无库）。
    * `notePath` 决定落在哪：附件要跟着笔记走，就得知道是哪一篇。
    */
@@ -76,12 +84,15 @@ export interface Attachments {
   /** 阅读态：相对路径 → 可显示的 blob URL */
   resolveImage(rel: string): Promise<string | null>;
   openPdf(path: string): Promise<void>;
+  /** 交给系统 PDF 应用打开（只有绑定了磁盘文件夹的库才可能成功） */
+  openPdfExternal(path: string): Promise<void>;
   closePdf(): void;
 }
 
 export function useAttachments(deps: AttachmentsDeps): Attachments {
   const { vaultPath, io, refreshFiles, doSync, toast, onShowPdf, errText, attachMode } = deps;
   const [pdfView, setPdfView] = useState<string | null>(null);
+  const [pdfPath, setPdfPath] = useState<string | null>(null);
   const pdfUrlRef = useRef<string | null>(null);
   const imgCache = useRef<Map<string, string>>(new Map());
 
@@ -165,19 +176,30 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
     [hasVault, io, root]
   );
 
+  /**
+   * 交给系统 PDF 应用。v0.11.0 之前这是**安卓上唯一的一条路**（WebView 不内嵌
+   * PDF），现在降级成一个可选动作：应用内已经有 pdf.js 阅读器了，三端一致。
+   * 只有绑了磁盘文件夹才可能成功——OPFS 库的文件在浏览器沙箱里，系统看不见。
+   */
+  const openPdfExternal = useCallback(
+    async (path: string) => {
+      if (!vaultPath || vaultPath.startsWith('opfs://')) {
+        toast('这个库存在应用内部，系统应用打不开；请先在设置里绑定磁盘文件夹', 'error');
+        return;
+      }
+      try {
+        const { openPath } = await import('@tauri-apps/plugin-opener');
+        await openPath(`${vaultPath.replace(/\/$/, '')}/${path}`);
+      } catch (e) {
+        toast(`无法打开 PDF：${errText(e)}`, 'error');
+      }
+    },
+    [vaultPath, toast, errText]
+  );
+
   const openPdf = useCallback(
     async (path: string) => {
       if (!hasVault) return;
-      // 安卓的 WebView 不内嵌 PDF，交给系统应用打开
-      if (isAndroid && vaultPath && !vaultPath.startsWith('opfs://')) {
-        try {
-          const { openPath } = await import('@tauri-apps/plugin-opener');
-          await openPath(`${vaultPath.replace(/\/$/, '')}/${path}`);
-        } catch (e) {
-          toast(`无法打开 PDF：${errText(e)}`, 'error');
-        }
-        return;
-      }
       try {
         const bytes = await io.readBinary(root, path);
         if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
@@ -187,11 +209,12 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
         pdfUrlRef.current = url;
         onShowPdf();
         setPdfView(url);
+        setPdfPath(path);
       } catch (e) {
         toast(`打开 PDF 失败：${errText(e)}`, 'error');
       }
     },
-    [hasVault, vaultPath, io, root, toast, onShowPdf, errText]
+    [hasVault, io, root, toast, onShowPdf, errText]
   );
 
   const closePdf = useCallback(() => {
@@ -200,7 +223,8 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
       pdfUrlRef.current = null;
     }
     setPdfView(null);
+    setPdfPath(null);
   }, []);
 
-  return { pdfView, insertImage, saveImageFile, resolveImage, openPdf, closePdf };
+  return { pdfView, pdfPath, insertImage, saveImageFile, resolveImage, openPdf, openPdfExternal, closePdf };
 }

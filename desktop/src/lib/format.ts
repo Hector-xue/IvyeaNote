@@ -126,3 +126,80 @@ export function insertImage(text: string, sel: Sel, relPath: string, href = relP
   const pos = sel.from + snippet.length;
   return { text: next, sel: { from: pos, to: pos } };
 }
+
+/**
+ * 设置标题级别（v0.11.0，右键「段落设置」用）。
+ *
+ * 与 `cycleHeading` 的循环不同：这里是**指定**级别，`level=0` 表示恢复正文。
+ * 工具栏按一下循环是快的，菜单里点「标题 3」却得到「标题 1」就是错的。
+ */
+export function setHeading(text: string, sel: Sel, level: number): EditResult {
+  const { start, end } = lineRange(text, sel);
+  const lines = text.slice(start, end).split('\n');
+  const nextLines = lines.map((l) => {
+    const body = l.replace(/^#{1,6}\s+/, '');
+    return level > 0 ? `${'#'.repeat(level)} ${body}` : body;
+  });
+  const nextBlock = nextLines.join('\n');
+  const next = text.slice(0, start) + nextBlock + text.slice(end);
+  return { text: next, sel: { from: start, to: start + nextBlock.length } };
+}
+
+/**
+ * 在光标处插入一段**块级**内容（表格 / 分隔线 / 代码块 / 标注）。
+ *
+ * 不在行首就先换行——把一个表格塞进一行文字中间，Markdown 不会把它当表格，
+ * 用户看到的是一串竖线。插入后光标落在块的**第一个可编辑位置**（占位符处）。
+ */
+export function insertBlock(text: string, sel: Sel, block: string, caretOffset?: number): EditResult {
+  const atLineStart = sel.from === 0 || text[sel.from - 1] === '\n';
+  const lead = atLineStart ? '' : '\n';
+  const snippet = `${lead}${block}`;
+  const next = text.slice(0, sel.from) + snippet + text.slice(sel.to);
+  const pos = sel.from + lead.length + (caretOffset ?? block.length);
+  return { text: next, sel: { from: pos, to: pos } };
+}
+
+/** 在光标处插入一段纯文本（日期/时间这类），光标落到末尾 */
+export function insertText(text: string, sel: Sel, snippet: string): EditResult {
+  const next = text.slice(0, sel.from) + snippet + text.slice(sel.to);
+  const pos = sel.from + snippet.length;
+  return { text: next, sel: { from: pos, to: pos } };
+}
+
+/**
+ * 清除选区里的行内格式（v0.11.0）。
+ *
+ * 只脱掉**成对**的标记与行首的块标记，链接保留文字丢掉地址。
+ * 刻意不碰行内代码里的内容以外的东西——「清除格式」不该顺手改动正文语义。
+ */
+export function clearFormatting(text: string, sel: Sel): EditResult {
+  const selected = text.slice(sel.from, sel.to);
+  if (!selected) return { text, sel };
+  const cleaned = selected
+    .replace(/!\[([^\]\n]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1')
+    .replace(/\[([^\]\n]*)\]\([^)\s]*(?:\s+"[^"]*")?\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/==([^=\n]+)==/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/^\s*(#{1,6}\s+|>\s+|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+\.\s+)/gm, '');
+  const next = text.slice(0, sel.from) + cleaned + text.slice(sel.to);
+  return { text: next, sel: { from: sel.from, to: sel.from + cleaned.length } };
+}
+
+/**
+ * 库内双链 `[[目标]]`（v0.11.0，右键「新增链接」）。
+ *
+ * 与 `insertLink`（外部链接 `[文字](https://)`）分开：Obsidian 的右键菜单里
+ * 「新增链接」就是双链、「新增外部链接」才是 Markdown 链接，两者不该混成一个。
+ * 有选区时把选中的文字当成目标，光标落在目标上，接着敲就能改（也会触发 [[ 补全）。
+ */
+export function insertWikiLink(text: string, sel: Sel): EditResult {
+  const selected = text.slice(sel.from, sel.to);
+  const snippet = `[[${selected}]]`;
+  const next = text.slice(0, sel.from) + snippet + text.slice(sel.to);
+  const inner = sel.from + 2;
+  return { text: next, sel: { from: inner, to: inner + selected.length } };
+}

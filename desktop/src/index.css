@@ -9,6 +9,70 @@ body,
   height: 100%;
 }
 
+/* ============ v0.11.0：自绘窗口边框（Windows）============
+   `frameless` 由 ui/WindowChrome 在 <html> 上打开。三条缺一不可：
+   ① 窗口是 transparent 的，html/body **必须**让出背景，否则圆角外面照样是白的；
+   ② 圆角画在 #root，并 overflow:hidden 把内容裁进去；
+   ③ 最大化时收成直角——不然四个角会露出桌面。 */
+html.frameless,
+html.frameless body {
+  background: transparent;
+}
+html.frameless #root {
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+  /* 系统投影随边框一起没了，补一条极淡描边，窗口才有边界 */
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+html.frameless.win-maximized #root {
+  border-radius: 0;
+  box-shadow: none;
+}
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部那条：左边整片是拖拽区（什么都不画），右边三颗窗口按钮 */
+.win-chrome {
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  flex: 0 0 32px;
+  background: var(--panel);
+  user-select: none;
+}
+.win-drag {
+  flex: 1;
+  min-width: 0;
+}
+.win-buttons {
+  display: flex;
+}
+.win-btn {
+  width: 46px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.win-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.win-btn.danger:hover {
+  background: #e5484d;
+  color: #fff;
+}
+/* 圆角窗口的右上角：关闭键的外角要跟着圆，否则会有一小块方角戳出去 */
+html.frameless:not(.win-maximized) .win-btn.danger:hover {
+  border-top-right-radius: 10px;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -30,7 +94,10 @@ button {
 /* ============ 整体布局：侧栏与编辑区一体，无独立顶栏 ============ */
 .app {
   display: flex;
-  height: 100%;
+  /* #root 现在是纵向 flex（上面可能有一条自绘边框），所以不能再写死 height:100%，
+     否则加上那 32px 会溢出一屏、底部状态栏被推出窗口外 */
+  flex: 1;
+  min-height: 0;
 }
 
 /* ============ 侧栏 ============ */
@@ -1543,14 +1610,85 @@ button {
 .pdf-file .file-name::before {
   content: '📄 ';
 }
-.pdf-frame {
+/* v0.11.0：应用内 pdf.js 阅读器（替代 <iframe src=blob:>，见 ui/PdfViewer.tsx） */
+.pdf-view {
   flex: 1;
-  border: none;
-  width: 100%;
-  background: #525659;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-2);
 }
-.close-pdf {
-  margin-left: 10px;
+.pdf-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 6px var(--sp-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.pdf-name {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+.pdf-gap {
+  flex: 1;
+}
+.pdf-pageno {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 68px;
+  text-align: center;
+}
+.pdf-zoom {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-1);
+  min-width: 72px;
+}
+.pdf-zoom:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.pdf-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-3) var(--sp-6);
+}
+/* 页面在渲染完成前也要占住位置，否则滚动条会一边滚一边跳 */
+.pdf-page {
+  background: #fff;
+  box-shadow: var(--shadow-pop);
+  border-radius: 2px;
+  min-height: 200px;
+  width: 100%;
+  max-width: 720px;
+}
+.pdf-page canvas {
+  display: block;
+}
+.pdf-msg {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  padding: var(--sp-6) var(--sp-4);
+}
+.pdf-err {
+  color: var(--danger);
+  max-width: 520px;
+  text-align: center;
 }
 
 /* v0.6.0 H3：连接探测 */
@@ -1709,24 +1847,132 @@ button {
 .tag-count { color: var(--muted); font-size: 11px; }
 
 
-/* v0.7.1 F8: graph view */
-.graph-card {
-  width: min(720px, 94vw);
-  background: var(--panel, #fff);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 16px;
+/* v0.11.0：图谱占满窗口（v0.7.1 那个 720px 弹窗放不下任何真实规模的库） */
+.graph-full {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
 }
-.graph-head { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
-.graph-head .dlg-title { margin: 0; flex: 1; }
-.graph-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
-.graph-svg { width: 100%; background: var(--bg, #fafafa); border: 1px solid var(--border); border-radius: 10px; }
-.graph-edge { stroke: var(--border, #ccc); stroke-width: 1.2; }
-.graph-node circle { fill: var(--accent, #4a8); opacity: 0.85; cursor: pointer; }
-.graph-node:hover circle { opacity: 1; }
-.graph-node text { font-size: 11px; fill: var(--muted, #666); pointer-events: none; }
-.graph-node.virtual circle { fill: none; stroke: var(--muted); stroke-dasharray: 3 3; }
-.graph-node.current circle { fill: var(--danger, #c44); }
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.graph-title {
+  font-size: var(--fs-lead);
+  font-weight: var(--fw-bold);
+}
+.graph-count {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.graph-search {
+  width: 200px;
+  padding: 4px var(--sp-2);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+}
+.graph-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.graph-chk {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.graph-chk input[type='range'] {
+  width: 72px;
+}
+.graph-depth {
+  font-variant-numeric: tabular-nums;
+}
+.graph-gap {
+  flex: 1;
+}
+.graph-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+.graph-canvas:active {
+  cursor: grabbing;
+}
+.graph-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.graph-hint {
+  position: absolute;
+  left: var(--sp-3);
+  bottom: var(--sp-3);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  pointer-events: none;
+}
+.graph-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.9;
+}
+.graph-edge {
+  stroke: var(--border);
+  transition: opacity var(--dur-1) var(--ease);
+}
+.graph-edge.dim {
+  opacity: 0.18;
+}
+.graph-node circle {
+  fill: var(--accent);
+  opacity: 0.85;
+  cursor: pointer;
+}
+.graph-node:hover circle {
+  opacity: 1;
+}
+.graph-node text {
+  fill: var(--muted);
+  pointer-events: none;
+}
+/* 淡出而不是隐藏：整张图的形状还在，只是不抢注意力 */
+.graph-node.dim {
+  opacity: 0.16;
+}
+.graph-node.virtual circle {
+  fill: none;
+  stroke: var(--muted);
+  stroke-dasharray: 3 3;
+}
+.graph-node.current circle {
+  fill: var(--danger);
+}
 
 /* v0.10.2：侧栏条目要能长按呼出操作单。安卓 WebView 上长按会先进入文字选择，
    把 contextmenu / touch 长按抢掉——用户体感就是"长按没反应"。
@@ -1917,4 +2163,125 @@ button {
 /* 状态栏：同步失败要一眼看得出来，而不是和"已同步"共用一套灰 */
 .status-bar .st-item.st-fail {
   color: var(--danger, #c2453f);
+}
+
+/* ============ v0.11.0：同步现状与连接诊断 ============ */
+.sync-now {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: var(--panel-2);
+  border-radius: var(--r-2);
+}
+.sync-badge {
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-sm);
+  padding: 2px var(--sp-2);
+  border-radius: var(--r-1);
+  white-space: nowrap;
+}
+.sync-badge.off {
+  color: var(--muted);
+  background: var(--panel);
+}
+.sync-badge.lan {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+.sync-badge.remote {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.sync-desc {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  flex: 1;
+  min-width: 200px;
+}
+
+.diag {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+}
+.diag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.diag-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0;
+  font-size: var(--fs-sm);
+}
+.diag-text {
+  flex: 1;
+  color: var(--muted);
+}
+.diag-text b {
+  color: var(--text);
+  font-weight: var(--fw-bold);
+}
+/* 状态点：绿=这一关过了，红=卡在这里。不用文字标签，一列点比一列字好扫 */
+.diag-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 8px;
+  background: var(--muted);
+}
+.diag-row.ok .diag-dot {
+  background: var(--ok);
+}
+.diag-row.bad .diag-dot {
+  background: var(--danger);
+}
+.diag-addrs {
+  list-style: none;
+  margin: var(--sp-1) 0 var(--sp-2);
+  padding-left: 16px;
+}
+.diag-addrs li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px 0;
+  font-size: var(--fs-sm);
+}
+.diag-addrs code {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.diag-tag {
+  font-size: var(--fs-xs);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--r-1);
+  padding: 0 6px;
+}
+.diag-more {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.diag-more summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.diag-list {
+  margin: var(--sp-2) 0 0;
+  padding-left: 20px;
+  line-height: 1.85;
+}
+.diag-list b {
+  color: var(--text);
+  font-weight: var(--fw-bold);
 }
