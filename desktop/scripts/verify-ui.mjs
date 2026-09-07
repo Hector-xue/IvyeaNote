@@ -239,7 +239,162 @@ await shot('menu.png');
 await evaluate(`document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}))`);
 await new Promise((r) => setTimeout(r, 300));
 
+// ---------- 5.2 粘贴图片 ----------
+/*
+ * 用户第三次提「还是无法直接粘贴图片在文档里面显示」。这里派发一个**真的**
+ * paste 事件（带一张 1x1 PNG 的 File），走完整条链路：
+ * 剪贴板 → 落盘 Attachments → 插入 Markdown → 编辑态渲染成 <img>。
+ * 纯函数测不到这条链，它跨了三个模块。
+ */
+const PNG_1X1 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const pasted = await evaluate(`(async () => {
+  const bin = atob(${JSON.stringify(PNG_1X1)});
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const file = new File([bytes], 'shot.png', { type: 'image/png' });
+  const dt = new DataTransfer();
+  dt.items.add(file);
+  const target = document.querySelector('.cm-content');
+  target.focus();
+  // 光标放到文末：真实使用就是在正文里粘，而不是恰好停在标题行
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  const before = target.innerText;
+  target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 1500));
+  return { before, after: document.querySelector('.cm-content').innerText };
+})()`);
+check('粘贴图片后正文里出现了图片引用', /!\[\]\([^)]*\.png\)/.test(pasted.after ?? ''), {
+  变化: (pasted.after ?? '').replace(pasted.before ?? '', '').slice(0, 80),
+});
+
+// 让光标离开那一行，图片装饰才会替换掉源码
+await evaluate(`(() => { document.querySelector('.cm-content')?.blur(); return true })()`);
+await new Promise((r) => setTimeout(r, 900));
+const pastedImg = await evaluate(`(() => {
+  const imgs = [...document.querySelectorAll('.cm-live-img')];
+  return {
+    count: imgs.length,
+    src: imgs[0]?.getAttribute('src')?.slice(0, 12) ?? null,
+    natural: imgs[0] ? imgs[0].naturalWidth : null,
+    missing: document.querySelectorAll('.cm-live-img-missing').length,
+  };
+})()`);
+// 标题行上的行内语法必须也渲染（v0.11.2 之前整段行内装饰写在 else 里，标题行永远被跳过）
+const headingInline = await evaluate(`(() => {
+  const line = [...document.querySelectorAll('.cm-line')].find(l => l.textContent.startsWith('# '));
+  return line ? { text: line.textContent.slice(0, 40), markers: line.querySelectorAll('.cm-live-marker').length } : null;
+})()`);
+check('粘贴进来的图片在编辑态真的显示出来了（不是"图片未找到"占位）',
+  pastedImg.count >= 1 && pastedImg.src === 'blob:http://', pastedImg);
+check('标题行上的行内语法也渲染（此前整段行内装饰写在 else 里，标题行永远被跳过）',
+  !!headingInline && headingInline.markers >= 1, headingInline);
+await shot('paste.png');
+
+// ---------- 5.5 PDF 阅读器（真 PDF，量到像素） ----------
+/*
+ * 直接把一个 3 页的 PDF 写进 OPFS（应用在浏览器里就是用 OPFS 当库），刷新后从
+ * 文件树点开它。这是**唯一**能验"PDF 显示得全不全"的方式——纯函数测不到 canvas 尺寸。
+ */
+const SAMPLE_PDF_B64 =
+  'JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUiA1IDAgUiA3IDAgUl0gL0NvdW50IDMgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUgODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA5IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA4NSA+PgpzdHJlYW0KQlQgL0YxIDQ4IFRmIDYwIDcwMCBUZCAoUEFHRSAxKSBUaiBFVApCVCAvRjEgMjQgVGYgNjAgMTIwIFRkIChib3R0b20gb2YgcGFnZSAxKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUgODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA5IDAgUiA+PiA+PiAvQ29udGVudHMgNiAwIFIgPj4KZW5kb2JqCjYgMCBvYmoKPDwgL0xlbmd0aCA4NSA+PgpzdHJlYW0KQlQgL0YxIDQ4IFRmIDYwIDcwMCBUZCAoUEFHRSAyKSBUaiBFVApCVCAvRjEgMjQgVGYgNjAgMTIwIFRkIChib3R0b20gb2YgcGFnZSAyKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjcgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUgODQyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA5IDAgUiA+PiA+PiAvQ29udGVudHMgOCAwIFIgPj4KZW5kb2JqCjggMCBvYmoKPDwgL0xlbmd0aCA4NSA+PgpzdHJlYW0KQlQgL0YxIDQ4IFRmIDYwIDcwMCBUZCAoUEFHRSAzKSBUaiBFVApCVCAvRjEgMjQgVGYgNjAgMTIwIFRkIChib3R0b20gb2YgcGFnZSAzKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjkgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgMTAKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDEyNyAwMDAwMCBuIAowMDAwMDAwMjUzIDAwMDAwIG4gCjAwMDAwMDAzODggMDAwMDAgbiAKMDAwMDAwMDUxNCAwMDAwMCBuIAowMDAwMDAwNjQ5IDAwMDAwIG4gCjAwMDAwMDA3NzUgMDAwMDAgbiAKMDAwMDAwMDkxMCAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDEwIC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo5ODAKJSVFT0YK';
+await evaluate(`(async () => {
+  const bin = atob(${JSON.stringify(SAMPLE_PDF_B64)});
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const root = await navigator.storage.getDirectory();
+  // 库目录名形如 vault-<id>；本地模式是负数 id。挑第一个存在的
+  let dir = null;
+  for await (const [name, handle] of root.entries()) {
+    if (handle.kind === 'directory' && name.startsWith('vault-')) { dir = handle; break; }
+  }
+  if (!dir) return 'no-vault-dir';
+  const fh = await dir.getFileHandle('手册.pdf', { create: true });
+  const w = await fh.createWritable();
+  await w.write(bytes);
+  await w.close();
+  return 'ok';
+})()`);
+await send('Page.reload');
+await new Promise((r) => setTimeout(r, 2600));
+
+const pdfNode = await evaluate(`(() => {
+  const el = document.querySelector('.ft-root .ft-file-name[title="手册.pdf"]');
+  if (!el) return null;
+  const row = el.closest('.ft-file');
+  const r = row.getBoundingClientRect();
+  return { badge: row.querySelector('.ft-badge')?.textContent ?? null, x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) };
+})()`);
+check('PDF 出现在文件树里并带 PDF 角标', pdfNode && pdfNode.badge === 'PDF', pdfNode);
+
+if (pdfNode) {
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: pdfNode.x, y: pdfNode.y, button: 'left', clickCount: 1, buttons: 1 });
+  }
+  await new Promise((r) => setTimeout(r, 3000));
+  const pdf = await evaluate(`(() => {
+    const view = document.querySelector('.pdf-view');
+    if (!view) return null;
+    const scroll = view.querySelector('.pdf-scroll');
+    const pages = [...view.querySelectorAll('.pdf-page')];
+    const geo = pages.map((p) => {
+      const c = p.querySelector('canvas');
+      const pr = p.getBoundingClientRect();
+      return {
+        wrapW: Math.round(pr.width), wrapH: Math.round(pr.height),
+        canvasW: c ? Math.round(c.getBoundingClientRect().width) : null,
+        canvasH: c ? Math.round(c.getBoundingClientRect().height) : null,
+      };
+    });
+    return {
+      name: view.querySelector('.pdf-name')?.textContent ?? null,
+      pageno: view.querySelector('.pdf-pageno')?.textContent?.trim() ?? null,
+      pages: pages.length,
+      geo,
+      scrollH: scroll.scrollHeight, clientH: scroll.clientHeight,
+      overflowX: scroll.scrollWidth - scroll.clientWidth,
+    };
+  })()`);
+  check('PDF 打开后三页都在，页码是 1 / 3（不是 3 / 3）',
+    pdf && pdf.pages === 3 && pdf.pageno === '1 / 3', pdf && { pages: pdf.pages, pageno: pdf.pageno, name: pdf.name });
+  const g = pdf?.geo?.[0];
+  check('第一页的容器尺寸与 canvas 完全一致（容器被 max-width 夹住就会露出半张页面）',
+    !!g && g.canvasW !== null && Math.abs(g.wrapW - g.canvasW) <= 1 && Math.abs(g.wrapH - g.canvasH) <= 1, g);
+  check('没有横向溢出（页面被夹窄时 canvas 会顶出去）', !!pdf && pdf.overflowX <= 1, pdf && pdf.overflowX);
+  check('三页都渲染出了 canvas', !!pdf && pdf.geo.every((x) => x.canvasW && x.canvasW > 50), pdf && pdf.geo);
+  check('整篇可滚动（内容高度远大于视口——被 flex 压扁时这里会几乎相等）',
+    !!pdf && pdf.scrollH > pdf.clientH * 2, pdf && { scrollH: pdf.scrollH, clientH: pdf.clientH });
+  await shot('pdf.png');
+  // 关掉预览并重新打开一篇笔记：上面 Page.reload 之后当前笔记是空的，
+  // 后面的用例都以"开着一篇笔记"为前提
+  await evaluate(`(() => { const b=[...document.querySelectorAll('.pdf-bar button')].pop(); b?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  check('关闭 PDF 预览不会把应用打进错误页（destroy 在 loadingTask 上，不在 document 上）',
+    (await evaluate(`!document.querySelector('.err-wrap') && !!document.querySelector('.ribbon')`)));
+  await evaluate(`(() => {
+    const f = document.querySelector('.ft-root .ft-file');
+    f?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return !!f;
+  })()`);
+  await new Promise((r) => setTimeout(r, 900));
+}
+
 // ---------- 6. 图谱 ----------
+console.log('  · 图谱前状态 =', JSON.stringify(await evaluate(`(() => ({
+  hasGraphBtn: !!([...document.querySelectorAll('button')].find(x => x.title === '图谱')),
+  pdfOpen: !!document.querySelector('.pdf-view'),
+  currentFile: document.querySelector('.ft-file.active .ft-file-name')?.getAttribute('title') ?? null,
+  statusBar: (() => { const sb = document.querySelector('.status-bar'); if (!sb) return null;
+    const r = sb.getBoundingClientRect();
+    return { h: Math.round(r.height), bottom: Math.round(r.bottom), winH: window.innerHeight }; })(),
+  rootChild: document.getElementById('root')?.firstElementChild?.className ?? null,
+  bodyText: (document.body.innerText || '').slice(0, 220),
+}))()`)));
 await evaluate(`(() => {
   const b = [...document.querySelectorAll('button')].find(x => x.title === '图谱');
   b?.click(); return !!b;

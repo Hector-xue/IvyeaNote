@@ -35,24 +35,25 @@ export interface PdfViewerProps {
   onOpenExternal?(): void;
 }
 
-type PdfDoc = {
-  numPages: number;
-  getPage(n: number): Promise<PdfPage>;
-  destroy(): Promise<void>;
-};
-type PdfPage = {
-  getViewport(o: { scale: number }): { width: number; height: number };
-  render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown; canvas: HTMLCanvasElement }): {
-    promise: Promise<void>;
-    cancel(): void;
-  };
-};
+/*
+ * ⚠️ 用 pdf.js **自带**的类型，不要手写结构化类型。
+ *
+ * v0.11.1 这里是手写的 `type PdfDoc = { …; destroy(): Promise<void> }`，配上
+ * `as unknown as PdfDoc` 的断言——于是 tsc 一路绿，而运行时
+ * `PDFDocumentProxy` 上**根本没有 destroy()**（它在 PDFDocumentLoadingTask 上）。
+ * 后果不是"关不干净"，是关闭预览时抛 TypeError 把整个应用打进 ErrorBoundary 错误页。
+ * 手写类型 + 强制断言等于把类型检查关掉，正是这种 API 记错最需要它的时候。
+ */
+type PdfDoc = import('pdfjs-dist').PDFDocumentProxy;
+type PdfTask = import('pdfjs-dist').PDFDocumentLoadingTask;
 
 const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3];
 
 export function PdfViewer({ url, path, onClose, onOpenExternal }: PdfViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PdfDoc | null>(null);
+  /** 加载任务。销毁走它，不走 document——document 上没有 destroy */
+  const taskRef = useRef<PdfTask | null>(null);
   const [numPages, setNumPages] = useState(0);
   const [page, setPage] = useState(1);
   /** null = 适应宽度（默认）；数字 = 固定倍率 */
@@ -79,9 +80,10 @@ export function PdfViewer({ url, path, onClose, onOpenExternal }: PdfViewerProps
         // enableScripting 默认就是 false：PDF 里嵌的 JavaScript 一律不执行。
         // 我们只要看，不需要表单脚本，而这正是 pdf.js 历史漏洞的入口。
         const task = pdfjs.getDocument({ url });
-        const doc = (await task.promise) as unknown as PdfDoc;
+        taskRef.current = task;
+        const doc = await task.promise;
         if (cancelled) {
-          void doc.destroy();
+          void task.destroy();
           return;
         }
         docRef.current = doc;
@@ -97,9 +99,11 @@ export function PdfViewer({ url, path, onClose, onOpenExternal }: PdfViewerProps
       cancelled = true;
       for (const t of tasks.current.values()) t.cancel();
       tasks.current.clear();
-      const d = docRef.current;
       docRef.current = null;
-      if (d) void d.destroy();
+      const t = taskRef.current;
+      taskRef.current = null;
+      // destroy 在**加载任务**上；对着 document 调会抛 TypeError 并炸掉整个应用
+      if (t) void t.destroy();
     };
   }, [url]);
 
@@ -199,18 +203,40 @@ export function PdfViewer({ url, path, onClose, onOpenExternal }: PdfViewerProps
         for (const en of entries) {
           const num = Number((en.target as HTMLElement).dataset.pdfPage);
           if (!num) continue;
-          if (en.isIntersecting) {
-            void renderPage(num);
-            if (en.intersectionRatio > 0.5) setPage(num);
-          }
+          if (en.isIntersecting) void renderPage(num);
         }
       },
       // rootMargin 提前一屏：翻页时不该看到空白再等它画
-      { root: host, rootMargin: '600px 0px', threshold: [0, 0.5] }
+      { root: host, rootMargin: '600px 0px' }
     );
     host.querySelectorAll('[data-pdf-page]').forEach((el) => io.observe(el));
     return () => io.disconnect();
   }, [numPages, renderPage]);
+
+  /*
+   * 当前页码由**滚动位置**算，不由 IntersectionObserver 算。
+   *
+   * v0.11.1 用的是 IO 的 intersectionRatio：刚打开时每一页还是空占位（min-height
+   * 200px），三页全在视口内、ratio 都过阈值，最后一次回调赢——于是打开一份 3 页的
+   * PDF，页码显示的是 `3 / 3`。而 IO 在元素尺寸变化后并不保证再给一次回调，
+   * 画完也纠正不回来。滚动位置是这件事唯一可靠的来源。
+   */
+  useEffect(() => {
+    const host = scrollRef.current;
+    if (!host || numPages === 0) return;
+    const onScroll = () => {
+      const line = host.getBoundingClientRect().top + host.clientHeight * 0.3;
+      let cur = 1;
+      for (const el of host.querySelectorAll<HTMLElement>('[data-pdf-page]')) {
+        if (el.getBoundingClientRect().top <= line) cur = Number(el.dataset.pdfPage) || cur;
+        else break;
+      }
+      setPage(cur);
+    };
+    onScroll();
+    host.addEventListener('scroll', onScroll, { passive: true });
+    return () => host.removeEventListener('scroll', onScroll);
+  }, [numPages, scale]);
 
   const goto = (n: number) => {
     const host = scrollRef.current;

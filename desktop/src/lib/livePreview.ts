@@ -480,103 +480,112 @@ export const livePreview = ViewPlugin.fromClass(
                 decos.push(Decoration.mark({ class: 'cm-live-footnote-ref' }).range(fs, fe));
               }
             }
+          }
 
-            /*
-             * ---- 行内：加粗 / 删除线 / 高亮 / 行内代码 / 斜体 ----
-             *
-             * v0.11.0 修了一个一直摆在眼前的错位：旧正则是
-             * `(\*\*…\*\*)|(\*…\*)|(`…`)`，分组编号是 1/3/5，而判定写的是
-             * `im[1] → 加粗，im[3] → 行内代码，其余 → 斜体`——im[3] 是**斜体**那一支。
-             * 于是 `*斜体*` 一直被画成灰底的行内代码，`` `代码` `` 反而画成斜体，
-             * 两个样式整整互换着用了六个版本。现在去掉内层捕获组，一支一行，
-             * marker 长度跟着支走，不再靠数括号。
-             */
-            const inlineRe = /(\*\*[^*]+\*\*)|(~~[^~\n]+~~)|(==[^=\n]+==)|(`[^`]+`)|(\*[^*\n]+\*)/g;
-            const INLINE: { group: number; cls: string; mark: number }[] = [
-              { group: 1, cls: 'cm-live-bold', mark: 2 },
-              { group: 2, cls: 'cm-live-strike', mark: 2 },
-              { group: 3, cls: 'cm-live-mark', mark: 2 },
-              { group: 4, cls: 'cm-live-code', mark: 1 },
-              { group: 5, cls: 'cm-live-italic', mark: 1 },
-            ];
-            let im: RegExpExecArray | null;
-            while ((im = inlineRe.exec(t))) {
-              const start = line.from + im.index;
-              const end = start + im[0].length;
+          /*
+           * ---- 以下是**行内**装饰：每一行都要跑，包括标题行。 ----
+           *
+           * v0.11.2 之前这一整段写在上面那个 `else` 里面，也就是说
+           * **标题行上的行内语法从来没有被渲染过**：`# 标题里的 **加粗**` 会一直
+           * 露出星号，链接点不动，图片也不显示。粘贴图片时光标恰好停在标题行，
+           * 于是"粘贴了但看不见"——查到最后才发现根本不是粘贴的问题。
+           * 引用/脚注/表格那些是**行级**语法，留在上面按行分支；行内的东西没有
+           * 任何理由挑行。
+           *
+           * ---- 行内：加粗 / 删除线 / 高亮 / 行内代码 / 斜体 ----
+           *
+           * v0.11.0 修了一个一直摆在眼前的错位：旧正则是
+           * `(\*\*…\*\*)|(\*…\*)|(`…`)`，分组编号是 1/3/5，而判定写的是
+           * `im[1] → 加粗，im[3] → 行内代码，其余 → 斜体`——im[3] 是**斜体**那一支。
+           * 于是 `*斜体*` 一直被画成灰底的行内代码，`` `代码` `` 反而画成斜体，
+           * 两个样式整整互换着用了六个版本。现在去掉内层捕获组，一支一行，
+           * marker 长度跟着支走，不再靠数括号。
+           */
+          const inlineRe = /(\*\*[^*]+\*\*)|(~~[^~\n]+~~)|(==[^=\n]+==)|(`[^`]+`)|(\*[^*\n]+\*)/g;
+          const INLINE: { group: number; cls: string; mark: number }[] = [
+            { group: 1, cls: 'cm-live-bold', mark: 2 },
+            { group: 2, cls: 'cm-live-strike', mark: 2 },
+            { group: 3, cls: 'cm-live-mark', mark: 2 },
+            { group: 4, cls: 'cm-live-code', mark: 1 },
+            { group: 5, cls: 'cm-live-italic', mark: 1 },
+          ];
+          let im: RegExpExecArray | null;
+          while ((im = inlineRe.exec(t))) {
+            const start = line.from + im.index;
+            const end = start + im[0].length;
+            if (cursorNear(sel, start, end, focused)) continue;
+            const hit = INLINE.find((k) => im![k.group]);
+            if (!hit) continue;
+            decos.push(Decoration.mark({ class: hit.cls }).range(start + hit.mark, end - hit.mark));
+            decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + hit.mark));
+            decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - hit.mark, end));
+          }
+
+          // ---- 图片（v0.11.0）：编辑态直接显示，不再只是一行源码 ----
+          if (imgApi) {
+            for (const img of findImages(t)) {
+              const start = line.from + img.from;
+              const end = line.from + img.to;
               if (cursorNear(sel, start, end, focused)) continue;
-              const hit = INLINE.find((k) => im![k.group]);
-              if (!hit) continue;
-              decos.push(Decoration.mark({ class: hit.cls }).range(start + hit.mark, end - hit.mark));
-              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + hit.mark));
-              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - hit.mark, end));
-            }
-
-            // ---- 图片（v0.11.0）：编辑态直接显示，不再只是一行源码 ----
-            if (imgApi) {
-              for (const img of findImages(t)) {
-                const start = line.from + img.from;
-                const end = line.from + img.to;
-                if (cursorNear(sel, start, end, focused)) continue;
-                const got = imgApi.get(img.src);
-                if (got === undefined) {
-                  // 还没解析过：这一轮先放着，解析完会派发 imagesReadyEffect 再来一次
-                  imgApi.request(img.src);
-                  continue;
-                }
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, end));
-                decos.push(
-                  Decoration.widget({
-                    widget: new ImageWidget(got, img.alt, img.src, img.alone),
-                    side: 1,
-                  }).range(end)
-                );
+              const got = imgApi.get(img.src);
+              if (got === undefined) {
+                // 还没解析过：这一轮先放着，解析完会派发 imagesReadyEffect 再来一次
+                imgApi.request(img.src);
+                continue;
               }
-            }
-
-            // ---- 行内链接（v0.10.2）----
-            // 不渲染成可点的话，编辑态里链接就只是一串源码；而 `[文字](地址)`
-            // 这种写法在阅读态之外**从来没有过入口**。光标靠近时退回源码，
-            // 否则改不动自己写的链接。
-            const links = findInlineLinks(t);
-            for (const lk of links) {
-              const start = line.from + lk.from;
-              const end = line.from + lk.to;
-              if (cursorNear(sel, start, end, focused)) continue;
-              const tf = line.from + lk.textFrom;
-              const tt = line.from + lk.textTo;
-              // 空文字 `[](地址)`：没有可点的东西，保持源码原样
-              if (tt <= tf) continue;
+              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, end));
               decos.push(
-                Decoration.mark({
-                  class: 'cm-live-link',
-                  attributes: { 'data-href': lk.href, title: lk.href },
-                }).range(tf, tt)
-              );
-              // 与本文件其它语法标记一致，用 cm-live-marker 隐藏而不是 replace：
-              // replace 会改动光标在文档里的映射，方向键走到链接上就会跳格
-              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, tf));
-              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(tt, end));
-            }
-            for (const u of findBareUrls(t)) {
-              // 落在 `[文字](地址)` 内部的地址已由上面处理
-              if (links.some((lk) => u.from >= lk.from && u.to <= lk.to)) continue;
-              const start = line.from + u.from;
-              const end = line.from + u.to;
-              decos.push(
-                Decoration.mark({
-                  class: 'cm-live-link',
-                  attributes: { 'data-href': u.href, title: u.href },
-                }).range(start, end)
+                Decoration.widget({
+                  widget: new ImageWidget(got, img.alt, img.src, img.alone),
+                  side: 1,
+                }).range(end)
               );
             }
+          }
 
-            // ---- 任务复选框 ----
-            const task = parseTaskLine(t, line.from);
-            if (task && !cursorNear(sel, task.boxFrom, task.textFrom, focused)) {
-              decos.push(Decoration.replace({ widget: new TaskWidget(task.checked) }).range(task.boxFrom, task.boxTo));
-              if (task.checked && task.textFrom < line.to) {
-                decos.push(Decoration.mark({ class: 'cm-task-checked-text' }).range(task.textFrom, line.to));
-              }
+          // ---- 行内链接（v0.10.2）----
+          // 不渲染成可点的话，编辑态里链接就只是一串源码；而 `[文字](地址)`
+          // 这种写法在阅读态之外**从来没有过入口**。光标靠近时退回源码，
+          // 否则改不动自己写的链接。
+          const links = findInlineLinks(t);
+          for (const lk of links) {
+            const start = line.from + lk.from;
+            const end = line.from + lk.to;
+            if (cursorNear(sel, start, end, focused)) continue;
+            const tf = line.from + lk.textFrom;
+            const tt = line.from + lk.textTo;
+            // 空文字 `[](地址)`：没有可点的东西，保持源码原样
+            if (tt <= tf) continue;
+            decos.push(
+              Decoration.mark({
+                class: 'cm-live-link',
+                attributes: { 'data-href': lk.href, title: lk.href },
+              }).range(tf, tt)
+            );
+            // 与本文件其它语法标记一致，用 cm-live-marker 隐藏而不是 replace：
+            // replace 会改动光标在文档里的映射，方向键走到链接上就会跳格
+            decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, tf));
+            decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(tt, end));
+          }
+          for (const u of findBareUrls(t)) {
+            // 落在 `[文字](地址)` 内部的地址已由上面处理
+            if (links.some((lk) => u.from >= lk.from && u.to <= lk.to)) continue;
+            const start = line.from + u.from;
+            const end = line.from + u.to;
+            decos.push(
+              Decoration.mark({
+                class: 'cm-live-link',
+                attributes: { 'data-href': u.href, title: u.href },
+              }).range(start, end)
+            );
+          }
+
+          // ---- 任务复选框 ----
+          const task = parseTaskLine(t, line.from);
+          if (task && !cursorNear(sel, task.boxFrom, task.textFrom, focused)) {
+            decos.push(Decoration.replace({ widget: new TaskWidget(task.checked) }).range(task.boxFrom, task.boxTo));
+            if (task.checked && task.textFrom < line.to) {
+              decos.push(Decoration.mark({ class: 'cm-task-checked-text' }).range(task.textFrom, line.to));
             }
           }
           pos = line.to + 1;
