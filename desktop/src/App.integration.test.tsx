@@ -621,3 +621,56 @@ describe('首启与同步（v0.10.6 修复的回归）', () => {
     expect(localStorage.getItem('ivnote.welcomed')).toBe('1');
   });
 })
+
+/**
+ * v0.11.1：**PDF 与附件必须出现在文件树里它们自己的文件夹中**。
+ *
+ * 用户第二次反馈「pdf 依旧识别不到」。核实下来 PDF 一直"在"——只是被钉在侧栏
+ * 最底下一个叫「PDF」的扁平分组里：几十篇笔记的库里它被压在整棵树下面老远，
+ * 而且 `obsidian/文章/x.pdf` 在那儿只剩一个文件名、脱离了所在目录。
+ *
+ * 这类缺陷纯函数单测抓不到（`buildFileTree` 本身一直是对的，是**没人把 pdf 喂给它**），
+ * 所以用例放在这里：只做用户日常动作（展开文件夹），断言渲染结果。
+ * 在 v0.11.0 的代码上这三条都会失败。
+ */
+describe('文件树显示全部文件（v0.11.1）', () => {
+  it('PDF 出现在它所在的文件夹里，而不是被拍平到侧栏底部', async () => {
+    await renderApp({
+      '文章/杂记.md': '# 杂记\n',
+      '文章/手册.pdf': '%PDF-1.4 假装是个 PDF',
+    });
+    // 文件夹默认展开，PDF 应该和笔记并排
+    await waitFor(() => {
+      if (!fileNode('文章/手册.pdf')) throw new Error('文件树里没有 PDF');
+    });
+    // 旧实现那个分组标题不该再存在
+    expect(document.querySelector('.pdf-label')).toBeNull();
+  });
+
+  it('非 Markdown 文件带类型角标，Markdown 不带', async () => {
+    await renderApp({
+      '杂记.md': '# 杂记\n',
+      '手册.pdf': '%PDF',
+      '图.png': 'fake',
+    });
+    await waitFor(() => {
+      if (!fileNode('手册.pdf')) throw new Error('还没渲染出来');
+    });
+    expect(fileNode('手册.pdf')!.querySelector('.ft-badge')?.textContent).toBe('PDF');
+    expect(fileNode('图.png')!.querySelector('.ft-badge')?.textContent).toBe('PNG');
+    expect(fileNode('杂记.md')!.querySelector('.ft-badge')).toBeNull();
+  });
+
+  it('点 PDF 打开的是 PDF 预览，而不是把它当 Markdown 塞进编辑器', async () => {
+    await renderApp({ '杂记.md': '# 杂记\n', '手册.pdf': '%PDF' });
+    await waitFor(() => {
+      if (!fileNode('手册.pdf')) throw new Error('还没渲染出来');
+    });
+    fireEvent.click(fileNode('手册.pdf')!);
+    await waitFor(() => {
+      if (!document.querySelector('.pdf-view')) throw new Error('没有进入 PDF 预览');
+    });
+    // 预览里显示的是文件名，不是 blob URL（v0.11.0 之前那行面包屑打印的是 blob:）
+    expect(document.querySelector('.pdf-name')?.textContent).toBe('手册.pdf');
+  });
+});

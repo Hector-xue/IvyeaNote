@@ -86,6 +86,10 @@ interface Props {
   sortMode: SortMode;
   onSortChange(m: SortMode): void;
   onOpenPdf(path: string): void;
+  /** v0.11.1：文件树/抽屉现在显示全部文件（对齐 Obsidian） */
+  allFiles?: string[];
+  /** v0.11.1：点开既不是笔记也不是 PDF 的文件 */
+  onOpenAttachment?(path: string): void;
   /**
    * v0.11.0：手机上现在也能**在应用里**看 PDF。
    * 此前安卓只有「交给系统应用打开」一条路（WebView 不内嵌 PDF），
@@ -445,6 +449,8 @@ export function MobileView(props: Props) {
         vaultName={props.vault.name}
         files={props.files}
         pdfs={props.pdfs}
+        allFiles={props.allFiles}
+        onOpenAttachment={props.onOpenAttachment}
         emptyDirs={props.emptyDirs ?? []}
         currentPath={props.currentPath}
         collapsedDirs={collapsedDirs}

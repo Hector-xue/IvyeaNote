@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { useState } from 'react';
-import { buildFileTree, displayName, FileTree } from './FileTree';
+import { buildFileTree, displayName, fileBadge, FileTree } from './FileTree';
 
 afterEach(() => cleanup());
 
@@ -23,8 +23,48 @@ describe('displayName', () => {
   it('隐藏 md 后缀', () => {
     expect(displayName('笔记.md', true)).toBe('笔记');
     expect(displayName('x.markdown', true)).toBe('x');
-    expect(displayName('图片.png', true)).toBe('图片.png');
     expect(displayName('folder', false)).toBe('folder');
+  });
+
+  /*
+   * v0.11.1 起文件树显示库里的**全部**文件，所以非 Markdown 也去掉后缀，
+   * 类型改由右侧角标表达（Obsidian 同款）。留着 `.png` 会让一列文件名参差不齐，
+   * 而角标是对齐的、可扫的。
+   */
+  it('非 Markdown 也去掉后缀，类型交给角标', () => {
+    expect(displayName('图片.png', true)).toBe('图片');
+    expect(displayName('报表.2026.xlsx', true)).toBe('报表.2026');
+    expect(displayName('README', true)).toBe('README');
+    expect(displayName('.gitignore', true)).toBe('.gitignore');
+  });
+});
+
+describe('fileBadge', () => {
+  it('Markdown 不给角标——库里绝大多数是笔记，全挂一个 MD 只是噪声', () => {
+    expect(fileBadge('笔记.md')).toBeNull();
+    expect(fileBadge('x.markdown')).toBeNull();
+  });
+  it('其余文件给大写后缀', () => {
+    expect(fileBadge('手册.pdf')).toBe('PDF');
+    expect(fileBadge('图.PNG')).toBe('PNG');
+    expect(fileBadge('包.docx')).toBe('DOCX');
+  });
+  it('没有后缀就没有角标', () => {
+    expect(fileBadge('LICENSE')).toBeNull();
+  });
+});
+
+describe('文件树包含非 Markdown 文件', () => {
+  /*
+   * v0.11.0 之前树只由 `.md` 构建，PDF 被钉在侧栏最底下一个扁平分组里——
+   * `obsidian/文章/x.pdf` 在那儿只剩个文件名、脱离所在目录，用户找不到，
+   * 原话是「pdf 依旧识别不到」。这条用例在旧代码上会失败。
+   */
+  it('PDF 待在它自己的文件夹里，而不是被拍平到根', () => {
+    const tree = buildFileTree(['文章/杂记.md', '文章/手册.pdf', '文章/图.png']);
+    const dir = tree.find((n) => n.name === '文章')!;
+    expect(dir.type).toBe('dir');
+    expect(dir.children!.map((n) => n.name).sort()).toEqual(['图.png', '手册.pdf', '杂记.md'].sort());
   });
 });
 

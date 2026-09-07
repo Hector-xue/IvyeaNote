@@ -19,7 +19,9 @@
  * 非 Windows / 非 Tauri（浏览器、安卓）一律返回 null：那些环境本来就没有我们该画的边框。
  */
 import { useEffect, useState } from 'react';
+import logoUrl from '../assets/logo.png';
 import { RibbonIcon } from './Icons';
+import { useWindowSubtitle } from '../lib/windowTitle';
 
 /** 这份运行环境需不需要自绘边框 */
 export function needsCustomChrome(): boolean {
@@ -33,6 +35,7 @@ export function needsCustomChrome(): boolean {
 export function WindowChrome() {
   const [enabled] = useState(needsCustomChrome);
   const [maximized, setMaximized] = useState(false);
+  const subtitle = useWindowSubtitle();
 
   useEffect(() => {
     if (!enabled) return;
@@ -82,10 +85,22 @@ export function WindowChrome() {
   };
 
   return (
-    <div className="win-chrome" data-tauri-drag-region>
-      {/* 左半边整条都是拖拽区，什么都不画——用户要的是"顶部栏没了"，
-          不是"换一条我们自己的标题栏"。窗口名在任务栏上已经有了 */}
-      <div className="win-drag" data-tauri-drag-region />
+    <div className="win-chrome" data-tauri-drag-region onDoubleClick={() => void call('toggleMaximize')}>
+      {/*
+        v0.11.1：这条不再是一片空白。
+        v0.11.0 把它做成"什么都不画的 32px 白带"，结果用户的反馈是「顶部栏依旧存在」——
+        **一条空白的横条只会被读成"没删干净的系统栏"**，哪怕它已经是我们自己画的了。
+        Ivyea Translate 那边同样有一条 38px 的标题栏，却没人觉得它多余，区别就在于
+        它里面有品牌标记和内容，看起来是应用的头部而不是残留物。
+        所以这里放：品牌标记 + 当前笔记的库内路径。底色与 ribbon/侧栏同色、无分割线，
+        它就融进应用而不是浮在上面；状态栏那行路径也因此可以腾出来。
+      */}
+      <div className="win-drag" data-tauri-drag-region>
+        <img src={logoUrl} alt="" className="win-logo" data-tauri-drag-region />
+        <span className="win-subtitle" data-tauri-drag-region title={subtitle}>
+          {subtitle || 'Ivyea Note'}
+        </span>
+      </div>
       <div className="win-buttons">
         <button className="win-btn" title="最小化" aria-label="最小化" onClick={() => void call('minimize')}>
           <RibbonIcon name="win-min" size={16} stroke={1.1} />

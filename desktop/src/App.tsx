@@ -14,6 +14,7 @@ import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
+import { setWindowSubtitle } from './lib/windowTitle';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import type { FileIO } from './lib/sync';
@@ -113,6 +114,9 @@ export default function App() {
   const [vaultId, setVaultId] = useState<number | null>(loadActiveVaultId);
   /** v0.3.4：PDF 列表与元数据（排序） */
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  useEffect(() => {
+    setWindowSubtitle(currentPath ?? '');
+  }, [currentPath]);
   /** 同步拉取后要重读当前文件，但 currentPath 不能进 useSyncEngine 的依赖——
    *  否则每切换一次笔记就重建一次同步引擎。用 ref 旁路。 */
   const currentPathRef = useRef<string | null>(null);
@@ -171,6 +175,12 @@ export default function App() {
   const { prompt, confirm, dialogEl } = useDialog();
   /** 轻提示：替代 window.alert（安卓 WebView 里 alert 阻塞且割裂） */
   const { toast, toastEl } = useToast();
+
+  /*
+   * 自绘标题栏要显示「现在开着哪一篇」。WindowChrome 挂在 App **外面**
+   * （它必须永远在，App 却是一串 early-return 分支），所以走 windowTitle 这个小 store。
+   * 放在这里而不是某个分支里：这个 effect 无论最后渲染哪一支都会跑。
+   */
   /** 编辑防抖计时器：替代旧的「函数对象挂属性」写法（重构即坏、类型不安全） */
   /**
    * 落盘防抖定时器，**按路径分桶**。
@@ -269,6 +279,7 @@ export default function App() {
   const {
     files,
     pdfs,
+    allFiles,
     mdStamps,
     emptyDirs,
     allPaths,
@@ -338,7 +349,7 @@ export default function App() {
     saveImageFile: onPasteImage,
     resolveImage,
     openPdf: onOpenPdf,
-    openPdfExternal: onOpenPdfExternal,
+    openWithSystemApp,
     closePdf: onClosePdf,
   } = useAttachments({
     vaultPath: vault ? vault.localPath ?? '' : null,
@@ -599,6 +610,39 @@ export default function App() {
 
   /** 当前打开的笔记（v0.10.7：顶部标签栏删掉后，useTabs 收成 useOpenNote） */
   const { open: openFileInTab, remap: remapTabs } = useOpenNote({ openFile });
+
+  /**
+   * v0.11.1：点开文件树里既不是笔记也不是 PDF 的东西。
+   *
+   * 文件树现在显示库里的**全部**文件（对齐 Obsidian），所以必须回答"点了会怎样"：
+   * - 图片：应用内全屏看，不跳出去（附件本来就是笔记的一部分）；
+   * - 其余（docx / zip / …）：交给系统应用。我们不打算自己渲染它们，
+   *   假装能打开再弹个错，比直接交出去更糟。
+   */
+  const [imageView, setImageView] = useState<{ path: string; url: string } | null>(null);
+  const onOpenAttachment = useCallback(
+    async (rel: string) => {
+      if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(rel)) {
+        const url = await resolveImage(rel);
+        if (url) {
+          setImageView({ path: rel, url });
+          return;
+        }
+        toast(`打不开这张图片：${rel}`, 'error');
+        return;
+      }
+      await openWithSystemApp(rel);
+    },
+    [resolveImage, openWithSystemApp, toast]
+  );
+
+  /** 图片查看层。**必须抽成变量**：桌面和移动是两棵树，只挂一边就是"点了没反应" */
+  const imageViewEl = imageView ? (
+    <div className="img-view" onClick={() => setImageView(null)} role="dialog" aria-label={imageView.path}>
+      <img src={imageView.url} alt={imageView.path} />
+      <span className="img-view-name">{imageView.path}</span>
+    </div>
+  ) : null;
 
   /**
    * v0.4.0 T3：标题跟随——编辑防抖落盘后，若正文首个 H1 与当前文件名不一致，
@@ -1748,6 +1792,8 @@ export default function App() {
           onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
           onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
           pdfs={pdfs}
+          allFiles={allFiles}
+          onOpenAttachment={(p) => void onOpenAttachment(p)}
           currentPath={currentPath}
           doc={doc}
           syncing={syncing}
@@ -1781,7 +1827,7 @@ export default function App() {
           pdfView={pdfView}
           pdfPath={pdfPath}
           onClosePdf={onClosePdf}
-          onOpenPdfExternal={(p) => void onOpenPdfExternal(p)}
+          onOpenPdfExternal={(p) => void openWithSystemApp(p)}
           onInsertImage={onInsertImage}
           resolveImage={resolveImage}
           onOpenPath={onOpenLinkPath}
@@ -1906,6 +1952,8 @@ export default function App() {
         }}
         onCloseSplit={closeSplit}
         pdfs={pdfs}
+        allFiles={allFiles}
+        onOpenAttachment={(p) => void onOpenAttachment(p)}
         currentPath={currentPath}
         doc={doc}
         syncing={syncing}
@@ -1935,7 +1983,7 @@ export default function App() {
         onOpenPdf={(p) => void onOpenPdf(p)}
         pdfView={pdfView}
         pdfPath={pdfPath}
-        onOpenPdfExternal={(p) => void onOpenPdfExternal(p)}
+        onOpenPdfExternal={(p) => void openWithSystemApp(p)}
         onClosePdf={onClosePdf}
         onInsertImage={onInsertImage}
         resolveImage={resolveImage}
@@ -2059,6 +2107,7 @@ export default function App() {
         />
       )}
       {syncStatusEl}
+      {imageViewEl}
       {dialogEl}
       {toastEl}
     </div>

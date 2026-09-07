@@ -34,18 +34,41 @@ html.frameless.win-maximized #root {
   flex-direction: column;
 }
 
-/* 顶部那条：左边整片是拖拽区（什么都不画），右边三颗窗口按钮 */
+/* 顶部那条：左边品牌标记 + 当前笔记路径（可拖动），右边三颗窗口按钮。
+   v0.11.1：底色改成与 ribbon / 侧栏同色（--bg）且**不画分割线**——
+   v0.11.0 用的是 --panel(#fff)，而它下面的 ribbon 和侧栏是 --bg(#fbfaf7)，
+   于是它变成一条比周围更亮的白带，看着就是"没删干净的系统标题栏"。 */
 .win-chrome {
   display: flex;
   align-items: stretch;
-  height: 32px;
-  flex: 0 0 32px;
-  background: var(--panel);
+  height: 34px;
+  flex: 0 0 34px;
+  background: var(--bg);
   user-select: none;
 }
 .win-drag {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-left: 12px;
+  /* 拖拽区里的东西不该拦住拖动，也不该被选中 */
+  pointer-events: auto;
+}
+.win-logo {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex: 0 0 16px;
+  -webkit-user-drag: none;
+}
+.win-subtitle {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .win-buttons {
   display: flex;
@@ -72,6 +95,8 @@ html.frameless.win-maximized #root {
 html.frameless:not(.win-maximized) .win-btn.danger:hover {
   border-top-right-radius: 10px;
 }
+/* 关掉 shadow 之后系统那圈 1px 方框没有了（它正是把圆角框成方角的元凶），
+   窗口边界就只剩我们自己这条内描边 */
 
 body {
   background: var(--bg);
@@ -2284,4 +2309,47 @@ button {
 .diag-list b {
   color: var(--text);
   font-weight: var(--fw-bold);
+}
+
+/* v0.11.1：文件树里的非 Markdown 文件类型角标（PDF / PNG / DOCX…），对齐 Obsidian。
+   hover 出现的删除按钮会盖住它，所以两者互斥。 */
+.ft-badge {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 15px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--panel-2);
+  text-transform: uppercase;
+}
+.ft-file:hover .ft-badge {
+  display: none;
+}
+
+/* v0.11.1：库内图片的全屏查看（文件树现在能点开图片了）。
+   点任意处关闭；不做缩放/翻页——那是图片管理器的活，笔记软件只需要"看一眼"。 */
+.img-view {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  background: rgba(0, 0, 0, 0.82);
+  cursor: zoom-out;
+}
+.img-view img {
+  max-width: 92vw;
+  max-height: 82vh;
+  object-fit: contain;
+  border-radius: var(--r-1);
+}
+.img-view-name {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: var(--fs-sm);
 }
