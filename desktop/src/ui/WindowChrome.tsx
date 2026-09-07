@@ -19,9 +19,7 @@
  * 非 Windows / 非 Tauri（浏览器、安卓）一律返回 null：那些环境本来就没有我们该画的边框。
  */
 import { useEffect, useState } from 'react';
-import logoUrl from '../assets/logo.png';
 import { RibbonIcon } from './Icons';
-import { useWindowSubtitle } from '../lib/windowTitle';
 
 /** 这份运行环境需不需要自绘边框 */
 export function needsCustomChrome(): boolean {
@@ -35,7 +33,6 @@ export function needsCustomChrome(): boolean {
 export function WindowChrome() {
   const [enabled] = useState(needsCustomChrome);
   const [maximized, setMaximized] = useState(false);
-  const subtitle = useWindowSubtitle();
 
   useEffect(() => {
     if (!enabled) return;
@@ -84,23 +81,23 @@ export function WindowChrome() {
     }
   };
 
+  /*
+   * v0.11.3：**这里不再是一条横栏，而是浮在右上角的三颗按钮。**
+   *
+   * 前两版都栽在同一件事上：v0.11.0 做成"什么都不画的 32px 白带"，
+   * v0.11.1 往里塞了品牌标记和笔记路径想让它"像是设计的一部分"。
+   * 两次的反馈都是同一句——**「顶栏依旧存在」**。
+   * 结论很清楚：用户要的不是"一条更好看的顶栏"，是**没有那一行**。
+   * 所以现在整条 flex 行去掉，只留三颗按钮绝对定位在右上角，
+   * 侧栏和正文从窗口第 0 像素开始；窗口路径回到状态栏。
+   *
+   * 拖动窗口靠两处：这三颗按钮左边留出的一段透明区，以及侧栏顶部那行库名
+   * （`.side-head` 上打了 data-tauri-drag-region）。两处都在窗口顶边，
+   * 是手会自然去够的地方。
+   */
   return (
-    <div className="win-chrome" data-tauri-drag-region onDoubleClick={() => void call('toggleMaximize')}>
-      {/*
-        v0.11.1：这条不再是一片空白。
-        v0.11.0 把它做成"什么都不画的 32px 白带"，结果用户的反馈是「顶部栏依旧存在」——
-        **一条空白的横条只会被读成"没删干净的系统栏"**，哪怕它已经是我们自己画的了。
-        Ivyea Translate 那边同样有一条 38px 的标题栏，却没人觉得它多余，区别就在于
-        它里面有品牌标记和内容，看起来是应用的头部而不是残留物。
-        所以这里放：品牌标记 + 当前笔记的库内路径。底色与 ribbon/侧栏同色、无分割线，
-        它就融进应用而不是浮在上面；状态栏那行路径也因此可以腾出来。
-      */}
-      <div className="win-drag" data-tauri-drag-region>
-        <img src={logoUrl} alt="" className="win-logo" data-tauri-drag-region />
-        <span className="win-subtitle" data-tauri-drag-region title={subtitle}>
-          {subtitle || 'Ivyea Note'}
-        </span>
-      </div>
+    <div className="win-chrome" onDoubleClick={() => void call('toggleMaximize')}>
+      <div className="win-drag" data-tauri-drag-region />
       <div className="win-buttons">
         <button className="win-btn" title="最小化" aria-label="最小化" onClick={() => void call('minimize')}>
           <RibbonIcon name="win-min" size={16} stroke={1.1} />

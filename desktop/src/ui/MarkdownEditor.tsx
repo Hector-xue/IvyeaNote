@@ -53,6 +53,15 @@ import { renderWikiLinks } from '../lib/wikilink';
 import { classifyLink, headingSlug, openExternal, resolveVaultPath } from '../lib/links';
 import { encodeHref, noteRelative } from '../lib/attachPath';
 
+/**
+ * 已经被 CodeMirror 那条 paste 处理掉的原生事件。
+ *
+ * 粘贴图片同时挂了两处监听（CM 的 contentDOM + 外层 `.md-body` 的 React 兜底），
+ * 为的是不赌某一种 WebView 的事件传播行为。代价是同一次粘贴可能被处理两遍，
+ * 于是插两张图——用这个集合去重。WeakSet 不会拖住事件对象。
+ */
+const handledPastes = new WeakSet<Event>();
+
 export interface MarkdownEditorProps {
   doc: string;
   onEdit(path: string, text: string): void;
@@ -115,7 +124,9 @@ function cmExtensions(
   onFollowLink?: (href: string) => void,
   /** v0.11.0：编辑态图片解析。必须是**稳定对象**（内部走 ref），
       否则每次换文件都要重建缓存，图片会闪一下才回来 */
-  imageApi?: ImageApi
+  imageApi?: ImageApi,
+  /** v0.11.3：粘贴图片。挂在 CM 自己的 contentDOM 上，见下面的说明 */
+  onPasteImageFile?: (dt: DataTransfer | null) => boolean
 ): Extension[] {
   return [
     ...(imageApi ? [imageResolver.of(imageApi)] : []),
@@ -176,6 +187,23 @@ function cmExtensions(
      * 等到 click 时光标已经落进链接里、装饰随即退回源码，元素早没了。
      */
     EditorView.domEventHandlers({
+      /*
+       * v0.11.3：**粘贴图片挂在 CodeMirror 自己的 contentDOM 上。**
+       *
+       * 此前只在外层 `.md-body` 上挂了 React 的 `onPaste`——那是 React 在
+       * 根容器上的委托监听，要靠事件一路冒泡上去。CM 的 contentDOM 才是粘贴真正
+       * 落地的元素，在这里接是最短、最不依赖中间环节的一条路。
+       * 外层那个监听保留作为兜底，靠 `handledPastes` 去重，不会插两次。
+       */
+      paste(e) {
+        if (!onPasteImageFile || handledPastes.has(e)) return false;
+        const handled = onPasteImageFile(e.clipboardData);
+        if (handled) {
+          handledPastes.add(e);
+          e.preventDefault();
+        }
+        return handled;
+      },
       mousedown(e) {
         if (!onFollowLink) return false;
         // 按住修饰键是「我要选文字/多光标」，不该被当成打开链接
@@ -544,7 +572,13 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           () => props.wikiTitles ?? [],
           props.livePreviewOn ?? true,
           (href) => followLinkRef.current(href),
-          imageApi
+          imageApi,
+          (dt) => {
+            const f = pasteHookRef.current.pick(dt);
+            if (!f) return false;
+            pasteHookRef.current.insert(f);
+            return true;
+          }
         ),
       }),
     });
@@ -572,7 +606,13 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           () => props.wikiTitles ?? [],
           props.livePreviewOn ?? true,
           (href) => followLinkRef.current(href),
-          imageApi
+          imageApi,
+          (dt) => {
+            const f = pasteHookRef.current.pick(dt);
+            if (!f) return false;
+            pasteHookRef.current.insert(f);
+            return true;
+          }
         ),
       })
     );
@@ -686,20 +726,95 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     };
   }, [mode, props.doc, props.resolveImage, props.currentPath]);
 
-  /** v0.7.1 F7：粘贴/拖入图片 → 落盘 Attachments/ → 在光标处插入引用 */
+  /**
+   * 粘贴 / 拖入图片 → 落盘 → 在光标处插入引用（v0.7.1 F7；v0.11.3 大改）。
+   *
+   * ⚠️ 这个函数此前有**三条静默 return 加一个静默 catch**：没有 onPasteImage、
+   * 不是图片、没有当前笔记、落盘抛异常——四种情况用户看到的都是"什么都没发生"。
+   * 于是「粘贴图片没反应」连报了四轮，而每一轮都拿不到任何线索。
+   * 现在每一条失败路径都必须说话：说不出原因的失败等于没修过。
+   */
   const insertDroppedImage = async (file: File, insertAt?: number) => {
-    if (!props.onPasteImage || !file.type.startsWith('image/')) return;
+    if (!props.onPasteImage) {
+      raiseToast('这个视图不支持插入图片', 'error');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      raiseToast(`剪贴板里的不是图片（${file.type || '未知类型'}）`, 'error');
+      return;
+    }
+    if (!props.currentPath) {
+      raiseToast('先打开或新建一篇笔记，图片才知道该存到哪', 'error');
+      return;
+    }
     const view = viewRef.current;
+    if (!view) return;
     try {
       const rel = await props.onPasteImage(file, props.currentPath);
-      if (!rel || !view) return;
+      if (!rel) {
+        raiseToast('图片没能存进笔记库（可能是没有写入权限）', 'error');
+        return;
+      }
       const pos = insertAt ?? view.state.selection.main.from;
       // 写进正文的必须是**相对这篇笔记**的路径，rel 是库内路径
       const text = `![](${encodeHref(noteRelative(props.currentPath, rel))})`;
       view.dispatch({ changes: { from: pos, insert: text }, selection: { anchor: pos + text.length } });
       view.focus();
-    } catch {
-      // 静默：粘贴普通文本不受影响
+    } catch (e) {
+      raiseToast(`插入图片失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+  };
+
+  /**
+   * 从一次剪贴板/拖放事件里取出图片文件。
+   *
+   * **两个来源都要看**：`items` 是 Chromium 的常规通道，但某些 WebView 只填 `files`。
+   * 这个应用跑在三种 WebView 上（WebView2 / webkit2gtk / 安卓 WebView），
+   * 只认一条通道就等于赌另外两个恰好也这么做。
+   */
+  const imageFromTransfer = (dt: DataTransfer | null): File | null => {
+    if (!dt) return null;
+    for (const f of Array.from(dt.files ?? [])) {
+      if (f.type.startsWith('image/')) return f;
+    }
+    for (const it of Array.from(dt.items ?? [])) {
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const f = it.getAsFile();
+        if (f) return f;
+      }
+    }
+    return null;
+  };
+  const pasteHookRef = useRef<{ pick(dt: DataTransfer | null): File | null; insert(f: File): void }>({
+    pick: imageFromTransfer,
+    insert: () => undefined,
+  });
+  pasteHookRef.current = {
+    pick: imageFromTransfer,
+    insert: (f: File) => void insertDroppedImage(f),
+  };
+
+  /**
+   * 主动读剪贴板里的图片（右键「插入 → 剪贴板里的图片」）。
+   *
+   * 存在的理由：粘贴事件那条路依赖 WebView 把系统剪贴板里的位图转成 `image/png`
+   * 塞进 ClipboardEvent，各家 WebView 行为并不一致。这条路绕开事件直接问剪贴板要——
+   * 粘贴键失灵时它仍然能用，而且失败原因说得出来。
+   */
+  const insertClipboardImage = async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      for (const it of items) {
+        const type = it.types.find((t) => t.startsWith('image/'));
+        if (!type) continue;
+        const blob = await it.getType(type);
+        const ext = type.split('/')[1]?.split('+')[0] || 'png';
+        await insertDroppedImage(new File([blob], `clipboard.${ext}`, { type }));
+        return;
+      }
+      raiseToast('剪贴板里没有图片', 'error');
+    } catch (e) {
+      raiseToast(`读不到剪贴板：${e instanceof Error ? e.message : String(e)}`, 'error');
     }
   };
 
@@ -952,6 +1067,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           }
         },
         insertImage: () => void doInsertImage(),
+        insertClipboardImage: () => void insertClipboardImage(),
         link: () => applyEdit((t, f, to) => insertWikiLink(t, { from: f, to })),
         externalLink: () => applyEdit((t, f, to) => insertLink(t, { from: f, to })),
         clearFormat: () => applyEdit((t, f, to) => clearFormatting(t, { from: f, to })),
@@ -1038,18 +1154,18 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         className="md-body"
         /* v0.11.0：编辑区右键菜单。WebView 自带的那张只有三四项，必须挡掉 */
         onContextMenu={openEditorMenu}
+        /* 兜底：CM 的 contentDOM 那条没接住时（某些 WebView 的事件传播不一样）
+           还有这一层。handledPastes 保证同一次粘贴不会插两张图 */
         onPaste={(e) => {
-          const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'));
-          if (item) {
-            const f = item.getAsFile();
-            if (f) {
-              e.preventDefault();
-              void insertDroppedImage(f);
-            }
-          }
+          if (handledPastes.has(e.nativeEvent)) return;
+          const f = imageFromTransfer(e.clipboardData);
+          if (!f) return;
+          e.preventDefault();
+          handledPastes.add(e.nativeEvent);
+          void insertDroppedImage(f);
         }}
         onDrop={(e) => {
-          const f = Array.from(e.dataTransfer?.files ?? []).find((i) => i.type.startsWith('image/'));
+          const f = imageFromTransfer(e.dataTransfer);
           if (f) {
             e.preventDefault();
             const view = viewRef.current;

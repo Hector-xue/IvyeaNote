@@ -29,46 +29,43 @@ html.frameless.win-maximized #root {
   border-radius: 0;
   box-shadow: none;
 }
+/* 只有这两处会长在右上角，给它们让开按钮的位置；其余地方一寸都不占 */
+html.frameless .right-panel {
+  padding-top: 32px;
+}
+html.frameless .pdf-bar {
+  padding-right: 150px;
+}
 #root {
   display: flex;
   flex-direction: column;
 }
-
-/* 顶部那条：左边品牌标记 + 当前笔记路径（可拖动），右边三颗窗口按钮。
-   v0.11.1：底色改成与 ribbon / 侧栏同色（--bg）且**不画分割线**——
-   v0.11.0 用的是 --panel(#fff)，而它下面的 ribbon 和侧栏是 --bg(#fbfaf7)，
-   于是它变成一条比周围更亮的白带，看着就是"没删干净的系统标题栏"。 */
-.win-chrome {
-  display: flex;
-  align-items: stretch;
-  height: 34px;
-  flex: 0 0 34px;
-  background: var(--bg);
+/* 侧栏顶部那行库名是第二处拖动区（见 WindowChrome 注释），别让文字被选中 */
+html.frameless .side-head {
+  -webkit-user-select: none;
   user-select: none;
 }
-.win-drag {
-  flex: 1;
-  min-width: 0;
+
+/*
+ * v0.11.3：**窗口按钮浮在右上角，不再占一行。**
+ *
+ * v0.11.0 是一条空白横条、v0.11.1 往里放了品牌标记和笔记路径，两次的反馈都是
+ * 「顶栏依旧存在」。用户要的不是更好看的顶栏，是没有那一行——所以整条 flex 行删掉，
+ * 只留 fixed 在右上角的三颗按钮，侧栏与正文从窗口第 0 像素开始。
+ */
+.win-chrome {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 60;
   display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding-left: 12px;
-  /* 拖拽区里的东西不该拦住拖动，也不该被选中 */
-  pointer-events: auto;
+  align-items: stretch;
+  height: 32px;
+  user-select: none;
 }
-.win-logo {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  flex: 0 0 16px;
-  -webkit-user-drag: none;
-}
-.win-subtitle {
-  font-size: var(--fs-sm);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* 按钮左边留一段透明拖动区：没有它，窗口顶边就只剩侧栏那一处能拖 */
+.win-drag {
+  width: 120px;
 }
 .win-buttons {
   display: flex;

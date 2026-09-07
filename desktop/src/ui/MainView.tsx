@@ -9,7 +9,6 @@ import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
 import { PdfViewer } from './PdfViewer';
-import { needsCustomChrome } from './WindowChrome';
 import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
@@ -376,7 +375,9 @@ export function MainView(props: Props) {
         className="sidebar"
         style={{ width: sideW.width, minWidth: sideW.width, maxWidth: sideW.width }}
       >
-        <div className="side-head">
+        {/* 顶栏没了之后，这一行是窗口顶边最自然的拖动handle。
+            属性打在容器上：里面的按钮是子元素、不带这个属性，点击照常工作 */}
+        <div className="side-head" data-tauri-drag-region>
           <img src={logoUrl} alt="" className="brand-logo" />
           <button
             className="vault-btn"
@@ -565,13 +566,11 @@ export function MainView(props: Props) {
         <div className="status-bar">
           {/* v0.10.7：标签栏没了，「现在开着哪一篇」就归这里。
               显示完整库内路径——它比文件名多告诉一件事：这篇在哪个目录。
-              v0.11.1：Windows 自绘标题栏已经在顶部写了同一条路径，
-              两处都写就是这个仓库被骂过的「上下重复」。谁有标题栏谁显示。 */}
-          {!needsCustomChrome() && (
-            <span className="st-path" title={props.currentPath ?? ''}>
-              {props.currentPath ?? ''}
-            </span>
-          )}
+              v0.11.3：顶栏整条删掉了（用户第三次说「顶栏依旧存在」），
+              路径回到这里——它本来就该在状态栏。 */}
+          <span className="st-path" title={props.currentPath ?? ''}>
+            {props.currentPath ?? ''}
+          </span>
           <span className="st-right">
             {/*
               **插入图片**。这条能力从 v0.7.1 起就写好了（`useAttachments.insertImage`
