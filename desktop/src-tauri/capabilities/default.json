@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "fs-base",
-  "description": "允许读写用户选择的 vault 文件夹（** 递归）",
+  "description": "允许读写用户选择的 vault 文件夹（** 递归）；以及 Windows 自绘边框需要的窗口控制（最小化/最大化/关闭/拖动）",
   "windows": [
     "main"
   ],
@@ -28,6 +28,13 @@
       ]
     },
     "opener:default",
+    "core:event:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-start-dragging",
+    "core:window:allow-close",
     "dialog:default",
     "updater:default",
     "process:allow-restart",

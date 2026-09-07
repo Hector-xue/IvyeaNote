@@ -8,6 +8,7 @@ import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './
 import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
+import { PdfViewer } from './PdfViewer';
 import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
@@ -107,6 +108,10 @@ interface Props {
   /** v0.3.4：打开 PDF */
   onOpenPdf(path: string): void;
   pdfView: string | null;
+  /** v0.11.0：正在预览的 PDF 的库内路径（pdfView 是 blob URL，说明不了是哪个文件） */
+  pdfPath?: string | null;
+  /** v0.11.0：交给系统 PDF 应用（绑了磁盘文件夹时才给） */
+  onOpenPdfExternal?(path: string): void;
   onClosePdf(): void;
   /** v0.3.4：插图与图片解析（透传给编辑器） */
   onInsertImage?: (notePath: string | null) => Promise<string | null>;
@@ -180,13 +185,19 @@ export function MainView(props: Props) {
   const openVaultMenu = (el: HTMLElement) => {
     const r = el.getBoundingClientRect();
     const items: MenuAnchor['items'] = [
-      { id: 'new-vault', label: '新建笔记库…', run: () => props.onCreateVault() },
-      { id: 'import', label: '从 Obsidian 导入…', run: () => props.onImportObsidian() },
+      { id: 'new-vault', label: '新建笔记库…', icon: 'folder-plus', run: () => props.onCreateVault() },
+      { id: 'import', label: '从 Obsidian 导入…', icon: 'move', run: () => props.onImportObsidian() },
+      { type: 'sep', id: 's-vault' },
     ];
     if (props.vault.localPath && !props.vault.localPath.startsWith('opfs://')) {
-      items.push({ id: 'unbind', label: `解绑文件夹（${props.vault.localPath}）`, run: () => props.onUnbindFolder() });
+      items.push({
+        id: 'unbind',
+        label: `解绑文件夹（${props.vault.localPath}）`,
+        icon: 'folder',
+        run: () => props.onUnbindFolder(),
+      });
     } else {
-      items.push({ id: 'bind', label: '绑定本地文件夹…', run: () => props.onBindFolder() });
+      items.push({ id: 'bind', label: '绑定本地文件夹…', icon: 'folder', run: () => props.onBindFolder() });
     }
     setMenu({ x: r.left, y: r.bottom + 4, items });
   };
@@ -197,8 +208,14 @@ export function MainView(props: Props) {
       x: r.left,
       y: r.bottom + 4,
       items: [
-        { id: 'name', label: props.sortMode === 'name' ? '✓ 按名称' : '按名称', run: () => props.onSortChange('name') },
-        { id: 'mtime', label: props.sortMode === 'mtime' ? '✓ 按修改时间' : '按修改时间', run: () => props.onSortChange('mtime') },
+        // 打勾走 checked，不再往标签里塞一个 ✓——那样两种排序的文字长度都不一样
+        { id: 'name', label: '按名称', checked: props.sortMode === 'name', run: () => props.onSortChange('name') },
+        {
+          id: 'mtime',
+          label: '按修改时间',
+          checked: props.sortMode === 'mtime',
+          run: () => props.onSortChange('mtime'),
+        },
       ],
     });
   };
@@ -224,27 +241,35 @@ export function MainView(props: Props) {
 
   /** 右键菜单条目：文件与文件夹给不同的动作集 */
   const openMenu = (node: TreeNode, x: number, y: number) => {
-    const items =
+    const items: MenuAnchor['items'] =
       node.type === 'dir'
         ? [
-            { id: 'new', label: '在此新建笔记', run: () => props.onNewFolderNote(node.path) },
-            { id: 'newdir', label: '在此新建子文件夹', run: () => props.onCreateFolder?.(node.path) },
+            { id: 'new', label: '在此新建笔记', icon: 'file-plus', run: () => props.onNewFolderNote(node.path) },
+            {
+              id: 'newdir',
+              label: '在此新建子文件夹',
+              icon: 'folder-plus',
+              run: () => props.onCreateFolder?.(node.path),
+            },
+            { type: 'sep', id: 's-dir' },
             ...(props.onRequestMove
-              ? [{ id: 'movedir', label: '移动到…', run: () => props.onRequestMove?.(node.path, true) }]
+              ? ([{ id: 'movedir', label: '移动到…', icon: 'move', run: () => props.onRequestMove?.(node.path, true) }] as MenuAnchor['items'])
               : []),
-            { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
+            { id: 'copy', label: '复制路径', icon: 'copy', run: () => props.onCopyPath?.(node.path) },
           ]
         : [
-            { id: 'open', label: '打开', run: () => props.onSelect(node.path) },
+            { id: 'open', label: '打开', icon: 'file', run: () => props.onSelect(node.path) },
             ...(props.onOpenSplit
-              ? [{ id: 'split', label: '在右侧打开', run: () => props.onOpenSplit?.(node.path) }]
+              ? ([{ id: 'split', label: '在右侧打开', icon: 'sidebar', run: () => props.onOpenSplit?.(node.path) }] as MenuAnchor['items'])
               : []),
-            { id: 'rename', label: '重命名…', run: () => props.onRequestRename?.(node.path) },
+            { type: 'sep', id: 's-open' },
+            { id: 'rename', label: '重命名…', icon: 'edit', run: () => props.onRequestRename?.(node.path) },
             ...(props.onRequestMove
-              ? [{ id: 'move', label: '移动到…', run: () => props.onRequestMove?.(node.path, false) }]
+              ? ([{ id: 'move', label: '移动到…', icon: 'move', run: () => props.onRequestMove?.(node.path, false) }] as MenuAnchor['items'])
               : []),
-            { id: 'copy', label: '复制路径', run: () => props.onCopyPath?.(node.path) },
-            { id: 'del', label: '删除', danger: true, run: () => props.onDeleteFile(node.path) },
+            { id: 'copy', label: '复制路径', icon: 'copy', run: () => props.onCopyPath?.(node.path) },
+            { type: 'sep', id: 's-del' },
+            { id: 'del', label: '删除', icon: 'trash', danger: true, run: () => props.onDeleteFile(node.path) },
           ];
     setMenu({ x, y, items });
   };
@@ -421,7 +446,7 @@ export function MainView(props: Props) {
                 nodes.map((n) => (
                   <div
                     key={n.path}
-                    className={`file pdf-file ${props.pdfView === n.path ? 'active' : ''}`}
+                    className={`file pdf-file ${props.pdfPath === n.path ? 'active' : ''}`}
                     onClick={() => props.onOpenPdf(n.path)}
                   >
                     <span className="file-name">{n.name}</span>
@@ -453,18 +478,19 @@ export function MainView(props: Props) {
         */}
         {/* v0.10.0：删掉了编辑区上方那行文件名——标签栏已经说明是哪一篇，
             再写一遍就是重复。PDF 预览时仍需要一行来放「关闭预览」。 */}
-        {props.pdfView && (
-          <div className="editor-head">
-            <span className="crumb">
-              {props.pdfView}
-              <button className="link close-pdf" onClick={props.onClosePdf}>
-                关闭预览
-              </button>
-            </span>
-          </div>
-        )}
+        {/* v0.11.0：PDF 自己带工具条（页码/缩放/关闭），不再需要上面那行面包屑——
+            它原本打印的还是 `blob:tauri://…` 那一长串，而不是文件名 */}
         {props.pdfView ? (
-          <iframe className="pdf-frame" title={props.pdfView} src={props.pdfView} />
+          <PdfViewer
+            url={props.pdfView}
+            path={props.pdfPath ?? ''}
+            onClose={props.onClosePdf}
+            onOpenExternal={
+              props.onOpenPdfExternal && props.pdfPath
+                ? () => props.onOpenPdfExternal?.(props.pdfPath!)
+                : undefined
+            }
+          />
         ) : (
           <div className={`editor-split ${props.splitPath ? 'on' : ''}`}>
             <div className="editor-col">

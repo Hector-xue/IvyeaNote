@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   findBareUrls,
+  findImages,
   findInlineLinks,
   findFootnoteRefs,
   isHorizontalRule,
@@ -159,5 +160,63 @@ describe('findBareUrls（v0.10.2）', () => {
 
   it('Markdown 链接括号里的地址不重复抓（那边已有装饰）', () => {
     expect(findBareUrls('[a](https://a.com)')).toEqual([]);
+  });
+});
+
+
+/*
+ * v0.11.0：编辑态图片。用户原话「插入的图片也没有直接展示」——
+ * 这个文件此前**根本没有 image 分支**，图片只在阅读态渲染。
+ */
+describe('findImages', () => {
+  it('认出 Markdown 图片，并标出「这一行只有这张图」', () => {
+    const hits = findImages('![封面](Attachments/a.png)');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].src).toBe('Attachments/a.png');
+    expect(hits[0].alt).toBe('封面');
+    expect(hits[0].alone).toBe(true);
+  });
+
+  it('夹在文字中间的图片不算独占一行', () => {
+    const hits = findImages('看这张 ![图](a.png) 就懂了');
+    expect(hits).toHaveLength(1);
+    expect(hits[0].alone).toBe(false);
+    expect(hits[0].from).toBe('看这张 '.length);
+  });
+
+  it('认 Obsidian 的 ![[图片]]，并丢掉尺寸参数', () => {
+    const hits = findImages('![[图 1.png|300]]');
+    expect(hits.map((h) => h.src)).toEqual(['图 1.png']);
+  });
+
+  it('普通链接不是图片', () => {
+    expect(findImages('[不是图](a.png)')).toEqual([]);
+  });
+
+  it('一行里的多张图都要找出来', () => {
+    expect(findImages('![a](1.png) ![b](2.png)').map((h) => h.src)).toEqual(['1.png', '2.png']);
+  });
+});
+
+/*
+ * v0.11.0 修的老 bug：行内装饰的分组编号与判定错位，
+ * `*斜体*` 一直被画成行内代码、`` `代码` `` 反而画成斜体。
+ * 这里锁住"哪种语法该拿到哪个 class"这件事——它是纯规则，
+ * 不需要真的启动 CodeMirror 也能测。
+ */
+describe('行内语法与样式的对应关系', () => {
+  const RE = /(\*\*[^*]+\*\*)|(~~[^~\n]+~~)|(==[^=\n]+==)|(`[^`]+`)|(\*[^*\n]+\*)/g;
+  const which = (text: string): number => {
+    RE.lastIndex = 0;
+    const m = RE.exec(text)!;
+    for (let g = 1; g <= 5; g++) if (m[g]) return g;
+    return -1;
+  };
+  it('加粗=1 删除线=2 高亮=3 行内代码=4 斜体=5', () => {
+    expect(which('**粗**')).toBe(1);
+    expect(which('~~删~~')).toBe(2);
+    expect(which('==亮==')).toBe(3);
+    expect(which('`码`')).toBe(4);
+    expect(which('*斜*')).toBe(5);
   });
 });

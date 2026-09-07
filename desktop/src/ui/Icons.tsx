@@ -12,7 +12,14 @@ export type IconName =
   | 'chevron-down' | 'book' | 'sort' | 'collapse' | 'folder-plus' | 'file-plus'
   | 'backlink' | 'outline' | 'sync' | 'close' | 'move' | 'check' | 'text-format'
   // v0.10.6：同步失败的状态图标。此前状态栏只有 sync 一个图标，成功失败长一个样
-  | 'alert';
+  | 'alert'
+  // v0.11.0 编辑区右键菜单（对标 Obsidian 那张菜单：每项左侧一个图标）
+  | 'link-plus' | 'external-link' | 'paragraph' | 'insert' | 'cut' | 'copy'
+  | 'paste' | 'paste-text' | 'select-all' | 'table' | 'minus' | 'calendar'
+  | 'strikethrough' | 'highlight' | 'clear-format' | 'code-block' | 'callout'
+  // v0.11.0 窗口自绘按钮 + 图谱工具
+  | 'win-min' | 'win-max' | 'win-restore' | 'win-close'
+  | 'zoom-in' | 'zoom-out' | 'focus' | 'filter' | 'page-left' | 'page-right';
 
 const PATHS: Record<IconName, React.ReactNode> = {
   // ---- v0.10.0 移动端 ----
@@ -62,10 +69,20 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M12 11v5M9.5 13.5h5" />
     </>
   ),
+  /*
+   * v0.11.0：`file` / `file-plus` 重画。
+   *
+   * 旧的两条路径画在 x6–18 / y2–22 的网格上，而这套图标里**其它每一个**
+   * （folder / folder-plus / sort / collapse …）都落在 x3–21 / y4–20——
+   * 于是「新建笔记」在侧栏那一行图标里又窄又高、还顶着上下边，
+   * 用户的原话是「新建笔记的图标也和其它图标不搭配」。
+   * 现在统一到 x5–19 / y3–21：与文件夹同一视觉重量，圆角也对齐（r=2）。
+   */
   'file-plus': (
     <>
-      <path d="M6 2h8l4 4v16H6V2zm8 0v4h4" />
-      <path d="M12 11v6M9 14h6" />
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v3a2 2 0 0 0 2 2h3" />
+      <path d="M12 12.5v5M9.5 15h5" />
     </>
   ),
   /** 反向链接：一条指回来的链 */
@@ -92,6 +109,135 @@ const PATHS: Record<IconName, React.ReactNode> = {
     </>
   ),
 
+  // ---- v0.11.0 编辑区右键菜单 ----
+  /** 新增链接：一条链 + 加号（对标 Obsidian 菜单第一项） */
+  'link-plus': (
+    <>
+      <path d="M10 13.5a4.2 4.2 0 0 0 6.3.4l2.2-2.2a4.2 4.2 0 0 0-5.9-5.9l-1.3 1.2" />
+      <path d="M13.4 10.5a4.2 4.2 0 0 0-6.3-.4l-2.2 2.2a4.2 4.2 0 0 0 4 7" />
+      <path d="M17.5 16.5v5M15 19h5" />
+    </>
+  ),
+  'external-link': (
+    <>
+      <path d="M13 4h7v7" />
+      <path d="M20 4l-9 9" />
+      <path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+    </>
+  ),
+  /** 段落设置：一个 ¶ 的骨架 */
+  paragraph: <path d="M13 4v16M17 4v16M13 4H9.5a4.5 4.5 0 0 0 0 9H13M19 4h-6" />,
+  insert: (
+    <>
+      <rect x="4" y="4" width="16" height="16" rx="2.5" />
+      <path d="M12 8.5v7M8.5 12h7" />
+    </>
+  ),
+  cut: (
+    <>
+      <circle cx="6.5" cy="17.5" r="2.5" />
+      <circle cx="17.5" cy="17.5" r="2.5" />
+      <path d="M8.3 15.7 18 4M15.7 15.7 6 4" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5v-9A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
+    </>
+  ),
+  paste: (
+    <>
+      <path d="M9 4H6.5A1.5 1.5 0 0 0 5 5.5v14A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-14A1.5 1.5 0 0 0 17.5 4H15" />
+      <rect x="9" y="2.5" width="6" height="3.5" rx="1.2" />
+    </>
+  ),
+  /** 以纯文本形式粘贴：剪贴板里只剩几条横线（没有格式） */
+  'paste-text': (
+    <>
+      <path d="M9 4H6.5A1.5 1.5 0 0 0 5 5.5v14A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-14A1.5 1.5 0 0 0 17.5 4H15" />
+      <rect x="9" y="2.5" width="6" height="3.5" rx="1.2" />
+      <path d="M8.5 11h7M8.5 14.5h7M8.5 18h4" />
+    </>
+  ),
+  'select-all': (
+    <>
+      <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
+      <path d="M8.5 12h7M8.5 9h7M8.5 15h4" />
+    </>
+  ),
+  table: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <path d="M3.5 10h17M9.5 4.5v15" />
+    </>
+  ),
+  minus: <path d="M4 12h16" />,
+  calendar: (
+    <>
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 10h17M8 3.5v3M16 3.5v3" />
+    </>
+  ),
+  strikethrough: <path d="M4 12h16M16.5 7.5C15.6 6 14 5.2 12 5.2c-2.6 0-4.3 1.3-4.3 3 0 1.3.9 2.2 2.6 2.8M7.5 16.4c.8 1.6 2.4 2.4 4.5 2.4 2.8 0 4.5-1.3 4.5-3.2 0-1.1-.5-1.9-1.5-2.5" />,
+  highlight: (
+    <>
+      <path d="M14.5 3.5 20 9l-8.2 8.2H6.3v-5.5z" />
+      <path d="M4 21h16" />
+    </>
+  ),
+  'clear-format': (
+    <>
+      <path d="M5 6V4.5h11V6M10.5 4.5V16M8 19.5h5" />
+      <path d="M15.5 15.5 21 21M21 15.5 15.5 21" />
+    </>
+  ),
+  'code-block': (
+    <>
+      <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+      <path d="M9.5 9.5 7 12l2.5 2.5M14.5 9.5 17 12l-2.5 2.5" />
+    </>
+  ),
+  callout: (
+    <>
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" />
+      <path d="M7 5v14" />
+      <path d="M11.5 9v3.5M11.5 15.4h.01" />
+    </>
+  ),
+  // ---- v0.11.0 窗口自绘按钮。故意画成 Windows 的细线字形，不用本套 1.6 描边 ----
+  'win-min': <path d="M5 12h14" />,
+  'win-max': <rect x="5.5" y="5.5" width="13" height="13" rx="1" />,
+  'win-restore': (
+    <>
+      <rect x="4.5" y="7.5" width="11" height="11" rx="1" />
+      <path d="M8 7.5V6a1.5 1.5 0 0 1 1.5-1.5H18A1.5 1.5 0 0 1 19.5 6v8.5A1.5 1.5 0 0 1 18 16h-1.5" />
+    </>
+  ),
+  'win-close': <path d="M5.5 5.5l13 13M18.5 5.5l-13 13" />,
+  // ---- v0.11.0 图谱工具条 ----
+  'zoom-in': (
+    <>
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="M15 15l5 5M10.5 8v5M8 10.5h5" />
+    </>
+  ),
+  'zoom-out': (
+    <>
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="M15 15l5 5M8 10.5h5" />
+    </>
+  ),
+  focus: (
+    <>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
+    </>
+  ),
+  filter: <path d="M4 5h16l-6.2 7.4v5.4l-3.6 2v-7.4z" />,
+  'page-left': <path d="M14 6l-6 6 6 6" />,
+  'page-right': <path d="M10 6l6 6-6 6" />,
+
   settings: (
     <>
       <circle cx="12" cy="12" r="3" />
@@ -111,7 +257,12 @@ const PATHS: Record<IconName, React.ReactNode> = {
       <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
     </>
   ),
-  file: <path d="M6 2h8l4 4v16H6V2zm8 0v4h4" />,
+  file: (
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v3a2 2 0 0 0 2 2h3" />
+    </>
+  ),
   search: (
     <>
       <circle cx="10" cy="10" r="6" />
@@ -157,7 +308,16 @@ const PATHS: Record<IconName, React.ReactNode> = {
   ),
 };
 
-export function RibbonIcon({ name, size = 18 }: { name: IconName; size?: number }) {
+export function RibbonIcon({
+  name,
+  size = 18,
+  /** 描边粗细。窗口按钮那三个字形要更细（Windows 自己就是 1px 细线），其余保持 1.6 */
+  stroke = 1.6,
+}: {
+  name: IconName;
+  size?: number;
+  stroke?: number;
+}) {
   return (
     <svg
       width={size}
@@ -165,7 +325,7 @@ export function RibbonIcon({ name, size = 18 }: { name: IconName; size?: number 
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth={stroke}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

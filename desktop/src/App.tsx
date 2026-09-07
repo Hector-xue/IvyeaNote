@@ -333,10 +333,12 @@ export default function App() {
   }, []);
   const {
     pdfView,
+    pdfPath,
     insertImage: onInsertImage,
     saveImageFile: onPasteImage,
     resolveImage,
     openPdf: onOpenPdf,
+    openPdfExternal: onOpenPdfExternal,
     closePdf: onClosePdf,
   } = useAttachments({
     vaultPath: vault ? vault.localPath ?? '' : null,
@@ -1776,6 +1778,10 @@ export default function App() {
           sortMode={sortMode}
           onSortChange={setSortMode}
           onOpenPdf={(p) => void onOpenPdf(p)}
+          pdfView={pdfView}
+          pdfPath={pdfPath}
+          onClosePdf={onClosePdf}
+          onOpenPdfExternal={(p) => void onOpenPdfExternal(p)}
           onInsertImage={onInsertImage}
           resolveImage={resolveImage}
           onOpenPath={onOpenLinkPath}
@@ -1928,6 +1934,8 @@ export default function App() {
         onSortChange={setSortMode}
         onOpenPdf={(p) => void onOpenPdf(p)}
         pdfView={pdfView}
+        pdfPath={pdfPath}
+        onOpenPdfExternal={(p) => void onOpenPdfExternal(p)}
         onClosePdf={onClosePdf}
         onInsertImage={onInsertImage}
         resolveImage={resolveImage}

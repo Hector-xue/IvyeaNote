@@ -10,6 +10,8 @@
  * - 每一项都给**当前值**和**默认值**的提示，让人敢动——不敢动的设置等于没有。
  */
 import { RibbonIcon } from './Icons';
+import { SyncDiagnostics } from './SyncDiagnostics';
+import { isLocalServerAccount } from '../lib/localServer';
 import { DEFAULTS, LIMITS, type Appearance, type ReadFont, type ThemeMode } from '../lib/appearance';
 import { SHORTCUTS, type Prefs } from '../lib/prefs';
 import type { AttachMode } from '../lib/attachPath';
@@ -159,6 +161,38 @@ export function SettingsView(props: Props) {
   const set = (patch: Partial<Appearance>) => props.onChange({ ...v, ...patch });
   const p = props.prefs;
   const setPref = (patch: Partial<Prefs>) => props.onPrefsChange({ ...p, ...patch });
+
+  /**
+   * 现在这台设备的笔记到底怎么流动的。三条路互斥，一眼说清：
+   * 本地模式 / 这台电脑当服务器 / 连到一台远程服务器。
+   */
+  const syncPath = ((): { title: string; desc: string; tone: 'off' | 'lan' | 'remote' } => {
+    if (!props.sync.account) {
+      return {
+        title: '本地模式',
+        desc: '笔记只存在这台设备上。不开同步也能一直用，但换台设备就看不到了。',
+        tone: 'off',
+      };
+    }
+    if (props.sync.localServer?.running || isLocalServerAccount(props.sync.server)) {
+      return {
+        title: '这台电脑当服务器',
+        desc: '笔记只在你自己的设备之间流动，一个字节都不经过别人的机器。代价是这台电脑关机时同步暂停。',
+        tone: 'lan',
+      };
+    }
+    let host = props.sync.server ?? '';
+    try {
+      host = new URL(props.sync.server ?? '').host;
+    } catch {
+      /* 地址不规范就原样显示 */
+    }
+    return {
+      title: `远程服务器 ${host}`,
+      desc: '任何一台设备开机都能同步，不依赖某台电脑在线。',
+      tone: 'remote',
+    };
+  })();
 
   /*
    * Esc 由 App 统一处理（见 App 里的「Esc 关最上面那一层」）。
@@ -419,6 +453,17 @@ export function SettingsView(props: Props) {
             <h3 className="set-h">同步</h3>
 
             {/*
+              v0.11.0：**先说现在走的是哪条路**。
+              这一节此前是「一个开关 + 一个登录按钮 + 一个账号行」，三者各说各的，
+              而"我的笔记现在到底怎么流动的"要靠用户自己拼。同步出问题时，
+              第一个该回答的问题就是这个。
+            */}
+            <div className="sync-now">
+              <span className={`sync-badge ${syncPath.tone}`}>{syncPath.title}</span>
+              <span className="sync-desc">{syncPath.desc}</span>
+            </div>
+
+            {/*
               内置服务端的开关此前**只画在"未登录"那一支里**。而打开它会自动登录，
               于是开关自己把自己藏起来了：局域网地址没了、想关也关不掉，
               「手机怎么连电脑」在开启之后反而无处可查。它是设备级的设施，
@@ -460,6 +505,9 @@ export function SettingsView(props: Props) {
                     </button>
                   </div>
                 )}
+                {/* 诊断只在"这台电脑当服务器"这条路下才有意义：
+                    走远程服务器时，防火墙和局域网地址跟能不能同步没有关系 */}
+                {props.sync.localServer.running && <SyncDiagnostics running />}
               </div>
             )}
 
@@ -498,6 +546,21 @@ export function SettingsView(props: Props) {
                     </button>
                   </div>
                 )}
+                {/* v0.11.0：**换服务器**此前没有入口——一旦连上内置服务端，
+                    想改走自己那台常开的服务器就只能先退出同步再重来，
+                    而"退出同步"听起来像是要删东西，没人敢点 */}
+                <div className="set-row set-about">
+                  <span className="set-label">
+                    换一台服务器
+                    <span className="set-hint">
+                      想让「电脑关机时手机也能同步」，就把服务端放到一台常开的机器上，在这里填它的地址。
+                      本机笔记不会动，连上后自动对账合并
+                    </span>
+                  </span>
+                  <button className="btn" onClick={props.sync.onOpenLogin}>
+                    换服务器…
+                  </button>
+                </div>
                 <div className="set-row set-about">
                   <span className="set-label">
                     退出同步

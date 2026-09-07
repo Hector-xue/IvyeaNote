@@ -110,6 +110,9 @@ vi.mock('@codemirror/state', () => ({
   EditorState: { create: () => ({}), phrases: { of: () => ({}) } },
   EditorSelection: { range: () => ({}), cursor: () => ({}) },
   StateEffect: { define: () => ({ of: () => ({}) }) },
+  // v0.11.0：编辑态图片解析走 Facet（livePreview 里读它拿解析器）。
+  // 桩里缺了会在 import 期就炸掉整个测试文件
+  Facet: { define: () => ({ of: () => ({}) }) },
   Range: class {},
 }));
 

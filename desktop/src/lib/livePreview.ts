@@ -21,9 +21,37 @@ import {
   type DecorationSet,
   type EditorView as IEditorView,
 } from '@codemirror/view';
-import { EditorSelection, Range, StateEffect } from '@codemirror/state';
+import { EditorSelection, Facet, Range, StateEffect } from '@codemirror/state';
 
 export const toggleTaskEffect = StateEffect.define<number>(); // 载荷：任务行内任意 offset
+
+/**
+ * v0.11.0：编辑态里的图片解析器。
+ *
+ * 用户原话是「插入的图片也没有直接展示」——核实下来不是"没做好"，是这个文件里
+ * **从头到尾没有 image 分支**：图片只在「阅读模式」渲染，编辑态永远只有一行
+ * `![xx](Attachments/xx.png)` 源码。Obsidian 的编辑态是直接显示图片的。
+ *
+ * 解析是异步的（要读盘/建 blob URL），而装饰必须同步产出，所以这里走
+ * 「同步查缓存 + 缺了就 request + 拿到后派发 imagesReadyEffect 重建」：
+ * - `get` 返回 `undefined` = 还没试过 → 触发 request，这一轮先不画；
+ * - 返回 `null` = 试过但失败（文件不在）→ 画一个"图片未找到"的占位，
+ *   而不是继续显示源码假装没事；
+ * - 返回字符串 = 可用的 URL。
+ */
+export interface ImageApi {
+  /** 同步取缓存：undefined=没试过，null=解析失败，string=可用 URL */
+  get(src: string): string | null | undefined;
+  /** 请求解析（幂等，内部自己去重）；完成后由调用方派发 imagesReadyEffect */
+  request(src: string): void;
+}
+
+export const imageResolver = Facet.define<ImageApi | null, ImageApi | null>({
+  combine: (values) => values.find((v) => v) ?? null,
+});
+
+/** 图片解析完成：让装饰重建一次。没有它，图片要等下一次敲键才出现 */
+export const imagesReadyEffect = StateEffect.define<null>();
 
 export const livePreviewTheme = {
   '.cm-line': { lineHeight: '1.7' },
@@ -33,6 +61,30 @@ export const livePreviewTheme = {
   '.cm-live-h4, .cm-live-h5, .cm-live-h6': { fontSize: '1.05em', fontWeight: '650' },
   '.cm-live-bold': { fontWeight: '700' },
   '.cm-live-italic': { fontStyle: 'italic' },
+  '.cm-live-strike': { textDecoration: 'line-through', opacity: '0.7' },
+  // 高亮：Obsidian 的 ==高亮== 。用品牌绿的极淡底，不用刺眼的荧光黄
+  '.cm-live-mark': {
+    background: 'color-mix(in srgb, var(--accent, #4a8) 22%, transparent)',
+    borderRadius: '3px',
+    padding: '0 2px',
+  },
+  // 编辑态图片。插件装饰不能是块级，所以是 inline-block + 自己撑高度
+  '.cm-live-img': {
+    display: 'inline-block',
+    maxWidth: '100%',
+    maxHeight: '420px',
+    borderRadius: 'var(--r-1, 6px)',
+    verticalAlign: 'text-bottom',
+  },
+  '.cm-live-img.alone': { display: 'block', margin: '6px 0' },
+  '.cm-live-img-missing': {
+    display: 'inline-block',
+    padding: '2px 8px',
+    border: '1px dashed var(--border, #ccc)',
+    borderRadius: 'var(--r-1, 6px)',
+    color: 'var(--muted, #888)',
+    fontSize: '0.9em',
+  },
   '.cm-live-code': {
     fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
     fontSize: '0.9em',
@@ -231,6 +283,70 @@ export function findBareUrls(lineText: string): { from: number; to: number; href
   return out;
 }
 
+/**
+ * 行内图片 `![alt](src)` 与 Obsidian 的 `![[src]]`。返回**相对行首**的偏移。
+ *
+ * `alone` 表示这一行除了这张图什么都没有——只有这种情况才把源码整段藏掉、
+ * 让图片独占一行；夹在文字中间的图片藏掉源码会让那行读不通。
+ */
+export function findImages(
+  lineText: string
+): { from: number; to: number; src: string; alt: string; alone: boolean }[] {
+  const out: { from: number; to: number; src: string; alt: string; alone: boolean }[] = [];
+  const re = /!\[\[([^\]\n|]+)(?:\|[^\]\n]*)?\]\]|!\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(lineText))) {
+    const src = m[1] ?? m[3];
+    if (!src) continue;
+    const alt = m[1] ? m[1] : (m[2] ?? '');
+    out.push({
+      from: m.index,
+      to: m.index + m[0].length,
+      src,
+      alt,
+      alone: lineText.trim() === m[0].trim(),
+    });
+  }
+  return out;
+}
+
+/** 编辑态的图片。行内 widget（插件装饰不能是块级），靠 CSS 做成 inline-block */
+class ImageWidget extends WidgetType {
+  constructor(
+    readonly url: string | null,
+    readonly alt: string,
+    readonly src: string,
+    readonly alone: boolean
+  ) {
+    super();
+  }
+  override eq(other: ImageWidget) {
+    return other.url === this.url && other.alt === this.alt && other.alone === this.alone;
+  }
+  override toDOM() {
+    if (this.url === null) {
+      const miss = document.createElement('span');
+      miss.className = 'cm-live-img-missing';
+      miss.textContent = `图片未找到：${this.src}`;
+      return miss;
+    }
+    const img = document.createElement('img');
+    img.className = `cm-live-img${this.alone ? ' alone' : ''}`;
+    img.src = this.url;
+    img.alt = this.alt;
+    img.loading = 'lazy';
+    // 右键菜单要拿得到**库内**路径；img.src 那时已经是 blob URL，说明不了任何事
+    img.dataset.src = this.src;
+    // 图片加载完高度才定下来，不通知 CM 的话行高会停在 0（正文被压成一条）
+    img.addEventListener('load', () => img.dispatchEvent(new Event('cm-resize', { bubbles: true })));
+    return img;
+  }
+  /** 点击图片要能选中/放大，不该被编辑器吞掉 */
+  override ignoreEvent() {
+    return false;
+  }
+}
+
 class TaskWidget extends WidgetType {
   constructor(readonly checked: boolean) {
     super();
@@ -260,7 +376,11 @@ export const livePreview = ViewPlugin.fromClass(
 
     update(u: any) {
       // focusChanged 必须参与：失焦/聚焦会改变「要不要显示标记」，不重建就不生效
-      if (u.docChanged || u.selectionSet || u.viewportChanged || u.focusChanged) {
+      // imagesReadyEffect：图片解析是异步的，不重建的话图片要等下一次敲键才出现
+      const imagesReady = u.transactions.some((tr: any) =>
+        tr.effects.some((e: any) => e.is(imagesReadyEffect))
+      );
+      if (u.docChanged || u.selectionSet || u.viewportChanged || u.focusChanged || imagesReady) {
         this.build(u.view);
       }
       // 响应复选框点击：切换该行任务状态
@@ -288,6 +408,7 @@ export const livePreview = ViewPlugin.fromClass(
       const decos: Range<Decoration>[] = [];
       const sel = view.state.selection;
       const focused = view.hasFocus;
+      const imgApi = view.state.facet(imageResolver);
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
@@ -360,25 +481,55 @@ export const livePreview = ViewPlugin.fromClass(
               }
             }
 
-            // ---- 行内：加粗 / 斜体 / 行内代码 ----
-            const inlineRe = /(\*\*([^*]+)\*\*)|(\*([^*\n]+)\*)|(`([^`]+)`)/g;
+            /*
+             * ---- 行内：加粗 / 删除线 / 高亮 / 行内代码 / 斜体 ----
+             *
+             * v0.11.0 修了一个一直摆在眼前的错位：旧正则是
+             * `(\*\*…\*\*)|(\*…\*)|(`…`)`，分组编号是 1/3/5，而判定写的是
+             * `im[1] → 加粗，im[3] → 行内代码，其余 → 斜体`——im[3] 是**斜体**那一支。
+             * 于是 `*斜体*` 一直被画成灰底的行内代码，`` `代码` `` 反而画成斜体，
+             * 两个样式整整互换着用了六个版本。现在去掉内层捕获组，一支一行，
+             * marker 长度跟着支走，不再靠数括号。
+             */
+            const inlineRe = /(\*\*[^*]+\*\*)|(~~[^~\n]+~~)|(==[^=\n]+==)|(`[^`]+`)|(\*[^*\n]+\*)/g;
+            const INLINE: { group: number; cls: string; mark: number }[] = [
+              { group: 1, cls: 'cm-live-bold', mark: 2 },
+              { group: 2, cls: 'cm-live-strike', mark: 2 },
+              { group: 3, cls: 'cm-live-mark', mark: 2 },
+              { group: 4, cls: 'cm-live-code', mark: 1 },
+              { group: 5, cls: 'cm-live-italic', mark: 1 },
+            ];
             let im: RegExpExecArray | null;
             while ((im = inlineRe.exec(t))) {
               const start = line.from + im.index;
               const end = start + im[0].length;
               if (cursorNear(sel, start, end, focused)) continue;
-              if (im[1]) {
-                decos.push(Decoration.mark({ class: 'cm-live-bold' }).range(start + 2, end - 2));
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + 2));
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - 2, end));
-              } else if (im[3]) {
-                decos.push(Decoration.mark({ class: 'cm-live-code' }).range(start + 1, end - 1));
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + 1));
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - 1, end));
-              } else {
-                decos.push(Decoration.mark({ class: 'cm-live-italic' }).range(start + 1, end - 1));
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + 1));
-                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - 1, end));
+              const hit = INLINE.find((k) => im![k.group]);
+              if (!hit) continue;
+              decos.push(Decoration.mark({ class: hit.cls }).range(start + hit.mark, end - hit.mark));
+              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, start + hit.mark));
+              decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(end - hit.mark, end));
+            }
+
+            // ---- 图片（v0.11.0）：编辑态直接显示，不再只是一行源码 ----
+            if (imgApi) {
+              for (const img of findImages(t)) {
+                const start = line.from + img.from;
+                const end = line.from + img.to;
+                if (cursorNear(sel, start, end, focused)) continue;
+                const got = imgApi.get(img.src);
+                if (got === undefined) {
+                  // 还没解析过：这一轮先放着，解析完会派发 imagesReadyEffect 再来一次
+                  imgApi.request(img.src);
+                  continue;
+                }
+                decos.push(Decoration.mark({ class: 'cm-live-marker' }).range(start, end));
+                decos.push(
+                  Decoration.widget({
+                    widget: new ImageWidget(got, img.alt, img.src, img.alone),
+                    side: 1,
+                  }).range(end)
+                );
               }
             }
 

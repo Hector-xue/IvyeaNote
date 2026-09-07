@@ -10,6 +10,7 @@ import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
 import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
+import { PdfViewer } from './PdfViewer';
 import { InlineTitle } from './InlineTitle';
 import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
@@ -85,6 +86,15 @@ interface Props {
   sortMode: SortMode;
   onSortChange(m: SortMode): void;
   onOpenPdf(path: string): void;
+  /**
+   * v0.11.0：手机上现在也能**在应用里**看 PDF。
+   * 此前安卓只有「交给系统应用打开」一条路（WebView 不内嵌 PDF），
+   * 而应用内部存储的库连这条路都没有——点了什么都不发生。
+   */
+  pdfView?: string | null;
+  pdfPath?: string | null;
+  onClosePdf?(): void;
+  onOpenPdfExternal?(path: string): void;
   onInsertImage?: (notePath: string | null) => Promise<string | null>;
   resolveImage?: (rel: string) => Promise<string | null>;
 }
@@ -476,7 +486,18 @@ export function MobileView(props: Props) {
         />
         {hasError && <div className="m-error">⚠ {report!.errors[0]}</div>}
 
-        {props.currentPath == null ? (
+        {props.pdfView ? (
+          <PdfViewer
+            url={props.pdfView}
+            path={props.pdfPath ?? ''}
+            onClose={() => props.onClosePdf?.()}
+            onOpenExternal={
+              props.onOpenPdfExternal && props.pdfPath
+                ? () => props.onOpenPdfExternal?.(props.pdfPath!)
+                : undefined
+            }
+          />
+        ) : props.currentPath == null ? (
           <div className="m-empty">
             <img src={logoUrl} alt="" className="login-logo" />
             <p>左上角打开文件列表，或新建一篇</p>

@@ -23,16 +23,30 @@ import { marked } from 'marked';
 import { RibbonIcon, type IconName } from './Icons';
 import DOMPurify from 'dompurify';
 import {
+  clearFormatting,
   cycleHeading,
+  insertBlock,
   insertImage,
   insertLink,
+  insertText,
+  insertWikiLink,
+  setHeading,
   toggleInline,
   toggleLinePrefix,
   toggleOrderedList,
   toggleTaskList,
   type EditResult,
 } from '../lib/format';
-import { livePreview, livePreviewTheme } from '../lib/livePreview';
+import {
+  imageResolver,
+  imagesReadyEffect,
+  livePreview,
+  livePreviewTheme,
+  type ImageApi,
+} from '../lib/livePreview';
+import { ContextMenu, type MenuAnchor } from './ContextMenu';
+import { blockSnippet, buildEditorMenu } from '../lib/editorMenu';
+import { raiseToast } from './Toast';
 import { autocompletion } from '@codemirror/autocomplete';
 import { wikiCompletion } from '../lib/wikiComplete';
 import { renderWikiLinks } from '../lib/wikilink';
@@ -98,9 +112,13 @@ function cmExtensions(
   dark: boolean,
   getTitles?: () => { path: string; title: string }[],
   livePreviewOn = true,
-  onFollowLink?: (href: string) => void
+  onFollowLink?: (href: string) => void,
+  /** v0.11.0：编辑态图片解析。必须是**稳定对象**（内部走 ref），
+      否则每次换文件都要重建缓存，图片会闪一下才回来 */
+  imageApi?: ImageApi
 ): Extension[] {
   return [
+    ...(imageApi ? [imageResolver.of(imageApi)] : []),
     /*
      * v0.10.2：**软换行**。CM6 默认 `white-space: pre`——一段长文就是一条不换行的
      * 长线，只能横向滚。typography.css 里早写了 `.cm-line { overflow-wrap: break-word }`，
@@ -212,6 +230,35 @@ export function shouldApplyExternalDoc(
   return incoming !== lastEmitted && incoming !== current;
 }
 
+/*
+ * v0.11.0：`==高亮==`。
+ *
+ * 这是 Obsidian 的写法，不是 CommonMark 也不是 GFM——marked 默认原样输出，
+ * 于是编辑态（livePreview 认它）和阅读态会给出两个结果：一边是高亮，
+ * 一边是四个等号。右键菜单新增了「高亮」这一项，两边就必须一致。
+ * 用 marked 的 inline 扩展而不是事后正则替换 HTML：正则会连代码块里的
+ * `==` 一起改掉。
+ */
+marked.use({
+  extensions: [
+    {
+      name: 'ivHighlight',
+      level: 'inline',
+      start(src: string) {
+        return src.indexOf('==');
+      },
+      tokenizer(src: string) {
+        const m = /^==(?=\S)([\s\S]*?\S)==/.exec(src);
+        if (!m) return undefined;
+        return { type: 'ivHighlight', raw: m[0], text: m[1], tokens: [] };
+      },
+      renderer(token) {
+        return `<mark>${(token as { text?: string }).text ?? ''}</mark>`;
+      },
+    },
+  ],
+});
+
 export function renderMarkdown(md: string): string {
   const raw = marked.parse(md, { async: false }) as string;
   return decorateCallouts(DOMPurify.sanitize(raw));
@@ -251,6 +298,9 @@ const TOOLS: ToolBtn[] = [
   { key: 'q', icon: 'quote', title: '引用', run: (t, f, to) => toggleLinePrefix(t, { from: f, to }, '> ') },
   { key: 'code', icon: 'code', title: '行内代码', run: (t, f, to) => toggleInline(t, { from: f, to }, '`') },
   { key: 'link', icon: 'link', title: '插入链接', run: (t, f, to) => insertLink(t, { from: f, to }) },
+  // v0.11.0：右键「文本格式」里的两项。工具栏不放它们（那条已经够长），但能力得有
+  { key: 'strike', icon: 'strikethrough', title: '删除线', run: (t, f, to) => toggleInline(t, { from: f, to }, '~~') },
+  { key: 'mark', icon: 'highlight', title: '高亮', run: (t, f, to) => toggleInline(t, { from: f, to }, '==') },
 ];
 
 export function MarkdownEditor(props: MarkdownEditorProps) {
@@ -327,7 +377,63 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const followLinkRef = useRef(followLink);
   followLinkRef.current = followLink;
 
+  /*
+   * v0.11.0：**编辑态图片**。
+   *
+   * 装饰必须同步产出，而解析（读盘 → blob URL）是异步的，所以这里是
+   * 「同步查缓存 → 缺了就去解析 → 解析完派发 imagesReadyEffect 让装饰重来一次」。
+   * 缓存键带上笔记路径：相对路径是相对**这篇笔记**的，换一篇同名的
+   * `img.png` 完全可能是另一张图（和阅读态用的是同一套解析规则）。
+   */
+  const imgCache = useRef(new Map<string, string | null>());
+  const imgPending = useRef(new Set<string>());
+  const resolveImageRef = useRef(props.resolveImage);
+  resolveImageRef.current = props.resolveImage;
+  const imageApiRef = useRef<ImageApi | null>(null);
+  if (!imageApiRef.current) {
+    const key = (src: string) => `${pathRef.current ?? ''} ${src}`;
+    imageApiRef.current = {
+      get: (src) => imgCache.current.get(key(src)),
+      request: (src) => {
+        const k = key(src);
+        if (imgPending.current.has(k)) return;
+        const resolve = resolveImageRef.current;
+        if (!resolve) {
+          imgCache.current.set(k, null);
+          return;
+        }
+        imgPending.current.add(k);
+        void (async () => {
+          let url: string | null = null;
+          if (/^(https?:|data:|blob:)/.test(src)) {
+            url = src;
+          } else {
+            // 与阅读态同一套：先按笔记自己的位置解析，再兜底老的库根相对写法
+            try {
+              url = await resolve(resolveVaultPath(pathRef.current, src));
+            } catch {
+              try {
+                url = await resolve(decodeURIComponent(src));
+              } catch {
+                url = null;
+              }
+            }
+          }
+          imgPending.current.delete(k);
+          // 缓存无上限会随着翻阅一直涨（每个 blob URL 还占着内存），够用就好
+          if (imgCache.current.size > 200) imgCache.current.clear();
+          imgCache.current.set(k, url ?? null);
+          const v = viewRef.current;
+          if (v) v.dispatch({ effects: imagesReadyEffect.of(null) });
+        })();
+      },
+    };
+  }
+  const imageApi = imageApiRef.current;
+
   const [imgBusy, setImgBusy] = useState(false);
+  /** v0.11.0：编辑区右键菜单 */
+  const [menu, setMenu] = useState<MenuAnchor | null>(null);
   /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
   const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
   /** v0.7.3 P4：图片全屏预览 */
@@ -437,7 +543,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           props.theme === 'dark',
           () => props.wikiTitles ?? [],
           props.livePreviewOn ?? true,
-          (href) => followLinkRef.current(href)
+          (href) => followLinkRef.current(href),
+          imageApi
         ),
       }),
     });
@@ -464,7 +571,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           props.theme === 'dark',
           () => props.wikiTitles ?? [],
           props.livePreviewOn ?? true,
-          (href) => followLinkRef.current(href)
+          (href) => followLinkRef.current(href),
+          imageApi
         ),
       })
     );
@@ -536,6 +644,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     void (async () => {
       for (const img of imgs) {
         const src = img.getAttribute('src') ?? '';
+        // 右键菜单要拿库内路径，而 src 待会儿就被换成 blob URL 了
+        img.dataset.src = src;
         if (/^(https?:|data:|blob:)/.test(src)) continue;
         /*
          * v0.10.7：**按笔记自己的位置解析**，而不是拿库根去拼。
@@ -732,6 +842,175 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   };
   insertImageHolder.current = doInsertImage;
 
+  /* ------------------------------------------------------------------
+   * v0.11.0：编辑区右键菜单。
+   *
+   * 用户原话：「在文档页面的鼠标右键功能也是少的可怜，还是说本来就没有右键的功能」——
+   * 是后者。`onContextMenu` 此前只绑在文件树上，编辑区弹的是 WebView 自带的那几项。
+   * 菜单**内容**在 lib/editorMenu.ts（纯函数、可单测），这里只负责：
+   * 收集上下文 → 执行动作 → 画出来。
+   * ------------------------------------------------------------------ */
+
+  /** 对文档做一次纯函数变换并写回（右键菜单里所有改文档的项都走这里） */
+  const applyEdit = (fn: (text: string, from: number, to: number) => EditResult) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const { from, to } = view.state.selection.main;
+    const text = view.state.doc.toString();
+    const r = fn(text, from, to);
+    view.dispatch({
+      changes: { from: 0, to: text.length, insert: r.text },
+      selection: { anchor: r.sel.from, head: r.sel.to },
+      scrollIntoView: true,
+    });
+    view.focus();
+  };
+
+  /** 剥掉行内 Markdown 标记——「以纯文本形式粘贴」用 */
+  const stripMd = (s: string) =>
+    s
+      .replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+      .replace(/\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/~~([^~\n]+)~~/g, '$1')
+      .replace(/==([^=\n]+)==/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*([^*\n]+)\*/g, '$1')
+      .replace(/^\s*(#{1,6}\s+|>\s+|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+\.\s+)/gm, '');
+
+  const writeClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      raiseToast('复制失败：系统剪贴板不可用，请用 Ctrl+C', 'error');
+      return false;
+    }
+  };
+
+  /**
+   * 读剪贴板。
+   *
+   * 不用 `document.execCommand('paste')`——它在任何现代 WebView 里都是禁用的。
+   * `navigator.clipboard.readText()` 在 WebView2 里可用，但**可能被拒**（策略/无焦点），
+   * 那时必须说出来：静默什么都不发生，用户只会以为「粘贴坏了」。
+   */
+  const readClipboard = async (): Promise<string | null> => {
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      raiseToast('读不到剪贴板内容，请直接用 Ctrl+V 粘贴', 'error');
+      return null;
+    }
+  };
+
+  const openEditorMenu = (e: React.MouseEvent) => {
+    // 阅读态、以及只读预览栏也该有菜单（至少能复制、能打开链接）
+    const target = e.target as HTMLElement | null;
+    const view = viewRef.current;
+    e.preventDefault();
+
+    // 右键落在没有选区的位置时，先把光标挪过去——不然「加粗」会作用在别处
+    if (view && mode === 'edit' && view.state.selection.main.empty) {
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos != null) view.dispatch({ selection: { anchor: pos } });
+    }
+
+    const linkEl = target?.closest?.('.cm-live-link, a') as HTMLElement | null;
+    const linkHref = linkEl?.getAttribute('data-href') ?? linkEl?.getAttribute('href') ?? null;
+    const imgEl = target?.closest?.('img') as HTMLImageElement | null;
+    const imageSrc = imgEl?.dataset.src ?? null;
+
+    const sel = view?.state.selection.main;
+    const hasSelection =
+      mode === 'read'
+        ? !(window.getSelection()?.isCollapsed ?? true)
+        : !!sel && !sel.empty;
+
+    const readOnly = mode === 'read' || !!props.readOnlyPreview;
+
+    const items = buildEditorMenu(
+      {
+        hasSelection,
+        linkHref,
+        imageSrc,
+        canInsertImage: !!props.onInsertImage && !!props.currentPath,
+        readOnly,
+      },
+      {
+        format: (key) => {
+          const btn = TOOLS.find((b) => b.key === key);
+          if (btn) applyEdit(btn.run);
+        },
+        heading: (level) => applyEdit((t, f, to) => setHeading(t, { from: f, to }, level)),
+        insertBlock: (kind) => {
+          const snip = blockSnippet(kind);
+          if (kind === 'date' || kind === 'time') {
+            applyEdit((t, f, to) => insertText(t, { from: f, to }, snip.text));
+          } else {
+            applyEdit((t, f, to) => insertBlock(t, { from: f, to }, snip.text, snip.caret));
+          }
+        },
+        insertImage: () => void doInsertImage(),
+        link: () => applyEdit((t, f, to) => insertWikiLink(t, { from: f, to })),
+        externalLink: () => applyEdit((t, f, to) => insertLink(t, { from: f, to })),
+        clearFormat: () => applyEdit((t, f, to) => clearFormatting(t, { from: f, to })),
+        cut: () => {
+          const v = viewRef.current;
+          if (!v) return;
+          const { from, to } = v.state.selection.main;
+          const text = v.state.sliceDoc(from, to);
+          void writeClipboard(text).then((ok) => {
+            if (!ok) return;
+            v.dispatch({ changes: { from, to, insert: '' }, selection: { anchor: from } });
+            v.focus();
+          });
+        },
+        copy: () => {
+          if (mode === 'read') {
+            void writeClipboard(window.getSelection()?.toString() ?? '');
+            return;
+          }
+          const v = viewRef.current;
+          if (!v) return;
+          const { from, to } = v.state.selection.main;
+          void writeClipboard(v.state.sliceDoc(from, to));
+        },
+        paste: () => {
+          void readClipboard().then((text) => {
+            if (text == null) return;
+            applyEdit((t, f, to) => insertText(t, { from: f, to }, text));
+          });
+        },
+        pastePlain: () => {
+          void readClipboard().then((text) => {
+            if (text == null) return;
+            applyEdit((t, f, to) => insertText(t, { from: f, to }, stripMd(text)));
+          });
+        },
+        selectAll: () => {
+          const v = viewRef.current;
+          if (mode === 'read') {
+            const host = previewRef.current;
+            if (!host) return;
+            const range = document.createRange();
+            range.selectNodeContents(host);
+            const s = window.getSelection();
+            s?.removeAllRanges();
+            s?.addRange(range);
+            return;
+          }
+          if (!v) return;
+          v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } });
+          v.focus();
+        },
+        openLink: (href) => followLinkRef.current(href),
+        copyToClipboard: (text) => void writeClipboard(text),
+      }
+    );
+    setMenu({ x: e.clientX, y: e.clientY, items });
+  };
+
   /* 常驻格式条已不在编辑器内部：桌面端不要（Obsidian 也没有），
      移动端由 MobileView 的底部栏统一拥有。选区气泡仍保留。 */
 
@@ -757,6 +1036,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
       */}
       <div
         className="md-body"
+        /* v0.11.0：编辑区右键菜单。WebView 自带的那张只有三四项，必须挡掉 */
+        onContextMenu={openEditorMenu}
         onPaste={(e) => {
           const item = Array.from(e.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'));
           if (item) {
@@ -802,6 +1083,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           ))}
         </div>
       )}
+      <ContextMenu anchor={menu} onClose={() => setMenu(null)} />
       {/* v0.7.3 P4：图片全屏预览 */}
       {lightbox && (
         <div className="m-img-viewer" onClick={() => setLightbox(null)}>

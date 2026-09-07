@@ -456,25 +456,76 @@
   }
 }
 .ctx-item {
+  /* v0.11.0：图标列 + 标签 + 快捷键/箭头。图标列宽度固定，
+     没有图标的条目也占住这一列——一列里有的缩进有的不缩进最难看 */
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: center;
+  gap: var(--sp-2);
   text-align: left;
   border: none;
   background: transparent;
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-sm);
-  padding: var(--sp-2) var(--sp-3);
+  padding: 6px var(--sp-3) 6px var(--sp-2);
   border-radius: var(--r-1);
   cursor: pointer;
   white-space: nowrap;
 }
+.ctx-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: var(--muted);
+}
+.ctx-item.active .ctx-icon {
+  color: var(--text);
+}
+.ctx-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ctx-shortcut {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  padding-left: var(--sp-4);
+}
+.ctx-arrow {
+  display: inline-flex;
+  color: var(--muted);
+  margin-right: -4px;
+}
 .ctx-item.active {
   background: var(--panel-2);
+}
+/* 置灰项：仍然显示（用户能看见这里本来有这个功能），但不响应 hover */
+.ctx-item.disabled,
+.ctx-item:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+  background: transparent;
 }
 .ctx-item.danger {
   color: var(--danger);
 }
+.ctx-item.danger .ctx-icon {
+  color: var(--danger);
+}
 .ctx-item.danger.active {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.ctx-sep {
+  height: 1px;
+  margin: var(--sp-1) var(--sp-2);
+  background: var(--border);
+}
+/* 二级菜单：同一套材质，只是层级更高一档 */
+.ctx-sub-menu {
+  z-index: 1;
 }
 
 /* ------------------------------------------------------------ 设置面板
