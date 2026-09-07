@@ -5,6 +5,15 @@
 
 ---
 
+## v0.11.6 — 2026-09-07
+
+- **修复"登录成功但同步失败"**。v0.11.5 的 CORS 把 `Allow-Headers` 写死成 `Authorization, Content-Type`，而同步的每条请求都带 `X-Device-Id`——浏览器逐条比对，缺一个整个请求就发不出去。登录不带那个头，所以看起来"能连上"。现在**回显浏览器请求的头**，客户端将来加新头也不会再挂。
+- **修复点开非笔记文件报 `Command plugin:opener|open_path not allowed by ACL`**。`opener:default` 只授予 `open-url` 与 `reveal-item-in-dir`，**从不包含 `open-path`**——这意味着"交给系统应用打开"（安卓看 PDF、桌面看 docx/zip）一直是坏的。
+- **修复窗口与桌面糊在一起**。v0.11.4 为去掉系统那圈 1px 方框设了 `shadow: false`，代价是投影也没了。现在四周留一圈透明带、自己画投影（和 Ivyea Translate 同一套做法），最大化时收掉。
+- **收紧文档标题的留白**：距顶栏 32px → 12px，行高 1.3 → 1.25，正文上内边距 24px → 8px。原先顶栏加留白一共 70px 全是空的。
+- 「测试连接」现在能显示服务端版本了：`/healthz` 补上 `X-Ivyea-Version`，并通过 `Access-Control-Expose-Headers` 暴露给跨域的客户端。
+- 服务端版本号从 0.8.10 跟到 0.11.6。
+
 ## v0.11.5 — 2026-09-07
 
 - **修复桌面端与安卓端连不上远程服务器**（客户端报 `Failed to fetch` / 「域名解析失败或服务未启动」）。

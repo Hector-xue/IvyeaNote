@@ -295,6 +295,32 @@ check('粘贴进来的图片在编辑态真的显示出来了（不是"图片未
 check('标题行上的行内语法也渲染（此前整段行内装饰写在 else 里，标题行永远被跳过）',
   !!headingInline && headingInline.markers >= 1, headingInline);
 
+// 标题与顶部留白：v0.11.6 收紧（用户「标题那一栏太高、距顶部留白太多」）
+const titleGeom = await evaluate(`(() => {
+  const bar = document.querySelector('.top-bar');
+  const title = document.querySelector('.inline-title');
+  const line = document.querySelector('.cm-content .cm-line');
+  if (!bar || !title) return null;
+  const b = bar.getBoundingClientRect(), t = title.getBoundingClientRect();
+  return {
+    barBottom: Math.round(b.bottom),
+    titleTop: Math.round(t.top),
+    gapAboveTitle: Math.round(t.top - b.bottom),
+    titleHeight: Math.round(t.height),
+    gapTitleToBody: line ? Math.round(line.getBoundingClientRect().top - t.bottom) : null,
+  };
+})()`);
+check('标题距顶栏的留白收紧到 ≤16px（原来 32px，加上顶栏一共 70px 全是空的）',
+  !!titleGeom && titleGeom.gapAboveTitle <= 16, titleGeom);
+/*
+ * 标题到正文：我们自己只留 8+8=16px（inline-title 的 margin-bottom + cm-content
+ * 的 padding-top）。这份样例的正文首行恰好是 `# 标题`，H1 自带 0.4em 上边距
+ * （约 11px），所以实测 27px 是对的——那 11px 是排版该有的，不是浪费。
+ */
+check('标题与正文之间不再叠出一道空带（我们自己那份 ≤16px，H1 自带的上边距不算）',
+  !!titleGeom && titleGeom.gapTitleToBody !== null && titleGeom.gapTitleToBody <= 28, titleGeom);
+
+
 // 粘贴一个**非图片**：必须弹出说明，而不是静默什么都不发生
 const nonImageToast = await evaluate(`(async () => {
   const dt = new DataTransfer();
@@ -453,6 +479,21 @@ const frameless = await evaluate(`(() => {
   root.classList.remove('frameless', 'win-maximized');
   return out;
 })()`);
+// 无边框时窗口要有投影与四周留白，否则跟桌面糊在一起
+const shadow = await evaluate(`(() => {
+  const root = document.documentElement;
+  root.classList.add('frameless');
+  const bodyPad = getComputedStyle(document.body).paddingTop;
+  const sh = getComputedStyle(document.getElementById('root')).boxShadow;
+  root.classList.add('win-maximized');
+  const maxPad = getComputedStyle(document.body).paddingTop;
+  root.classList.remove('frameless', 'win-maximized');
+  return { bodyPad, hasOuterShadow: /rgba?\([^)]*\)\s+0px\s+10px/.test(sh) || sh.split(',').length >= 3, maxPad };
+})()`);
+check('无边框时窗口四周留出投影带，且投影不止一条内描边',
+  shadow.bodyPad === '10px' && shadow.hasOuterShadow, shadow);
+check('最大化时留白收掉（否则四周露出桌面）', shadow.maxPad === '0px', shadow.maxPad);
+
 // 顶栏：有内容、整条可拖、窗口按钮长在它右端（v0.11.4 照 Obsidian 布局）
 const topBar = await evaluate(`(() => {
   const bar = document.querySelector('.top-bar');

@@ -18,16 +18,37 @@ html.frameless,
 html.frameless body {
   background: transparent;
 }
+/*
+ * v0.11.6：**自己画投影**。
+ *
+ * v0.11.4 为了去掉 Windows 给无边框窗口画的那圈 1px 方框，设了 `shadow: false`，
+ * 代价是系统投影也一起没了——用户的反馈是「整个窗口跟背景无法区分」。一条 1px
+ * 内描边在浅色桌面上根本不够。
+ *
+ * 做法和 Ivyea Translate 一样：窗口四周留一圈**透明留白**，投影画在这圈留白里。
+ * 留白必须是 `body` 的 padding 而不是 `#root` 的 margin——`#root` 要撑满高度，
+ * 而全局 `box-sizing: border-box` 让 `height:100%` 自动扣掉这圈 padding。
+ */
+html.frameless body {
+  padding: 10px;
+}
 html.frameless #root {
   background: var(--bg);
   border-radius: 10px;
   overflow: hidden;
-  /* 系统投影随边框一起没了，补一条极淡描边，窗口才有边界 */
-  box-shadow: inset 0 0 0 1px var(--border);
+  /* 一层扩散投影给"离开桌面"的层次，一条内描边给清晰的边界，两者缺一不可 */
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.14),
+    inset 0 0 0 1px var(--border);
+}
+/* 最大化时窗口贴满屏幕：留白、圆角、投影全部收掉，否则四周会露出桌面 */
+html.frameless.win-maximized body {
+  padding: 0;
 }
 html.frameless.win-maximized #root {
   border-radius: 0;
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 #root {
   display: flex;

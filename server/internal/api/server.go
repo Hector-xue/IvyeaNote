@@ -27,7 +27,7 @@ type Server struct {
 	jwt              *auth.Manager
 	hub              *Hub
 	log              *log.Logger
-	openRegistration bool // 是否开放公开注册（自托管默认关闭）
+	openRegistration bool   // 是否开放公开注册（自托管默认关闭）
 	adminEmail       string // 管理员账号（H8 管理接口鉴权用）
 }
 
@@ -39,6 +39,9 @@ func New(st store.Store, jwtMgr *auth.Manager, hub *Hub, openRegistration bool, 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		// 客户端「测试连接」读这个头来显示服务端版本；此前只有状态页带，
+		// 于是探测成功时那句话永远是「✓ 已连接到 Ivyea Server」，没有版本号
+		w.Header().Set("X-Ivyea-Version", serverVersion)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /{$}", s.handleStatusPage)
@@ -101,7 +104,24 @@ func withCORS(next http.Handler) http.Handler {
 			// 响应随 Origin 变化，必须告诉缓存别串台
 			h.Add("Vary", "Origin")
 			h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			/*
+			 * ⚠️ **回显浏览器请求的头，而不是写死一张清单。**
+			 *
+			 * v0.11.5 第一版写死了 "Authorization, Content-Type"，结果
+			 * **登录成功、同步全挂**：同步的每一条请求都带 `X-Device-Id`
+			 * （见客户端 lib/api.ts），浏览器拿 Allow-Headers 逐条比对，
+			 * 缺一个就整个请求发不出去。而登录不带那个头，所以看起来"能连上"。
+			 * 写死清单等于把"客户端将来会不会加头"押在我记性上——回显才是对的。
+			 */
+			if req := r.Header.Get("Access-Control-Request-Headers"); req != "" {
+				h.Set("Access-Control-Allow-Headers", req)
+				h.Add("Vary", "Access-Control-Request-Headers")
+			} else {
+				h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Device-Id")
+			}
+			// 跨域下 JS 默认只读得到几个基本响应头；版本号要显式暴露，
+			// 否则「连接测试」永远显示不出服务端版本
+			h.Set("Access-Control-Expose-Headers", "X-Ivyea-Version")
 			h.Set("Access-Control-Max-Age", "86400")
 		}
 		// 预检。此前没有任何 OPTIONS 路由，net/http 的 mux 直接回 405，
@@ -338,7 +358,7 @@ func (s *Server) handleVaultCreate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		VaultID int64              `json:"vault_id"`
+		VaultID int64               `json:"vault_id"`
 		Changes []ivsync.PushChange `json:"changes"`
 	}
 	if !decodeBody(w, r, &req) {
