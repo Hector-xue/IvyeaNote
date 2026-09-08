@@ -387,7 +387,15 @@ const mdHighlight = HighlightStyle.define([
   { tag: t.url, color: 'var(--muted)' },
   { tag: t.monospace, fontFamily: 'var(--font-mono, ui-monospace, monospace)' },
   { tag: t.quote, color: 'var(--muted)' },
-  { tag: t.list, color: 'var(--muted)' },
+  /*
+   * v0.11.11：`t.list` **不能整条变灰**。
+   *
+   * Lezer 的 markdown 语法里，`t.list` 盖住的是**整个列表项**（ListItem），
+   * 不只是行首那个 `-`。所以这一行的效果是"凡是列表项，正文一律用次要文字色"——
+   * 一篇满是清单的笔记整页发灰。用户量到的就是这个：正文 rgb(43,42,38)，
+   * 清单里的字 rgb(139,136,128)。Obsidian 里列表正文与普通段落同色。
+   * 行首那个符号本来就有 livePreview 的装饰在管，不需要靠这条上色。
+   */
   { tag: t.comment, color: 'var(--muted)' },
 ]);
 

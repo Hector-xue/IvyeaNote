@@ -58,7 +58,17 @@ jobs:
       - name: 类型检查（tsc -b）
         run: npx tsc -b
 
-      - name: 单元测试（vitest）
+      # 端到端那份跑在 node 里、要 node 类型，被应用那份 tsconfig 排除在外
+      # （给整个 src 打开 node 全局的话，应用代码误用 process/fs 也能过检，到浏览器才炸）。
+      - name: 类型检查（端到端：tsconfig.e2e.json）
+        run: npx tsc -p tsconfig.e2e.json --noEmit
+
+      # 这一步里包含 `src/lib/sync.e2e.test.ts`：它会**真的起一个 Go 服务端**、
+      # 在真磁盘目录上跑真同步引擎。v0.11.10 的同步事故（.ivyea 被推上云、blob 撞 401
+      # 不刷新、一个文件失败拖垮整轮）三条全是"假件比真件宽松"放过去的，
+      # 单测怎么写都抓不到。上面那步 setup-go 已经把 go 装好了，这里直接就能跑；
+      # 本机没有 go 时该组自动跳过。
+      - name: 单元测试 + 端到端同步（vitest）
         run: npx vitest run
 
       - name: 前端构建（vite build）

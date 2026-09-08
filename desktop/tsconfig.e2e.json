@@ -1,0 +1,15 @@
+{
+  /*
+   * 端到端测试（真服务端 + 真目录）单独一份：它跑在 node 里，要 node 的类型，
+   * 而应用那份刻意只给 DOM —— 否则 app 代码里误用 process/fs 也能过类型检查，
+   * 到浏览器里才炸。模块解析沿用 bundler，和 src 里其余文件一致。
+   */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "vite/client"],
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo"
+  },
+  // vite-env.d.ts 带着 `define` 注入的那几个全局声明（__WEB_BUILD__…），少了它这边会报未定义
+  "include": ["src/**/*.e2e.test.ts", "src/vite-env.d.ts"],
+  "exclude": []
+}

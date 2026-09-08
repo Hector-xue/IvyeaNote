@@ -136,6 +136,8 @@ export const livePreviewTheme = {
    * 底色铺在整行（Decoration.line）而不是包一层元素：CodeMirror 的行是虚拟滚动的，
    * 包元素会在滚动时被反复拆建。首行/末行单独给圆角，中间行不给，视觉上才是一块。
    */
+  /* 任务行：整行悬挂缩进，折行后的文字对齐第一行的文本而不是顶到复选框下面 */
+  '.cm-live-task': { paddingLeft: '1.7em', textIndent: '-1.7em' },
   '.cm-live-fence': {
     fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace)',
     fontSize: '0.9em',
@@ -252,12 +254,20 @@ function cursorNear(sel: EditorSelection, from: number, to: number, focused: boo
 export function parseTaskLine(
   lineText: string,
   lineFrom: number
-): { boxFrom: number; boxTo: number; textFrom: number; checked: boolean } | null {
+): {
+  /** 列表符号（- * +）的位置：渲染时连它一起换掉，别让复选框前面还挂着一个 `-` */
+  markFrom: number;
+  boxFrom: number;
+  boxTo: number;
+  textFrom: number;
+  checked: boolean;
+} | null {
   const m = lineText.match(/^(\s*)([-*+])\s+\[( |x|X)\]\s*/);
   if (!m) return null;
   const bracketPos = lineText.indexOf('[');
   const boxFrom = lineFrom + bracketPos;
   return {
+    markFrom: lineFrom + m[1].length,
     boxFrom,
     boxTo: boxFrom + 3,
     textFrom: lineFrom + m[0].length,
@@ -457,22 +467,35 @@ export const livePreview = ViewPlugin.fromClass(
       if (u.docChanged || u.selectionSet || u.viewportChanged || u.focusChanged || imagesReady) {
         this.build(u.view);
       }
-      // 响应复选框点击：切换该行任务状态
+      /*
+       * 响应复选框点击：切换该行任务状态。
+       *
+       * **必须放到下一个微任务里 dispatch。** 在 `update()` 里同步派发事务，
+       * CodeMirror 会抛「Calls to EditorView.dispatch are not allowed while an
+       * update is in progress」——而 ViewPlugin 抛异常的后果是**整个插件被停用**，
+       * 屏幕上所有 Live Preview 装饰当场消失。用户看到的现象就是
+       * 「任务列表打勾无法点击，点一下就变成中括号了」：不是没接点击，
+       * 是接了之后把渲染层整个搞崩了。
+       */
       for (const tr of u.transactions) {
         for (const e of tr.effects) {
           if (e.is(toggleTaskEffect)) {
-            const line = u.view.state.doc.lineAt(e.value);
-            const hit = parseTaskLine(line.text, line.from);
-            if (hit) {
+            const pos = e.value;
+            queueMicrotask(() => {
+              const view = u.view;
+              if (pos > view.state.doc.length) return;
+              const line = view.state.doc.lineAt(pos);
+              const hit = parseTaskLine(line.text, line.from);
+              if (!hit) return;
               const bracketOffset = line.from + line.text.indexOf('[');
-              u.view.dispatch({
+              view.dispatch({
                 changes: {
                   from: bracketOffset + 1,
                   to: bracketOffset + 2,
                   insert: hit.checked ? ' ' : 'x',
                 },
               });
-            }
+            });
           }
         }
       }
@@ -674,10 +697,37 @@ export const livePreview = ViewPlugin.fromClass(
             );
           }
 
-          // ---- 任务复选框 ----
+          /*
+           * ---- 任务复选框（v0.11.11 大改）----
+           *
+           * 三件事一起改，因为它们是同一个毛病的三个面（用户原话：「任务列表打勾
+           * 无法点击，点一下就变成中括号了，前面还有一个 -，且右侧文案没有缩进」）：
+           *
+           * 1. **光标在这一行时也要保持渲染。** 原来跟其它语法一样走 `cursorNear`：
+           *    点复选框会把光标落到这一行，装饰当即撤掉，于是"点一下就变成中括号"。
+           *    复选框不是语法标记，它是个控件——Obsidian 在光标进入任务行时同样
+           *    保留它。真要改源码，把光标移到 `[` 之内（下面的判定）就会显形。
+           * 2. **连列表符号一起换掉。** 原来只替换 `[ ]` 三个字符，前面那个 `- `
+           *    还留在屏幕上，成了"复选框前面还有一个 -"。
+           * 3. **整行做悬挂缩进。** 折行后的文字要对齐第一行的文本，而不是顶到
+           *    复选框下面（`.cm-live-task` 那条 CSS）。
+           */
           const task = parseTaskLine(t, line.from);
-          if (task && !cursorNear(sel, task.boxFrom, task.textFrom, focused)) {
-            decos.push(Decoration.replace({ widget: new TaskWidget(task.checked) }).range(task.boxFrom, task.boxTo));
+          if (task) {
+            /*
+             * **复选框一律渲染，不看光标在哪。**
+             *
+             * 先试过"光标落进方括号才显形"，实测仍然不行：点复选框时 CodeMirror
+             * 会把光标落在被替换区间的边界上，`cursorNear` 的 ±1 容差当场命中，
+             * 于是"点一下就变成中括号"照旧（这条是拿真实产物点出来的，不是看代码想的）。
+             *
+             * 复选框是控件不是语法标记：Obsidian 的 Live Preview 里它也从不退回
+             * `- [ ]`。要改回源码有的是路——切源码模式，或者在文字处退格把它删掉。
+             */
+            decos.push(Decoration.line({ class: 'cm-live-task' }).range(line.from));
+            decos.push(
+              Decoration.replace({ widget: new TaskWidget(task.checked) }).range(task.markFrom, task.boxTo)
+            );
             if (task.checked && task.textFrom < line.to) {
               decos.push(Decoration.mark({ class: 'cm-task-checked-text' }).range(task.textFrom, line.to));
             }

@@ -367,6 +367,12 @@ const pdfNode = await evaluate(`(() => {
   const el = document.querySelector('.ft-root .ft-file-name[title="手册.pdf"]');
   if (!el) return null;
   const row = el.closest('.ft-file');
+  /*
+   * 先滚进视口再取坐标：浏览器的 OPFS 库是跨轮累积的（每跑一次就多几篇），
+   * 文件树迟早会把这一行挤到窗口外面，那时纵坐标会大于窗口高度，点击落空，
+   * 表现成"PDF 五条突然全红"——是验证台自己的问题，不是产物坏了。
+   */
+  row.scrollIntoView({ block: 'center' });
   const r = row.getBoundingClientRect();
   return { badge: row.querySelector('.ft-badge')?.textContent ?? null, x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) };
 })()`);
@@ -688,6 +694,98 @@ await new Promise((r) => setTimeout(r, 2600));
   })()`));
 }
 
+// ---------- 7.55 清单正文的颜色与复选框（v0.11.11）----------
+/*
+ * 用户原话：「任务列表打勾无法点击，点一下就变成中括号了，前面还有一个 -，
+ * 且右侧文案没有缩进，而且我的这些字颜色特别浅」。
+ * 这几条全是运行时算出来的，只有量真实产物的 computed 值才作数。
+ */
+{
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('乙'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const cb = await evaluate(`(() => { const c = document.querySelector('.cm-content'); if (!c) return null;
+    const r = c.getBoundingClientRect(); return { x: Math.round(r.left + 40), y: Math.round(r.bottom - 12) } })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: cb.x, y: cb.y, button: 'left', clickCount: 1, buttons: 1 });
+  }
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35 });
+  for (const line of ['', '- [ ] 待办一二三四五六七八九十', '- 普通列表项']) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    if (line) await send('Input.insertText', { text: line });
+  }
+  await new Promise((r) => setTimeout(r, 900));
+
+  const colors = await evaluate(`(() => {
+    const norm = (c) => c.replace(/\\s/g, '');
+    const body = norm(getComputedStyle(document.querySelector('.cm-content')).color);
+    const muted = norm(getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#000');
+    // 清单那一行里承载文字的那个 span（CodeMirror 给它挂的是高亮 class）
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.textContent.includes('普通列表项'));
+    const spans = line ? [...line.querySelectorAll('span')].filter(s => s.textContent.includes('普通列表项')) : [];
+    return {
+      body,
+      muted,
+      listText: spans.length ? norm(getComputedStyle(spans[spans.length - 1]).color) : body,
+      taskLineIndent: (() => {
+        const t = [...document.querySelectorAll('.cm-live-task')];
+        if (!t.length) return null;
+        const cs = getComputedStyle(t[t.length - 1]);
+        return { padLeft: cs.paddingLeft, indent: cs.textIndent };
+      })(),
+    };
+  })()`);
+  check('清单正文用的是正文墨色，不是次要文字色（满屏清单不该整页发灰）',
+    colors.listText === colors.body, colors);
+  check('任务行是悬挂缩进（折行的文字对齐第一行文本，不顶到复选框下面）',
+    !!colors.taskLineIndent && parseFloat(colors.taskLineIndent.padLeft) > 8 &&
+    parseFloat(colors.taskLineIndent.indent) < 0, colors.taskLineIndent);
+
+  // 光标就在这一行：复选框必须还在（原来会当场退回 `- [ ]`）
+  const boxWithCursor = await evaluate(`document.querySelectorAll('.cm-task-checkbox').length`);
+  check('光标停在任务行时复选框仍然渲染（此前点一下就退回 `- [ ]`）', boxWithCursor >= 1, boxWithCursor);
+
+  // 点一下复选框：要真的勾上，而且勾完还是复选框
+  const before = await evaluate(`document.querySelector('.cm-content').innerText.includes('[x]')`);
+  await evaluate(`(() => { const b = document.querySelector('.cm-task-checkbox'); if (!b) return false;
+    const r = b.getBoundingClientRect(); window.__box = { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) }; return true })()`);
+  const boxPt = await evaluate(`window.__box`);
+  if (boxPt) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: boxPt.x, y: boxPt.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  // 真相要去磁盘上取：编辑区里显示的是复选框，`innerText` 当然读不到 `[x]`
+  await new Promise((r) => setTimeout(r, 1400)); // 等防抖落盘
+  const onDisk = await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      try {
+        const fh = await handle.getFileHandle('乙.md');
+        return await (await fh.getFile()).text();
+      } catch (e) { /* 换下一个库目录 */ }
+    }
+    return null;
+  })()`);
+  const after = await evaluate(`(() => ({
+    src: false,
+    boxes: document.querySelectorAll('.cm-task-checkbox').length,
+    checked: document.querySelectorAll('.cm-task-checked').length,
+    dashLeft: [...document.querySelectorAll('.cm-line')].some(l => /^\\s*-\\s+\\[/.test(l.textContent)),
+    text: document.querySelector('.cm-content').innerText.split('\\n').slice(-4).join(' | '),
+    focused: document.querySelector('.cm-editor')?.classList.contains('cm-focused') ?? false,
+  }))()`);
+  check('点复选框真的勾上了（磁盘上的源码变成 `[x]`），且勾完仍是复选框、前面不再露出 `-`',
+    /- \[x\] 待办/.test(onDisk ?? '') && after.boxes >= 1 && after.checked >= 1 && !after.dashLeft,
+    { before, after, onDisk: (onDisk ?? '').split('\n').slice(-3).join(' | ') });
+  await shot('task-list.png');
+}
+
 // ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------
 /*
  * 用户报的是「侧边栏展开的直角改为 R 角」「按钮弹窗也不好看」。
@@ -728,8 +826,10 @@ await new Promise((r) => setTimeout(r, 2600));
 
   // 抽屉里长按一个文件 → 底部菜单
   const row = await evaluate(`(() => {
-    const el = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('甲'));
+    const names = [...document.querySelectorAll('.m-tree-name')];
+    const el = names.find(x => /\\.md$|甲|乙/.test(x.textContent)) ?? names[0];
     if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) };
   })()`);
@@ -758,6 +858,13 @@ await new Promise((r) => setTimeout(r, 2600));
       icons: g.querySelectorAll('.m-sheet2-ico svg').length,
     };
   })()`);
+  if (!sheet) {
+    console.log('  · 菜单没弹出来，现场 =', JSON.stringify(await evaluate(`(() => ({
+      names: [...document.querySelectorAll('.m-tree-name')].map(x => x.textContent).slice(0, 8),
+      mask: !!document.querySelector('.m-sheet-mask'),
+      row: ${JSON.stringify(row)},
+    }))()`)));
+  }
   check('底部菜单是分组圆角卡片，行高够按，分隔线从文字处起画（不横穿图标栏）',
     !!sheet && parseFloat(sheet.radius) >= 12 && sheet.shadow && (sheet.itemH ?? 0) >= 48 &&
     parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);

@@ -754,6 +754,15 @@ export default function App() {
       try {
         const text = await io.read(vault.localPath ?? '', path);
         onClosePdf();
+        /*
+         * v0.11.11：打开笔记时把 `.base` 表格收起来。
+         *
+         * 主区是三选一（表格 / PDF / 编辑器），而 `setBaseDoc` 只在"关闭"按钮里清过。
+         * 于是从表里点一篇笔记之外的任何入口（侧栏、搜索、快速切换）都表现成
+         * "点了没反应"——其实笔记已经打开了，只是被表格盖着。用户报的就是这个：
+         * 「点击个人空间之后再点击别的文档不会跳转过去，需要手动点右上角的关闭才行」。
+         */
+        setBaseDoc(null);
         setCurrentPath(path);
         setDoc(text);
         setRecent((cur) => {
@@ -2110,7 +2119,10 @@ export default function App() {
           syncDisabled={!state.account}
           sortMode={sortMode}
           onSortChange={setSortMode}
-          onOpenPdf={(p) => void onOpenPdf(p)}
+          onOpenPdf={(p) => {
+            setBaseDoc(null); // 主区三选一：打开 PDF 同样要把 .base 表格收起来
+            void onOpenPdf(p);
+          }}
           baseDoc={baseDoc}
           baseNotes={searchDocs}
           onCloseBase={() => setBaseDoc(null)}
@@ -2282,7 +2294,10 @@ export default function App() {
         syncDisabled={!state.account}
         sortMode={sortMode}
         onSortChange={setSortMode}
-        onOpenPdf={(p) => void onOpenPdf(p)}
+        onOpenPdf={(p) => {
+            setBaseDoc(null); // 主区三选一：打开 PDF 同样要把 .base 表格收起来
+            void onOpenPdf(p);
+          }}
         baseDoc={baseDoc}
         baseNotes={searchDocs}
         onCloseBase={() => setBaseDoc(null)}
