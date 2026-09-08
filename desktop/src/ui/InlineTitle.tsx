@@ -13,10 +13,22 @@
  * 从 Obsidian 之外导入、正文里本来就写着 H1 的笔记仍然照常工作。
  */
 import { useEffect, useRef, useState } from 'react';
+import { extractH1, sanitizeTitle } from '../lib/titleSync';
 
 interface Props {
   /** 库内相对路径；null = 没打开笔记 */
   path: string | null;
+  /**
+   * 正文。用来判断"这篇的第一行是不是已经把同一个标题写过一遍了"。
+   *
+   * v0.11.11：用户反馈「文件本来就是这个名字，还非要再命名一次，然后就显示了两个名字」。
+   * 现象是内联标题（文件名）和正文首个 H1 一起显示，而两者说的是同一件事——
+   * 尤其是标题里带 `/` 这类文件名非法字符时，两行还长得不完全一样
+   * （`AI 高效智能 / 单端…` vs 清洗后的 `AI 高效智能 单端…`），看起来就是"两个名字"。
+   *
+   * 判定按**清洗后**比较：只有清洗后仍不相同，两行才真的携带不同信息，才都显示。
+   */
+  doc?: string | null;
   onRename(path: string, nextName: string): void;
 }
 
@@ -25,10 +37,24 @@ export function titleOf(path: string): string {
   return (path.split('/').pop() ?? path).replace(/\.(md|markdown)$/i, '');
 }
 
-export function InlineTitle({ path, onRename }: Props) {
+/**
+ * 正文首个 H1 是不是"同一个标题"。
+ *
+ * 用 `sanitizeTitle` 做归一：文件名里不能有 `/ : *` 这些字符，H1 里可以，
+ * 所以直接比字符串永远不相等——那正是用户看到"两个名字"的成因。
+ */
+export function isSameTitle(fileTitle: string, doc: string | null): boolean {
+  if (!doc) return false;
+  const h1 = extractH1(doc);
+  if (!h1) return false;
+  return sanitizeTitle(h1).toLowerCase() === sanitizeTitle(fileTitle).toLowerCase();
+}
+
+export function InlineTitle({ path, doc, onRename }: Props) {
   const [draft, setDraft] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const title = path ? titleOf(path) : '';
+  const duplicated = isSameTitle(title, doc ?? null);
 
   // 换笔记时丢掉未提交的草稿，否则会把上一篇的标题带过来
   useEffect(() => setDraft(null), [path]);
@@ -50,6 +76,12 @@ export function InlineTitle({ path, onRename }: Props) {
     if (draft === null || next === '' || next === title) return;
     onRename(path, next);
   };
+
+  /*
+   * 正文里已经写着同一个标题了，就不再顶一行。
+   * 但**正在改**（有草稿）时要保留，否则输入到一半会整块消失。
+   */
+  if (duplicated && draft === null) return null;
 
   return (
     <textarea

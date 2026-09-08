@@ -42,6 +42,7 @@ import { SettingsView } from './ui/SettingsView';
 import { SyncStatusPanel } from './ui/SyncStatusPanel';
 import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
+import { loadLastOpen, pickRestore, saveLastOpen } from './lib/lastOpen';
 import { invertMoveOps, planMove, remapPath } from './lib/movePath';
 import { noteCandidates } from './lib/links';
 import { isSafPath, pickVaultFolder, safIO } from './lib/saf';
@@ -615,6 +616,24 @@ export default function App() {
     void refreshFiles();
   }, [vault, refreshFiles]);
 
+  /*
+   * v0.11.11：启动后回到退出前那篇笔记。
+   *
+   * 放在"文件列表就绪之后"而不是"库就绪之后"：记下的路径可能已经被删/改名，
+   * 必须拿真实文件列表校验过再打开，否则会打开一个不存在的路径然后弹报错。
+   * 只在 currentPath 还空着时做——用户已经点开别的了就不要抢。
+   */
+  const restoredFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!vault || files.length === 0) return;
+    if (restoredFor.current === vault.id) return;
+    restoredFor.current = vault.id;
+    const target = pickRestore(loadLastOpen(vault.id), files, currentPath);
+    if (target) void openFile(target);
+    // openFile / currentPath 故意不进依赖：这一次还原只该发生一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vault, files]);
+
   // 选了「跟随系统」时，系统深浅色一变就要跟着换
   useEffect(() => {
     if (appearance.theme !== 'system') return;
@@ -764,6 +783,7 @@ export default function App() {
          */
         setBaseDoc(null);
         setCurrentPath(path);
+        saveLastOpen(vault.id, path); // 下次启动直接回到这一篇
         setDoc(text);
         setRecent((cur) => {
           const next = pushRecent(cur, path);

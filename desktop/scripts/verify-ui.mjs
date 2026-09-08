@@ -694,6 +694,101 @@ await new Promise((r) => setTimeout(r, 2600));
   })()`));
 }
 
+// ---------- 7.5b 右栏大纲（v0.11.11）----------
+/*
+ * 用户报「右侧的查看大纲按钮点了之后没有显示大纲，而是直接消失不见了」。
+ * 右栏是可折叠的：折起来只剩一条竖轨，展开才有「大纲 / 反向链接」两个标签。
+ * 这里把这两个状态都点一遍，量它到底给了什么。
+ */
+{
+  // 先造一篇**有标题**的笔记：大纲的输入就是标题，没标题时它本来就该显示空状态
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('大纲用.md', { create: true });
+      const w = await fh.createWritable();
+      const NL = String.fromCharCode(10);
+      await w.write(new TextEncoder().encode(
+        ['# 一级标题', '', '正文', '', '## 二级标题', '', '正文', '', '### 三级标题', ''].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('大纲用'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const state = await evaluate(`(() => ({
+    panel: !!document.querySelector('.right-panel'),
+    rail: !!document.querySelector('.right-rail'),
+    outlineItems: document.querySelectorAll('.rp-outline a, .rp-outline button, .rp-outline li').length,
+    tabs: [...document.querySelectorAll('.rp-tab')].map(x => x.textContent.trim()),
+  }))()`);
+  console.log('  · 右栏初始 =', JSON.stringify(state));
+
+  // 折起来的话先点竖轨上的按钮展开
+  if (!state.panel) {
+    await evaluate(`(() => { document.querySelector('.right-rail button')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const opened = await evaluate(`(() => {
+    const p = document.querySelector('.right-panel');
+    if (!p) return null;
+    const tabs = [...p.querySelectorAll('.rp-tab')];
+    tabs.find(t => t.textContent.includes('大纲'))?.click();
+    return true;
+  })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const outline = await evaluate(`(() => {
+    const p = document.querySelector('.right-panel');
+    if (!p) return null;
+    const nav = p.querySelector('.rp-outline');
+    return {
+      hasPanel: true,
+      hasNav: !!nav,
+      items: nav ? nav.children.length : 0,
+      text: nav ? nav.textContent.slice(0, 40) : (p.textContent ?? '').slice(0, 60),
+    };
+  })()`);
+  check('点「大纲」标签能看到当前笔记的标题列表（不是把整个右栏收掉）',
+    !!opened && !!outline && outline.hasNav && outline.items > 0, outline);
+  await shot('outline.png');
+
+  /*
+   * 窄窗口（用户那台是约 960px）：右栏原来被 `@media(max-width:1080px){display:none}`
+   * 藏掉——点展开之后竖轨变成面板、面板又被藏，整条右栏凭空消失。
+   * 这里把窗口缩到 1000px 再点一遍，量它是不是真的看得见。
+   */
+  await send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 760, deviceScaleFactor: 1, mobile: false });
+  await new Promise((r) => setTimeout(r, 500));
+  await evaluate(`(() => { document.querySelector('.right-panel .rp-head .icon-btn')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await evaluate(`(() => { document.querySelector('.right-rail button')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const narrow = await evaluate(`(() => {
+    const p = document.querySelector('.right-panel');
+    if (!p) return { present: false };
+    const cs = getComputedStyle(p);
+    const r = p.getBoundingClientRect();
+    return {
+      present: true,
+      display: cs.display,
+      width: Math.round(r.width),
+      onScreen: r.right <= window.innerWidth + 1 && r.width > 40,
+      items: p.querySelectorAll('.rp-outline .rp-h').length,
+    };
+  })()`);
+  check('窄窗口（1000px）下展开右栏是真的能看见大纲，而不是整块消失',
+    narrow.present && narrow.display !== 'none' && narrow.onScreen && narrow.items > 0, narrow);
+  await shot('outline-narrow.png');
+  await send('Emulation.clearDeviceMetricsOverride');
+  await new Promise((r) => setTimeout(r, 300));
+}
+
 // ---------- 7.55 清单正文的颜色与复选框（v0.11.11）----------
 /*
  * 用户原话：「任务列表打勾无法点击，点一下就变成中括号了，前面还有一个 -，
@@ -784,6 +879,64 @@ await new Promise((r) => setTimeout(r, 2600));
     /- \[x\] 待办/.test(onDisk ?? '') && after.boxes >= 1 && after.checked >= 1 && !after.dashLeft,
     { before, after, onDisk: (onDisk ?? '').split('\n').slice(-3).join(' | ') });
   await shot('task-list.png');
+}
+
+// ---------- 7.7 重开回到上次那篇 + 标题不重复（v0.11.11）----------
+{
+  // 打开一篇有 H1 的笔记，刷新（等于重开应用），看还在不在这一篇上
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('大纲用'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  const restored = await evaluate(`(() => ({
+    crumb: document.querySelector('.top-bar .crumb, .crumb')?.textContent ?? '',
+    hasEditor: !!document.querySelector('.cm-content'),
+    body: (document.querySelector('.cm-content')?.innerText ?? '').slice(0, 20),
+  }))()`);
+  check('重开之后回到退出前那篇笔记（不再是空白欢迎页）',
+    restored.hasEditor && /一级标题/.test(restored.body), restored);
+
+  // 文件名与 H1 **不同**时两行都要在（它们携带不同信息）
+  const differing = await evaluate(`(() => ({
+    inline: document.querySelectorAll('.inline-title').length,
+    firstLine: (document.querySelector('.cm-content')?.innerText ?? '').split(String.fromCharCode(10))[0],
+  }))()`);
+  check('文件名与正文 H1 不同时，内联标题照常显示（两行说的是两件事）',
+    differing.inline === 1, differing);
+
+  /*
+   * 文件名与 H1 **是同一个**时，不该再顶一行一模一样的标题——用户报的
+   * 「文件本来就是这个名字，还非要再命名一次，然后就显示了两个名字」。
+   * 判定按清洗后比较：H1 里可以有 `/`，文件名里不能，直接比字符串永远不相等。
+   */
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('同名 标题.md', { create: true });
+      const w = await fh.createWritable();
+      const NL = String.fromCharCode(10);
+      await w.write(new TextEncoder().encode(['# 同名 / 标题', '', '正文', ''].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('同名'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const same = await evaluate(`(() => ({
+    inline: document.querySelectorAll('.inline-title').length,
+    firstLine: (document.querySelector('.cm-content')?.innerText ?? '').split(String.fromCharCode(10))[0],
+  }))()`);
+  check('文件名与正文 H1 是同一个标题（差别只在 `/` 这种文件名非法字符）时，不再重复顶一行',
+    same.inline === 0 && /同名/.test(same.firstLine ?? ''), same);
+  await shot('restore.png');
 }
 
 // ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------

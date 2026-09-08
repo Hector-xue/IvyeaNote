@@ -565,6 +565,7 @@ export function MainView(props: Props) {
               {props.onRenameFile && (
                 <InlineTitle
                   path={props.currentPath}
+                  doc={props.doc}
                   onRename={(p, name) => props.onRenameFile?.(p, name)}
                 />
               )}
