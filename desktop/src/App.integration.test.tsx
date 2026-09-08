@@ -76,6 +76,41 @@ vi.mock('./lib/fs-adapters', () => ({
   migrateFiles: vi.fn(),
 }));
 
+/*
+ * 同步客户端：整段打桩成一台「空服务器」。
+ * 只有 SyncClient 被换掉，ApiError 等其余导出保持真的——sync.ts 要用 instanceof 判 403。
+ */
+const api = vi.hoisted(() => ({
+  calls: { listVaults: 0, createVault: [] as string[] },
+  remote: [] as { id: number; name: string }[],
+}));
+vi.mock('./lib/api', async (orig) => {
+  const real = await orig<typeof import('./lib/api')>();
+  class FakeSyncClient {
+    async registerDevice() {
+      return { device_id: 'dev-1' };
+    }
+    async listVaults() {
+      api.calls.listVaults++;
+      return { vaults: api.remote.map((v) => ({ ...v, created_at: '' })) };
+    }
+    async createVault(name: string) {
+      api.calls.createVault.push(name);
+      const v = { id: 1, name };
+      api.remote.push(v);
+      return v;
+    }
+    async push() {
+      return { results: [] };
+    }
+    async pullPage(_id: number, cursor: number) {
+      return { changes: [], next_cursor: cursor };
+    }
+    async putBlob() {}
+  }
+  return { ...real, SyncClient: FakeSyncClient };
+});
+
 vi.mock('@codemirror/view', () => ({
   EditorView: class {
     // 桩要尽量像真的：v0.9.1 的「外部改动回灌」会读 state.doc，
@@ -122,6 +157,8 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('ivnote.welcomed', '1');
   memFiles.clear();
+  api.calls = { listVaults: 0, createVault: [] };
+  api.remote = [];
 });
 
 /** jsdom 没有 DataTransfer：给拖拽事件造一个够用的替身 */
@@ -686,5 +723,70 @@ describe('文件树显示全部文件（v0.11.1）', () => {
     });
     // 预览里显示的是文件名，不是 blob URL（v0.11.0 之前那行面包屑打印的是 blob:）
     expect(document.querySelector('.pdf-name')?.textContent).toBe('手册.pdf');
+  });
+});
+
+/*
+ * 2026-09-08 真机反馈：登录成功，同步一直报「推送失败：vault 不存在或不属于你」。
+ *
+ * 病根不在同步引擎，在**入口**：把本地库接上云端这段协调只长在 finishLogin 里，
+ * 一辈子只在点登录那一刻跑一次。v0.11.5 的 CORS 故障让它整段抛掉之后，
+ * state 里只剩负数 id 的本地库、account 却存下了 —— 之后每一轮同步都是 403，
+ * 而且**不重新登录就永远不会再协调第二次**。
+ * 纯函数单测抓不到这种病（linkVaults 自己是对的），只有"渲染整个 App"能抓。
+ */
+describe('登录着却没有云端库时自己接回来（v0.11.7）', () => {
+  function seedLoggedIn(vault: Record<string, unknown>) {
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'https://example.test',
+          email: 'u@example.test',
+          userId: 9,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: { [String(vault.id)]: vault },
+      })
+    );
+    localStorage.setItem('ivnote.activeVault', String(vault.id));
+  }
+
+  it('打开就把本地库升级成云端库，并保住绑定的磁盘文件夹', async () => {
+    seedLoggedIn({
+      id: -1,
+      name: '我的笔记',
+      localPath: 'E:\\obsidian\\obsidian',
+      cursor: 0,
+      versions: {},
+      bases: {},
+    });
+    memFiles.set('a.md', '# 正文');
+    render(<App />);
+
+    await waitFor(() => {
+      const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+      if (!st.vaults['1']) throw new Error('还没接上云端库');
+    });
+    const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+    expect(api.calls.createVault).toEqual(['我的笔记']);
+    expect(st.vaults['1'].localPath).toBe('E:\\obsidian\\obsidian');
+    expect(st.vaults['-1']).toBeUndefined();
+  });
+
+  it('云端已经有库了就并进去，不重复建库', async () => {
+    api.remote = [{ id: 4, name: '工作' }];
+    seedLoggedIn({ id: -1, name: '我的笔记', localPath: '/data/notes', cursor: 0, versions: {}, bases: {} });
+    render(<App />);
+
+    await waitFor(() => {
+      const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+      if (!st.vaults['4']) throw new Error('还没并进云端库');
+    });
+    expect(api.calls.createVault).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!).vaults['4'].localPath).toBe(
+      '/data/notes'
+    );
   });
 });
