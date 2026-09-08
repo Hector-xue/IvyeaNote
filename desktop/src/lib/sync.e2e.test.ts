@@ -114,7 +114,22 @@ suite('端到端：真服务端 + 真目录', () => {
     workdir = mkdtempSync(path.join(tmpdir(), 'ivnote-e2e-'));
     const port = 18000 + Math.floor(Math.random() * 900);
     base = `http://127.0.0.1:${port}`;
-    proc = spawn(go!, ['run', './cmd/ivnote-server'], {
+    /*
+     * **先编成一个可执行文件再跑，不要 `go run`。**
+     *
+     * `go run` 会另起一个子进程跑编出来的程序：Windows 上 `proc.kill()` 杀掉的是
+     * 外层那个 wrapper，真正的服务端还活着、还占着 `e2e.db` 的文件句柄，
+     * 于是 `afterAll` 里的 `rmSync` 撞 EBUSY，整组用例连带整个 Windows 打包任务变红
+     * （v0.11.11 发版时就是这么挂的——593 个测试全过，栽在清理上）。
+     * 直接 spawn 二进制，`kill` 打的就是服务端本身；顺带每次少编一遍。
+     */
+    const exe = path.join(workdir, process.platform === 'win32' ? 'ivnote-e2e.exe' : 'ivnote-e2e');
+    const built = spawnSync(go!, ['build', '-o', exe, './cmd/ivnote-server'], {
+      cwd: SERVER_DIR,
+      encoding: 'utf8',
+    });
+    if (built.status !== 0) throw new Error(`编译服务端失败：${built.stderr || built.stdout}`);
+    proc = spawn(exe, [], {
       cwd: SERVER_DIR,
       env: {
         ...process.env,
@@ -159,9 +174,22 @@ suite('端到端：真服务端 + 真目录', () => {
     vaultId = vault.id;
   }, 120_000);
 
-  afterAll(() => {
-    proc?.kill('SIGKILL');
-    if (workdir) rmSync(workdir, { recursive: true, force: true });
+  afterAll(async () => {
+    // 等它**真的**退出再删目录：Windows 上进程没走干净，文件句柄就还在
+    if (proc && proc.exitCode === null) {
+      const exited = new Promise<void>((resolve) => proc!.once('exit', () => resolve()));
+      proc.kill('SIGKILL');
+      await Promise.race([exited, new Promise((r) => setTimeout(r, 3000))]);
+    }
+    // 删不掉就算了：留一个临时目录，绝不能让清理失败把整轮测试判红
+    for (let i = 0; i < 3; i++) {
+      try {
+        if (workdir) rmSync(workdir, { recursive: true, force: true });
+        break;
+      } catch {
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    }
   });
 
   /** 一段不是合法 UTF-8 的字节，用来验"PDF 没被当文本走一遍编解码" */
