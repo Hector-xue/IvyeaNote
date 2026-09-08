@@ -29,9 +29,38 @@ function join(base: string, rel: string): string {
   return b + SEP + (SEP === '\\' ? rel.replace(/\//g, '\\') : rel);
 }
 
+/**
+ * 取父目录。**两种分隔符都要认**。
+ *
+ * v0.11.4 把 `join` 在 Windows 上改成了反斜杠，这里却还只找 `/`——于是 Windows 上
+ * `lastIndexOf('/')` 恒为 -1，父目录成了空串，`write`/`writeBinary` 里的
+ * `mkdir(dir, {recursive:true})` 整句被跳过。后果是**凡是要新建目录的写入全废**：
+ * 第一次删除笔记（要写 `.trash/…`）、新建文件夹（写 `子目录/.keep`）、
+ * 往新子目录里粘图片、以及同步拉取远端新目录下的笔记——全部以「写入失败」告终。
+ */
 function parentOf(abs: string): string {
-  const i = abs.lastIndexOf('/');
+  const i = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
   return i > 0 ? abs.slice(0, i) : '';
+}
+
+/**
+ * 不进这个目录。
+ *
+ * `.git`、`.obsidian`、`.trash`（我们自己的回收站除外）这类点目录在 Obsidian 里
+ * 是隐藏的，这边却整棵树扫进来：侧栏被 `.git/objects/…` 淹掉不说，`listMeta`
+ * 还要对每个文件 `stat` 一次——一个正常大小的 git 仓库就能让每次刷新卡上几秒。
+ * 自己的 `.trash`/`.ivyea` 必须留着：回收站面板和索引快照要读它们。
+ */
+const OWN_DOT_DIRS = new Set(['.trash', '.ivyea']);
+
+export function isSkippedDir(name: string): boolean {
+  return name.startsWith('.') && !OWN_DOT_DIRS.has(name);
+}
+
+/** 路径（相对库根）是否落在被跳过的点目录里 */
+export function inSkippedDir(rel: string): boolean {
+  const segs = rel.split('/');
+  return segs.slice(0, -1).some(isSkippedDir);
 }
 
 // ---------- Tauri 实现 ----------
@@ -41,6 +70,7 @@ async function walk(absDir: string, prefix: string, out: string[]): Promise<void
   for (const e of entries) {
     const rel = prefix ? `${prefix}/${e.name}` : e.name;
     if (e.isDirectory) {
+      if (isSkippedDir(e.name)) continue;
       await walk(join(absDir, e.name), rel, out);
     } else {
       out.push(rel);
@@ -113,6 +143,7 @@ async function opfsWalk(dir: DirHandle, prefix: string, out: string[]): Promise<
   for await (const h of dir.values()) {
     const rel = prefix ? `${prefix}/${h.name}` : h.name;
     if (h.kind === 'directory') {
+      if (isSkippedDir(h.name)) continue;
       await opfsWalk((await dir.getDirectoryHandle(h.name)) as DirHandle, rel, out);
     } else {
       out.push(rel);
@@ -128,6 +159,7 @@ async function opfsWalkMeta(
   for await (const h of dir.values()) {
     const rel = prefix ? `${prefix}/${h.name}` : h.name;
     if (h.kind === 'directory') {
+      if (isSkippedDir(h.name)) continue;
       await opfsWalkMeta((await dir.getDirectoryHandle(h.name)) as DirHandle, rel, out);
     } else {
       const file = await (h as FileSystemFileHandle).getFile();

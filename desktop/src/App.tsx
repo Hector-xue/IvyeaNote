@@ -12,9 +12,10 @@ import { useObsidianImport } from './hooks/useObsidianImport';
 import { useTemplates } from './hooks/useTemplates';
 import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
-import { useTrash, trashPathFor } from './hooks/useTrash';
+import { useTrash, trashPathFor, nextTrashName } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
+import { linkVaults } from './lib/vaultLink';
 import { TopBar } from './ui/TopBar';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
@@ -62,9 +63,7 @@ import {
   saveState,
   clearAccount,
   ensureLocalVault,
-  mergeLocalIntoCloud,
   LOCAL_VAULT_ID,
-  LOCAL_VAULT_NAME,
   newVaultMeta,
   nextLocalVaultId,
   type PersistState,
@@ -125,6 +124,7 @@ export default function App() {
    *  否则每切换一次笔记就重建一次同步引擎。用 ref 旁路。 */
   const currentPathRef = useRef<string | null>(null);
   currentPathRef.current = currentPath;
+  const splitPathRef = useRef<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
   /**
    * v0.8.2 E9：编辑区左右分栏。第二个窗格自带路径与内容——
@@ -132,6 +132,7 @@ export default function App() {
    */
   const [splitPath, setSplitPath] = useState<string | null>(null);
   const [splitDoc, setSplitDoc] = useState<string | null>(null);
+  splitPathRef.current = splitPath;
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
   const [showLogin, setShowLogin] = useState(false);
@@ -334,6 +335,82 @@ export default function App() {
     }
   }, [vault, io]);
 
+  /**
+   * 外部（Obsidian / VSCode / 另一台设备）改了磁盘上的文件 → 把**正在打开的那篇**
+   * 重新读进编辑区。
+   *
+   * 文件监听此前只调 `refreshFiles()`，而它刷的是文件列表和索引、**从不碰 `doc`**。
+   * 于是外部改动的表现是：侧栏里新文件会冒出来，你正开着的那篇却一直是旧内容，
+   * 非得切走再切回来才看得到。编辑器一侧的「外部改动回灌」v0.9.1 就写好了
+   * （`MarkdownEditor` 认 props.doc 的变化并尽量保住光标），缺的一直是有人去 `setDoc`。
+   *
+   * 有未落盘的本地编辑就不覆盖：`saveTimers` 里还挂着这条路径 = 用户刚敲完还没写盘，
+   * 这时候拿磁盘内容盖上去就是吃掉刚敲的字。
+   */
+  const reloadExternal = useCallback(async () => {
+    if (!vault) return;
+    const root = vault.localPath ?? '';
+    const cur = currentPathRef.current;
+    const spl = splitPathRef.current;
+    if (cur && !saveTimers.current.has(cur)) {
+      try {
+        const text = await io.read(root, cur);
+        setDoc((prev) => (prev === text ? prev : text));
+      } catch {
+        // 被外部删了/改名了：列表刷新会把它从树里去掉，这里不动编辑区
+      }
+    }
+    if (spl && spl !== cur && !saveTimers.current.has(spl)) {
+      try {
+        const text = await io.read(root, spl);
+        setSplitDoc((prev) => (prev === text ? prev : text));
+      } catch {
+        /* 同上 */
+      }
+    }
+  }, [vault, io]);
+  /** 给文件监听用：走 ref 才不会每次 doc 变化都重装一次 watcher */
+  const reloadExternalRef = useRef(reloadExternal);
+  reloadExternalRef.current = reloadExternal;
+
+  /**
+   * 把当前这个「服务端不认的库」重新接到云端。
+   *
+   * 登录时的那次协调只跑一次、失败即永久留坑（见 finishLogin 的注释）。
+   * 这条路让同步引擎在拿到 403 的当下就能自己救回来，用户不需要知道
+   * 「退出登录再登一次」这种内部知识。
+   */
+  const relinking = useRef(false);
+  const relinkFailedOnce = useRef(false);
+  const relink = useCallback(async (): Promise<boolean> => {
+    if (!client || relinking.current) return false;
+    relinking.current = true;
+    try {
+      const r = await linkVaults(client, stateRef.current, loadActiveVaultId());
+      persist({ ...stateRef.current, vaults: r.vaults });
+      if (r.activeId !== null) setVaultId(r.activeId);
+      if (r.linked) {
+        toast(
+          r.linked.copied > 0
+            ? `已把「${r.linked.name}」接入云端（${r.linked.copied} 篇笔记）`
+            : `已把「${r.linked.name}」接入云端笔记库`,
+          'ok'
+        );
+      }
+      relinkFailedOnce.current = false;
+      return true;
+    } catch (e) {
+      // 每次同步都会重试，所以提示只出一次——底下的同步失败横幅一直都在，不算静默
+      if (!relinkFailedOnce.current) {
+        relinkFailedOnce.current = true;
+        toast(`云端笔记库没接上：${errText(e)}`, 'error');
+      }
+      return false;
+    } finally {
+      relinking.current = false;
+    }
+  }, [client, persist, toast]);
+
   const {
     syncing,
     lastReport,
@@ -350,7 +427,21 @@ export default function App() {
     persist: () => persist({ ...stateRef.current }),
     afterPull,
     errText,
+    onUnlinked: relink,
   });
+
+  /*
+   * 登录着、可 state 里**一个云端库都没有** —— 说明登录那次的协调根本没跑成
+   * （v0.11.5 的 CORS 故障留下的正是这种状态）。补这一脚，老用户升级上来
+   * 打开就自己好了，不用先撞一次同步失败。
+   */
+  const healed = useRef(false);
+  useEffect(() => {
+    if (!client || healed.current) return;
+    if (Object.values(state.vaults).some((v) => v.id > 0)) return;
+    healed.current = true;
+    void relink();
+  }, [client, state.vaults, relink]);
 
   // ---------- v0.3.4：插图 / 图片解析 / PDF（v0.8.0 P1.4 搬进 hooks/useAttachments） ----------
 
@@ -395,59 +486,25 @@ export default function App() {
       }
       const acc = { serverUrl, email, userId, deviceId, tokens: tmpTokens };
       const cur = loadState();
-      const localV = cur.vaults[String(LOCAL_VAULT_ID)];
-      // 拉取服务端 vault 列表并合并（保留本地已有元数据）
-      const merged: Record<string, VaultMeta> = {};
-      let firstId: number | null = null;
-      // 免登录期本地库的数据源：绑定了真实文件夹用磁盘，否则 OPFS
-      const localReal = !!localV?.localPath && !localV.localPath.startsWith('opfs://');
-      const srcIo =
-        localV && localReal
-          ? tauriIO
-          : opfsIO(() => localV ?? newVaultMeta(LOCAL_VAULT_ID, LOCAL_VAULT_NAME));
-      const srcPath = localV && localReal ? localV.localPath! : '';
+      /*
+       * 与服务端对齐 vault 列表、把本地库接上云端。**协调本身失败也不能算登录失败**，
+       * 但也不能像以前那样一 catch 了事：state 里留着一个负数 id 的库、account 却
+       * 存下了，之后每一轮同步都是 403，而且不重新登录就永远不会再协调第二次
+       * （v0.11.5 的 CORS 故障就是这么把用户卡死的）。现在同一段逻辑还挂在
+       * `relink()` 上，登录之后随时能自己接回来。
+       */
+      let vaults = cur.vaults;
+      let activeId: number | null = null;
       try {
         const c = new SyncClient(serverUrl, acc.tokens, () => undefined, deviceId);
-        const { vaults } = await c.listVaults();
-        for (const v of vaults) {
-          merged[String(v.id)] = cur.vaults[String(v.id)] ?? newVaultMeta(v.id, v.name);
-        }
-        if (localV && vaults.length === 0) {
-          // 云端还是空的：把本地库直接升级为云端第一个库（笔记复制过去）
-          try {
-            const created = await c.createVault(LOCAL_VAULT_NAME);
-            // 走 newVaultMeta 而不是手拼字面量：漏掉 localPath 会让同步静默失效
-            merged[String(created.id)] = {
-              ...newVaultMeta(created.id, LOCAL_VAULT_NAME),
-              tombstones: {},
-            };
-            await migrateFiles(srcIo, srcPath, opfsIO(() => merged[String(created.id)]!), '');
-            firstId = created.id;
-          } catch {
-            merged[String(LOCAL_VAULT_ID)] = localV; // 迁移失败：保留纯本地库，笔记不丢
-          }
-        } else if (localV && vaults.length > 0) {
-          // 云端已有库：把本地笔记并入最旧的云端库
-          const target = Object.values(merged).sort((a, b) => a.id - b.id)[0];
-          if (target) {
-            try {
-              const dstPath = target.localPath ?? '';
-              const dstIo =
-                dstPath && !dstPath.startsWith('opfs://') ? tauriIO : opfsIO(() => target);
-              await migrateFiles(srcIo, srcPath, dstIo, dstPath, localV.tombstones);
-              merged[String(target.id)] = mergeLocalIntoCloud(localV, target);
-              firstId = target.id;
-            } catch {
-              merged[String(LOCAL_VAULT_ID)] = localV; // 复制失败：保留本地库
-            }
-          }
-        }
+        const r = await linkVaults(c, cur, loadActiveVaultId() ?? LOCAL_VAULT_ID);
+        vaults = r.vaults;
+        activeId = r.activeId;
       } catch {
-        // 网络异常时保留本地已知 vault（含未迁移的本地库）
-        Object.assign(merged, cur.vaults);
+        // 连不上服务器：本地库原样留着，交给 relink 那条自愈路径
       }
-      persist({ account: acc, vaults: merged });
-      setVaultId(firstId ?? Object.values(merged)[0]?.id ?? null);
+      persist({ account: acc, vaults });
+      setVaultId(activeId ?? Object.values(vaults)[0]?.id ?? null);
     },
     [persist]
   );
@@ -548,6 +605,7 @@ export default function App() {
             if (paths.length > 0 && paths.every((p) => p.replace(/\\/g, '/').includes('/.ivyea/')))
               return;
             void refreshFiles();
+            void reloadExternalRef.current();
           },
           { recursive: true, delayMs: 800 }
         );
@@ -561,6 +619,29 @@ export default function App() {
     return () => {
       disposed = true;
       stop?.();
+    };
+  }, [vault?.localPath, refreshFiles]);
+
+  /*
+   * 回到前台就对一次账。
+   *
+   * 系统级文件监听并不总是有：安卓的 SAF 树没有 watch，桌面上它也可能因为平台/权限
+   * 悄悄起不来（`watch` 失败只有一行 console.warn）。而「切到 Obsidian 改一改、
+   * 切回来」正是最常见的动作——**这条路不依赖任何原生能力，只是重读一遍**，
+   * 是外部改动能被看见的兜底保证。
+   */
+  useEffect(() => {
+    if (!vault?.localPath) return;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshFiles();
+      void reloadExternalRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
     };
   }, [vault?.localPath, refreshFiles]);
 
@@ -717,12 +798,13 @@ export default function App() {
           void maybeRenameToH1(path, text);
         } catch (e) {
           console.error('写盘失败', e);
+          toast(`保存失败：${errText(e)}`, 'error');
         } finally {
           saveTimers.current.delete(path);
         }
       }, 800));
     },
-    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex]
+    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex, toast]
   );
 
   /**
@@ -981,10 +1063,16 @@ export default function App() {
         // 所以路径生成收在 hooks/useTrash 里，不再在这儿手拼。
         let trashRel = trashPathFor(path);
         while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
-          trashRel = trashRel.replace(/(\.md)$/i, `-1$1`);
+          trashRel = nextTrashName(trashRel);
         }
-        const content = await io.read(vault.localPath ?? '', path);
-        await io.write(vault.localPath ?? '', trashRel, content);
+        /*
+         * **按二进制搬进回收站**。此前这里是 `io.read`（文本）——删一张图片或 PDF 时
+         * `readTextFile` 解不出合法 UTF-8 直接抛，于是"删不掉"；就算侥幸解出来，
+         * 写进回收站的也已经是被有损解码过的废文件。笔记本身是 UTF-8 文本，
+         * 按字节搬同样无损，没有必要分两条路。
+         */
+        const bytes = await io.readBinary(vault.localPath ?? '', path);
+        await io.writeBinary(vault.localPath ?? '', trashRel, bytes);
         await io.remove(vault.localPath ?? '', path);
         if (currentPath === path) {
           setCurrentPath(null);

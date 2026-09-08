@@ -1,7 +1,7 @@
 // 同步引擎：扫描本地 → 推送增量 → 拉取应用（含 3-way 合并/删改复活/冲突副本）。
 // 冲突处理统一在拉取阶段完成：服务端版本单调，pull 能拿到全部需要的信息。
 
-import { SyncClient, sha256Hex, uuid, type PushChange, type ServerChange } from './api';
+import { ApiError, SyncClient, sha256Hex, uuid, type PushChange, type ServerChange } from './api';
 import { merge3, conflictCopy } from './merge';
 import type { VaultMeta } from './store';
 
@@ -33,12 +33,40 @@ export interface SyncReport {
   merged: number;
   conflicts: string[]; // 生成的冲突副本路径
   errors: string[];
+  /**
+   * 服务端不认这个 vault（403），或者它压根还是个本地库。
+   *
+   * 这不是普通错误：重试一万次也还是 403，必须**先把库接回云端**再同步
+   * （`lib/vaultLink.ts`）。此前没有这个标记，用户能做的只有反复看着
+   * 「推送失败：vault 不存在或不属于你」，而且没有任何一条路能让它自己好。
+   */
+  unlinked?: boolean;
 }
 
 const MAX_BATCH = 200;
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 「这个库还没接到云端」。
+ *
+ * 负数 id 是**本地库**，服务端根本没有对应的行——照样发过去只会换回一句
+ * 403「vault 不存在或不属于你」。登录状态下出现这种库，唯一的出路是先把它
+ * 接到云端（`lib/vaultLink.ts` 的 `linkVaults`），所以这里带上 `unlinked`
+ * 让上层去自愈，而不是丢一句用户看不懂的报错就完事。
+ */
+function notLinkedYet(meta: VaultMeta, report: SyncReport): boolean {
+  if (meta.id >= 0) return false;
+  report.unlinked = true;
+  report.errors.push(`「${meta.name}」还是本地笔记库，正在接入云端…`);
+  return true;
+}
+
+/** 403 = 服务端不认这个 vault（登录那次没接上 / 库被删了 / 换了账号），要重接 */
+function markUnlinked(e: unknown, report: SyncReport): void {
+  if (e instanceof ApiError && e.status === 403) report.unlinked = true;
 }
 
 function isTextNote(path: string): boolean {
@@ -62,6 +90,7 @@ export async function syncVault(
     merged: a.merged + b.merged,
     conflicts: [...a.conflicts, ...b.conflicts],
     errors: [...a.errors, ...b.errors],
+    unlinked: a.unlinked || b.unlinked,
   };
 }
 
@@ -78,6 +107,7 @@ export async function pushOnly(
     report.errors.push('该 vault 未绑定本地文件夹');
     return report;
   }
+  if (notLinkedYet(meta, report)) return report;
 
   // ---------- 1. 扫描本地差异 ----------
   const localFiles = new Set((await io.list(vaultPath)).filter(isTextNote));
@@ -150,6 +180,7 @@ export async function pushOnly(
         }
       }
     } catch (e) {
+      markUnlinked(e, report);
       report.errors.push(`推送失败：${msg(e)}`);
       break;
     }
@@ -171,6 +202,7 @@ export async function pullOnly(
     report.errors.push('该 vault 未绑定本地文件夹');
     return report;
   }
+  if (notLinkedYet(meta, report)) return report;
 
   // ---------- 游标拉取 ----------
   let cursor = meta.cursor;
@@ -179,6 +211,7 @@ export async function pullOnly(
     try {
       page = await client.pullPage(meta.id, cursor);
     } catch (e) {
+      markUnlinked(e, report);
       report.errors.push(`拉取失败：${msg(e)}`);
       break;
     }

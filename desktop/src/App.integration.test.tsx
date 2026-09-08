@@ -47,6 +47,12 @@ const { memFiles, memIO } = vi.hoisted(() => {
     async read(_vp, rel) {
       const v = memFiles.get(rel);
       if (v === undefined) throw new Error(`not found: ${rel}`);
+      /*
+       * **假的不能比真的宽松**：桌面端的 `read` 是 `readTextFile`，遇到不是合法
+       * UTF-8 的文件（图片 / PDF）直接抛。以前这个桩照单全收，于是「删图片删不掉」
+       * 这类问题在测试里永远看不见。
+       */
+      if (!/\.(md|markdown|txt)$/i.test(rel)) throw new Error(`stream did not contain valid UTF-8: ${rel}`);
       return v;
     },
     async write(_vp, rel, content) {
@@ -75,6 +81,41 @@ vi.mock('./lib/fs-adapters', () => ({
   opfsIO: () => memIO,
   migrateFiles: vi.fn(),
 }));
+
+/*
+ * 同步客户端：整段打桩成一台「空服务器」。
+ * 只有 SyncClient 被换掉，ApiError 等其余导出保持真的——sync.ts 要用 instanceof 判 403。
+ */
+const api = vi.hoisted(() => ({
+  calls: { listVaults: 0, createVault: [] as string[] },
+  remote: [] as { id: number; name: string }[],
+}));
+vi.mock('./lib/api', async (orig) => {
+  const real = await orig<typeof import('./lib/api')>();
+  class FakeSyncClient {
+    async registerDevice() {
+      return { device_id: 'dev-1' };
+    }
+    async listVaults() {
+      api.calls.listVaults++;
+      return { vaults: api.remote.map((v) => ({ ...v, created_at: '' })) };
+    }
+    async createVault(name: string) {
+      api.calls.createVault.push(name);
+      const v = { id: 1, name };
+      api.remote.push(v);
+      return v;
+    }
+    async push() {
+      return { results: [] };
+    }
+    async pullPage(_id: number, cursor: number) {
+      return { changes: [], next_cursor: cursor };
+    }
+    async putBlob() {}
+  }
+  return { ...real, SyncClient: FakeSyncClient };
+});
 
 vi.mock('@codemirror/view', () => ({
   EditorView: class {
@@ -122,6 +163,8 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('ivnote.welcomed', '1');
   memFiles.clear();
+  api.calls = { listVaults: 0, createVault: [] };
+  api.remote = [];
 });
 
 /** jsdom 没有 DataTransfer：给拖拽事件造一个够用的替身 */
@@ -686,5 +729,123 @@ describe('文件树显示全部文件（v0.11.1）', () => {
     });
     // 预览里显示的是文件名，不是 blob URL（v0.11.0 之前那行面包屑打印的是 blob:）
     expect(document.querySelector('.pdf-name')?.textContent).toBe('手册.pdf');
+  });
+});
+
+/*
+ * 2026-09-08 真机反馈：登录成功，同步一直报「推送失败：vault 不存在或不属于你」。
+ *
+ * 病根不在同步引擎，在**入口**：把本地库接上云端这段协调只长在 finishLogin 里，
+ * 一辈子只在点登录那一刻跑一次。v0.11.5 的 CORS 故障让它整段抛掉之后，
+ * state 里只剩负数 id 的本地库、account 却存下了 —— 之后每一轮同步都是 403，
+ * 而且**不重新登录就永远不会再协调第二次**。
+ * 纯函数单测抓不到这种病（linkVaults 自己是对的），只有"渲染整个 App"能抓。
+ */
+describe('登录着却没有云端库时自己接回来（v0.11.7）', () => {
+  function seedLoggedIn(vault: Record<string, unknown>) {
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'https://example.test',
+          email: 'u@example.test',
+          userId: 9,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: { [String(vault.id)]: vault },
+      })
+    );
+    localStorage.setItem('ivnote.activeVault', String(vault.id));
+  }
+
+  it('打开就把本地库升级成云端库，并保住绑定的磁盘文件夹', async () => {
+    seedLoggedIn({
+      id: -1,
+      name: '我的笔记',
+      localPath: 'E:\\obsidian\\obsidian',
+      cursor: 0,
+      versions: {},
+      bases: {},
+    });
+    memFiles.set('a.md', '# 正文');
+    render(<App />);
+
+    await waitFor(() => {
+      const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+      if (!st.vaults['1']) throw new Error('还没接上云端库');
+    });
+    const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+    expect(api.calls.createVault).toEqual(['我的笔记']);
+    expect(st.vaults['1'].localPath).toBe('E:\\obsidian\\obsidian');
+    expect(st.vaults['-1']).toBeUndefined();
+  });
+
+  it('云端已经有库了就并进去，不重复建库', async () => {
+    api.remote = [{ id: 4, name: '工作' }];
+    seedLoggedIn({ id: -1, name: '我的笔记', localPath: '/data/notes', cursor: 0, versions: {}, bases: {} });
+    render(<App />);
+
+    await waitFor(() => {
+      const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+      if (!st.vaults['4']) throw new Error('还没并进云端库');
+    });
+    expect(api.calls.createVault).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!).vaults['4'].localPath).toBe(
+      '/data/notes'
+    );
+  });
+});
+
+/*
+ * 用户 2026-09-08 报的：在 Obsidian 里改了同一篇笔记，Ivyea Note 这边要「重新加载」
+ * 才看得到。文件监听从 v0.7.5 就有，但它只调 refreshFiles()——刷的是文件列表和索引，
+ * **从不碰编辑区的 doc**。回到前台这条兜底路同样一条都没有。
+ */
+describe('外部改动要能被看见（v0.11.7）', () => {
+  // 状态栏里有两个 .st-count（反向链接数、字数），字数是后面那个
+  const countText = () =>
+    [...document.querySelectorAll('.status-bar .st-count')].pop()?.textContent ?? '';
+
+  it('回到前台就把磁盘上的新内容读进正在打开的那篇', async () => {
+    await renderApp({ 'a.md': '# 标题' });
+    openNote('a.md');
+    await waitFor(() => {
+      if (!countText()) throw new Error('状态栏还没出字数');
+    });
+    const before = countText();
+
+    // 外部（Obsidian）改了同一个文件
+    memFiles.set('a.md', '# 标题\n\n这一段是在别的软件里加的，字数必须跟着变。');
+    fireEvent(document, new Event('visibilitychange'));
+
+    await waitFor(() => {
+      if (countText() === before) throw new Error(`字数没变：${countText()}`);
+    });
+  });
+
+});
+
+/*
+ * 2026-09-08 真机：「无法删除绑定目录的文件」。删除是"先读出来搬进 .trash 再删原文件"，
+ * 而读用的是文本读写 —— 图片 / PDF 过一遍 UTF-8 解码直接抛，于是删不掉；
+ * 重名递增又写死成只认 `.md`，非 .md 撞名时那个 while 会原地打转。
+ */
+describe('删除任何类型的文件（v0.11.7）', () => {
+  it('图片能删进回收站（此前文本读写在这一步抛）', async () => {
+    await renderApp({ 'a.md': '# A', '图.png': 'PNG-BYTES' });
+    fireEvent.click(fileNode('图.png')!.querySelector('button[title="删除"]')!);
+    await waitFor(() => {
+      if (!document.querySelector('.dlg-card')) throw new Error('确认框没出来');
+    });
+    fireEvent.click(document.querySelector('.dlg-card .btn.danger')!);
+
+    await waitFor(() => {
+      if (fileNode('图.png')) throw new Error('图片还在树里');
+    });
+    const trashed = [...memFiles.keys()].filter((p) => p.startsWith('.trash/'));
+    expect(trashed.length).toBe(1);
+    expect(trashed[0]).toMatch(/图\.png$/);
+    expect(memFiles.get(trashed[0])).toBe('PNG-BYTES'); // 内容一个字节都没坏
   });
 });

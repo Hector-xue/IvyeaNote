@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { syncVault, type FileIO, type SyncReport } from './sync';
-import { SyncClient, type PushChange, type PushResult, type ServerChange } from './api';
+import { ApiError, SyncClient, type PushChange, type PushResult, type ServerChange } from './api';
 import { newVaultMeta, type VaultMeta } from './store';
 
 // ---------- 内存文件系统 ----------
@@ -246,5 +246,51 @@ describe('推送必须带内容（v0.9.1 P0 回归）', () => {
     expect(r.pushed).toBe(0);
     expect(r.errors.join(' ')).toContain('a.md');
     expect(r.errors.join(' ')).toContain('拒绝');
+  });
+});
+
+/*
+ * 2026-09-08 真机反馈：登录成功，同步永远「推送失败：vault 不存在或不属于你」。
+ * 服务端侧核实：那个账号名下一个 vault 都没有——客户端一直拿本地库的负数 id 在推。
+ * 光报错没有用，报告必须带上 `unlinked`，上层才知道该去把库重新接到云端。
+ */
+describe('服务端不认这个库时要能自愈（v0.11.7）', () => {
+  it('本地库（负数 id）根本不该往服务端发请求，而是标记成待接入', async () => {
+    let called = false;
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      called = true;
+      throw new Error('不该走到这里');
+    };
+    const meta = newVaultMeta(-1, '我的笔记');
+    const r = await run(meta, memIO(new Map([['a.md', 'x']])), server);
+
+    expect(called).toBe(false);
+    expect(r.unlinked).toBe(true);
+    expect(r.errors.join(' ')).toContain('我的笔记');
+  });
+
+  it('服务端回 403 → unlinked（重试一万次也还是 403，必须先重接）', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      throw new ApiError(403, 'forbidden', 'vault 不存在或不属于你');
+    };
+    const meta = newVaultMeta(1, 'v');
+    const r = await run(meta, memIO(new Map([['a.md', 'x']])), server);
+
+    expect(r.unlinked).toBe(true);
+    expect(r.errors.join(' ')).toContain('推送失败');
+  });
+
+  it('普通失败不带 unlinked（别把网络抖动也当成要重建库）', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      throw new ApiError(500, 'db_error', '数据库炸了');
+    };
+    const meta = newVaultMeta(1, 'v');
+    const r = await run(meta, memIO(new Map([['a.md', 'x']])), server);
+
+    expect(r.unlinked).toBeFalsy();
+    expect(r.errors.length).toBe(1);
   });
 });
