@@ -9,14 +9,30 @@
  * 退一步的做法是**在文件管理器里定位到它**：至少能右键「打开方式」自己挑一个程序。
  * 定位也失败才把原始错误抛出去 —— 那说明连路径都有问题，不该拿"定位失败"去掩盖。
  */
-export type OpenOutcome = 'opened' | 'revealed';
+export type OpenOutcome = 'opened' | 'obsidian' | 'revealed';
+
+/**
+ * Obsidian 自己的格式：`.base`（Bases 表格视图）与 `.canvas`（白板）。
+ * 系统里不会有任何程序关联它们，但 Obsidian 注册了 `obsidian://` 协议，
+ * 装了 Obsidian 的机器可以直接把文件甩过去（用户原话：「obsidian 就可以打开」）。
+ */
+const OBSIDIAN_OWN = /\.(base|canvas)$/i;
 
 export async function openWithSystem(absPath: string): Promise<OpenOutcome> {
-  const { openPath, revealItemInDir } = await import('@tauri-apps/plugin-opener');
+  const { openPath, openUrl, revealItemInDir } = await import('@tauri-apps/plugin-opener');
   try {
     await openPath(absPath);
     return 'opened';
   } catch (e) {
+    // 交给 Obsidian：只对它自己的格式试，别把普通文件也往别人家里塞
+    if (OBSIDIAN_OWN.test(absPath)) {
+      try {
+        await openUrl(`obsidian://open?path=${encodeURIComponent(absPath)}`);
+        return 'obsidian';
+      } catch {
+        /* 没装 Obsidian / 协议没注册：继续往下退到"在文件夹中定位" */
+      }
+    }
     try {
       await revealItemInDir(absPath);
       return 'revealed';

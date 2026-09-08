@@ -64,3 +64,32 @@ export function uniqueName(baseName: string, existing: Iterable<string>): string
 export function sameTitlePath(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
+
+/**
+ * 把正文里**第一个 H1** 换成新标题；没有 H1 就原样返回。
+ *
+ * 为什么需要它：用户显式改了标题（内联标题 / 重命名）之后，正文里的 H1 还是旧的，
+ * 而 `titleSync` 是「H1 → 文件名」的单向同步 —— 下一次编辑就会把文件名改回 H1，
+ * 表现是**「标题改了又自己变回去」**（2026-09-08 用户反馈）。改名时顺手把 H1 带上，
+ * 两边就再也不会打架。
+ *
+ * 只动第一行那个 H1，围栏代码块里的 `# xxx` 不算（和 extractH1 同一套判定）。
+ */
+export function replaceFirstH1(md: string, title: string): string {
+  const lines = md.split('\n');
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (/^#\s+(.+?)\s*$/.test(line)) {
+      lines[i] = `# ${title}`;
+      return lines.join('\n');
+    }
+    if (line.trim() !== '' && !line.startsWith('#')) break;
+  }
+  return md;
+}

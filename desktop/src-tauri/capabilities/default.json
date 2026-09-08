@@ -37,6 +37,14 @@
         }
       ]
     },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "obsidian://*"
+        }
+      ]
+    },
     "core:event:default",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",

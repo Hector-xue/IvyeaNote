@@ -195,7 +195,10 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
       const abs = `${vaultPath.replace(/\/$/, '')}/${path}`;
       try {
         // 系统里没有能开这种文件的程序时退回「在文件夹中定位」，见 lib/openExternal
-        if ((await openWithSystem(abs)) === 'revealed') {
+        const how = await openWithSystem(abs);
+        if (how === 'obsidian') {
+          toast(`「${baseNameOf(abs)}」是 Obsidian 自己的格式，已交给 Obsidian 打开`, 'ok');
+        } else if (how === 'revealed') {
           toast(`系统里没有能打开「${baseNameOf(abs)}」的程序，已在文件夹中定位`, 'ok');
         }
       } catch (e) {
