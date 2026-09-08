@@ -23,7 +23,7 @@ import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import type { FileIO } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
-import { extractH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
+import { extractH1, replaceFirstH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette } from './ui/Palette';
 import { TagPanel } from './ui/TagPanel';
@@ -996,10 +996,25 @@ export default function App() {
           while (await io.exists(vault.localPath ?? '', `${dir}${stem}-${i}.md`).catch(() => false)) i++;
           final = `${dir}${stem}-${i}.md`;
         }
-        const content = await io.read(vault.localPath ?? '', path);
+        let content = await io.read(vault.localPath ?? '', path);
+        /*
+         * 用户**显式**改了标题 → 正文里那个 H1 要跟着走。
+         *
+         * 不跟的话：`titleSync` 是「H1 → 文件名」的单向同步，下一次编辑就会按旧 H1
+         * 把文件名改回去 —— 用户看到的就是「标题改了又自己变回去」（2026-09-08 反馈）。
+         * 只在开着 titleSync 时动正文：关掉这个开关的人不希望我们碰他的字。
+         */
+        if (prefs.titleSync) {
+          const nextTitle = titleOfPath(final);
+          const h1 = extractH1(content);
+          if (h1 && h1 !== nextTitle) content = replaceFirstH1(content, nextTitle);
+        }
         await io.write(vault.localPath ?? '', final, content);
         await io.remove(vault.localPath ?? '', path);
-        if (currentPath === path) setCurrentPath(final);
+        if (currentPath === path) {
+          setCurrentPath(final);
+          setDoc(content); // 正文可能被上面改过，编辑区要跟上
+        }
         remapTabs([{ from: path, to: final }]);
         remapRecentPaths([{ from: path, to: final }]);
         remapSplit([{ from: path, to: final }]);
@@ -1010,7 +1025,7 @@ export default function App() {
         toast(`重命名失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
+    [vault, io, currentPath, prefs.titleSync, refreshFiles, doSync, toast, remapTabs, remapRecentPaths, remapSplit]
   );
 
   /**
@@ -1561,7 +1576,10 @@ export default function App() {
       void (async () => {
         const abs = `${root.replace(/\/$/, '')}/${rel}`;
         try {
-          if ((await openWithSystem(abs)) === 'revealed') {
+          const how = await openWithSystem(abs);
+          if (how === 'obsidian') {
+            toast(`「${baseNameOf(abs)}」是 Obsidian 自己的格式，已交给 Obsidian 打开`, 'info');
+          } else if (how === 'revealed') {
             toast(`系统里没有能打开「${baseNameOf(abs)}」的程序，已在文件夹中定位`, 'info');
           }
         } catch (e) {
@@ -2015,22 +2033,6 @@ export default function App() {
   // 未登录：列表里展示全部**本地**库（负数 id）；云端库要登录后才能用
   const vaultList = Object.values(state.vaults).filter((v) => state.account || v.id < 0);
 
-  const vaultSelectorEl = (value: number | '', onChange: (id: number) => void) => (
-    <select
-      value={value}
-      onChange={(e) => {
-        if (e.target.value) onChange(Number(e.target.value));
-      }}
-    >
-      {value === '' && <option value="">选择一个笔记库…</option>}
-      {vaultList.map((v) => (
-        <option key={v.id} value={v.id}>
-          {v.name}
-        </option>
-      ))}
-    </select>
-  );
-
   if (isMobile && vault) {
     return (
       <div className="app">
@@ -2050,11 +2052,13 @@ export default function App() {
           doc={doc}
           syncing={syncing}
           lastReport={lastReport}
-          vaultSelector={vaultSelectorEl(activeVaultId ?? '', (id) => {
+          vaults={vaultList}
+          activeVaultId={activeVaultId}
+          onSwitchVault={(id) => {
             setVaultId(id);
             setCurrentPath(null);
             setDoc(null);
-          })}
+          }}
           onSelect={(p) => void openFile(p)}
           onEdit={onEdit}
           onCreateNote={() => void onCreateNote('')}

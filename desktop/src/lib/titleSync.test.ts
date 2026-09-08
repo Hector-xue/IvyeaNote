@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractH1, sanitizeTitle, titleToPath, uniqueName } from './titleSync';
+import { extractH1, replaceFirstH1, sanitizeTitle, titleToPath, uniqueName } from './titleSync';
 
 describe('extractH1', () => {
   it('提取首个 H1', () => {
@@ -49,5 +49,33 @@ describe('uniqueName', () => {
   it('冲突自动序号', () => {
     const ex = ['untitled.md', 'untitled 1.md'];
     expect(uniqueName('untitled', ex)).toBe('untitled 2.md');
+  });
+});
+
+/*
+ * 2026-09-08 用户：「文档还无法自定义标题，默认使用文档第一行的大标题为文档标题，
+ * 改了又自动改回去」。改名时把正文 H1 一起带上，单向同步就不会再把它拽回去。
+ */
+describe('replaceFirstH1', () => {
+  it('换掉第一个 H1，其余一个字不动', () => {
+    const md = '# 旧标题\n\n正文\n\n# 后面的另一个一级标题\n';
+    expect(replaceFirstH1(md, '新标题')).toBe(
+      '# 新标题\n\n正文\n\n# 后面的另一个一级标题\n'
+    );
+  });
+
+  it('没有 H1 就原样返回（不给用户凭空插一行）', () => {
+    const md = '正文开头就没有标题\n';
+    expect(replaceFirstH1(md, '新标题')).toBe(md);
+  });
+
+  it('围栏代码块里的 # 不算标题', () => {
+    const md = '```\n# 这是代码\n```\n\n# 真标题\n';
+    expect(replaceFirstH1(md, '新')).toBe('```\n# 这是代码\n```\n\n# 新\n');
+  });
+
+  it('改完之后 extractH1 读出来就是新标题（两边不会再打架）', () => {
+    const next = replaceFirstH1('# 旧\n\n正文\n', '我的自定义标题');
+    expect(extractH1(next)).toBe('我的自定义标题');
   });
 });

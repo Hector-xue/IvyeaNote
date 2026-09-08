@@ -270,6 +270,7 @@ export function MainView(props: Props) {
   };
   /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */
   const [sidebarTab, setSidebarTab] = useState<'files' | 'search'>('files');
+  const sideOpen = props.sidebarOpen ?? true;
 
   /** 右键菜单条目：文件与文件夹给不同的动作集 */
   const openMenu = (node: TreeNode, x: number, y: number) => {
@@ -391,10 +392,15 @@ export function MainView(props: Props) {
           <RibbonIcon name={props.theme === 'light' ? 'moon' : 'sun'} />
         </button>
       </nav>
-      {(props.sidebarOpen ?? true) && (
+      {/* 折叠靠宽度过渡，所以**不卸载**：卸载了就没有可过渡的东西（见 index.css） */}
       <aside
-        className="sidebar"
-        style={{ width: sideW.width, minWidth: sideW.width, maxWidth: sideW.width }}
+        className={`sidebar ${sideOpen ? '' : 'collapsed'}`}
+        aria-hidden={!sideOpen}
+        style={
+          sideOpen
+            ? { width: sideW.width, minWidth: sideW.width, maxWidth: sideW.width }
+            : { width: 0, minWidth: 0, maxWidth: 0 }
+        }
       >
         <div className="side-head">
           <img src={logoUrl} alt="" className="brand-logo" />
@@ -495,9 +501,8 @@ export function MainView(props: Props) {
         </div>
 
       </aside>
-      )}
 
-      {(props.sidebarOpen ?? true) && (
+      {sideOpen && (
         <div className={`panel-resizer ${sideW.dragging ? 'dragging' : ''}`} {...sideW.handleProps} />
       )}
       <main className="editor-pane">

@@ -31,7 +31,17 @@ interface Props {
   doc: string | null;
   syncing: boolean;
   lastReport: SyncReport | null;
-  vaultSelector: React.ReactNode;
+  /**
+   * 全部笔记库 + 当前选中 + 切换回调。
+   *
+   * 这里原来是 `vaultSelector: React.ReactNode`——**声明了、从来没渲染过**。
+   * 于是手机端根本没有切换笔记库的入口：库名旁边那个 ∨ 点开只有「新建笔记库」和
+   * 「标签」。用户反馈「桌面端绑定的文件夹始终无法同步到手机」，真因就是这个：
+   * 电脑推的是 A 库，手机停在 B 库，而手机换不过去。
+   */
+  vaults: { id: number; name: string }[];
+  activeVaultId: number | null;
+  onSwitchVault(id: number): void;
   onSelect(path: string): void;
   onEdit(path: string, text: string): void;
   onCreateNote(): void;
@@ -195,7 +205,16 @@ export function MobileView(props: Props) {
       ]];
     }
     if (which === 'vault') {
+      // 库列表排在最上面：这张菜单是从库名旁边那个 ∨ 点开的，用户来这儿就是为了换库
+      const list: SheetItem[] = props.vaults.map((v) => ({
+        key: `vault-${v.id}`,
+        icon: 'folder',
+        label: v.name,
+        checked: v.id === props.activeVaultId,
+        onClick: () => props.onSwitchVault(v.id),
+      }));
       return [
+        ...(list.length > 0 ? [list] : []),
         [{ key: 'new-vault', icon: 'plus', label: '新建笔记库', onClick: props.onCreateVault }],
         [{ key: 'tags', icon: 'tag', label: '标签', onClick: () => props.onOpenTags?.() }],
       ];

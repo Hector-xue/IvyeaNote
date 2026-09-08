@@ -110,6 +110,32 @@ html.frameless #root {
   left: 0;
   cursor: nesw-resize;
 }
+/*
+ * 侧栏折叠动画。
+ *
+ * 收起不能是"啪一下消失"——所以侧栏**始终挂在树上**，靠宽度过渡收放
+ * （卸载了就没有可过渡的东西）。收完再让它 visibility:hidden，
+ * 免得里面的按钮还能被 Tab 键选中。
+ */
+.sidebar {
+  overflow: hidden;
+  transition: width 0.18s ease, min-width 0.18s ease, max-width 0.18s ease;
+}
+.sidebar.collapsed {
+  visibility: hidden;
+  transition:
+    width 0.18s ease,
+    min-width 0.18s ease,
+    max-width 0.18s ease,
+    visibility 0s linear 0.18s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .sidebar.collapsed {
+    transition: none;
+  }
+}
+
 /* 最大化时窗口贴满屏幕：留白、圆角、投影全部收掉，否则四周会露出桌面 */
 html.frameless.win-maximized body {
   padding: 0;
@@ -140,9 +166,19 @@ html.frameless.win-maximized #root {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding-left: var(--sp-4);
+  /*
+   * v0.11.8：左内边距从 sp-4 收到 6px，好让折叠按钮**和它正下方 ribbon 那列图标
+   * 中心对齐**（都是 x=21）。此前按钮中心在 x=33，既没对上 ribbon、又骑在
+   * ribbon 与侧栏的分界线上，用户的原话是「收起侧边栏的图标位置也不对」。
+   */
+  padding-left: 6px;
   background: var(--bg);
   user-select: none;
+}
+/* 和 ribbon 按钮同尺寸（30×30），对齐才成立 */
+.tb-btn.tb-side {
+  width: 30px;
+  height: 30px;
 }
 .tb-crumb {
   flex: 1;

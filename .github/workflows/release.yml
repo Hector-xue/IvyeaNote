@@ -14,6 +14,12 @@ jobs:
   build:
     strategy:
       fail-fast: false
+      # v0.11.8 踩到：四个打包任务**并行**往同一个 Release 的 `latest.json` 上写，
+      # tauri-action 的写法是「读出来 → 加上自己这个平台 → 传回去」，并行时后写的
+      # 会把先写的整段覆盖掉，倒霉的那个还会撞上 `Not Found - update-a-release-asset`。
+      # 结果是安装包全在、**应用内更新的清单里少了两个平台**（当时丢的是 macOS 两条）。
+      # 串行跑最省事：发版本来就不是每天几十次的事，多花二十分钟换一个不会错的清单。
+      max-parallel: 1
       matrix:
         # triple/go_os/go_arch 是给 sidecar 用的：Tauri 按 `<name>-<target-triple>` 找二进制。
         # macOS 两支是**交叉目标**，必须按 target 编而不是按 host——照 host 编出来的是

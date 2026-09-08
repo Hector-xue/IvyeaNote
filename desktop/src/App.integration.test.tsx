@@ -920,9 +920,13 @@ describe('顶栏与侧栏（v0.11.8）', () => {
     expect(document.querySelector('.sidebar')).toBeTruthy();
     const resizersBefore = document.querySelectorAll('.panel-resizer').length;
 
+    // 折叠靠宽度过渡，节点**不卸载**（卸载就没有可过渡的东西），所以看 class 与宽度
     fireEvent.click(sideToggle()!);
     await waitFor(() => {
-      if (document.querySelector('.sidebar')) throw new Error('侧栏没收起');
+      const el = document.querySelector<HTMLElement>('.sidebar');
+      if (!el?.classList.contains('collapsed')) throw new Error('侧栏没收起');
+      if (el.style.width !== '0px') throw new Error(`宽度没收到 0：${el.style.width}`);
+      if (el.getAttribute('aria-hidden') !== 'true') throw new Error('收起后要 aria-hidden');
     });
     // 连同**侧栏那条**拖宽手柄一起收掉，不留"一条能拖的缝"
     // （右侧面板也有一条同名手柄，所以按数量比，别一竿子打死）
@@ -931,7 +935,9 @@ describe('顶栏与侧栏（v0.11.8）', () => {
 
     fireEvent.click(sideToggle()!);
     await waitFor(() => {
-      if (!document.querySelector('.sidebar')) throw new Error('侧栏没展开');
+      if (document.querySelector('.sidebar')?.classList.contains('collapsed')) {
+        throw new Error('侧栏没展开');
+      }
     });
   });
 
