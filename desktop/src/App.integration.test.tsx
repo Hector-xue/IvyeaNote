@@ -213,6 +213,13 @@ function fileNode(path: string): HTMLElement | null {
  * 面包屑不带 `.md` 后缀、用 ` / ` 分隔，这里还原成库内路径好和用例里的写法对上。
  */
 function openedNotePath(): string | null {
+  /*
+   * v0.11.11：顶栏中间从"面包屑"换成了标签页，当前那篇看**高亮的那个标签**
+   * （完整路径在它的 title 上）。面包屑那条留着兜底：没有标签时（移动端、
+   * 或者一个都没开）顶栏仍然渲染面包屑。
+   */
+  const tab = document.querySelector('.top-bar .tb-tab.on');
+  if (tab) return tab.getAttribute('title');
   const crumb = document.querySelector('.top-bar .tb-crumb');
   if (!crumb) return null;
   const parts = [...crumb.querySelectorAll('.tb-dir, .tb-name')].map(
@@ -543,13 +550,16 @@ describe('顶栏删除与插入图片（v0.10.7）', () => {
     return document.querySelector<HTMLElement>(`.ribbon-btn[aria-label="${label}"]`);
   }
 
-  it('顶部标签栏没了，「开着哪一篇」看得见（v0.11.4 起在顶栏面包屑）', async () => {
+  it('标签页长在顶栏里，不新增一整行（v0.11.11 重新引入）', async () => {
     await renderApp({ 'AI/agent.md': '# Agent\n' });
     openNote('AI/agent.md');
     await waitFor(() => {
       expect(openedNotePath()).toBe('AI/agent.md');
     });
+    // 标签在顶栏内部；v0.10.7 删掉的那条**独立一行**的标签栏不能回来
+    expect(document.querySelector('.top-bar .tb-tabs')).toBeTruthy();
     expect(document.querySelector('.tabs-bar')).toBeNull();
+    expect(document.querySelectorAll('.top-bar').length).toBe(1);
   });
 
   it('「插入图片」按钮在状态栏那一行——桌面此前一个入口都没有', async () => {

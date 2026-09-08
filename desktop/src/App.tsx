@@ -5,7 +5,7 @@ import { MainView } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
-import { useOpenNote } from './hooks/useOpenNote';
+import { useTabs } from './hooks/useTabs';
 import { useCommands } from './hooks/useCommands';
 import { useAttachments } from './hooks/useAttachments';
 import { useObsidianImport } from './hooks/useObsidianImport';
@@ -628,8 +628,11 @@ export default function App() {
     if (!vault || files.length === 0) return;
     if (restoredFor.current === vault.id) return;
     restoredFor.current = vault.id;
+    // 库里已经没有的标签先清掉（换库、外部删除都会留下死标签）
+    pruneTabs(files);
     const target = pickRestore(loadLastOpen(vault.id), files, currentPath);
-    if (target) void openFile(target);
+    // 走 openFileInTab 而不是 openFile：还原的那篇也该出现在标签栏里
+    if (target) void openFileInTab(target);
     // openFile / currentPath 故意不进依赖：这一次还原只该发生一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vault, files]);
@@ -833,8 +836,17 @@ export default function App() {
     });
   }, []);
 
-  /** 当前打开的笔记（v0.10.7：顶部标签栏删掉后，useTabs 收成 useOpenNote） */
-  const { open: openFileInTab, remap: remapTabs } = useOpenNote({ openFile });
+  /**
+   * 顶栏标签页（v0.11.11 重新引入；v0.10.7 删掉的是"单独一整行的空栏"，不是标签本身）。
+   * `openFileInTab` 这个名字沿用下来：所有"打开一篇笔记"的入口都走它。
+   */
+  const {
+    tabs: openTabs,
+    open: openFileInTab,
+    close: closeTab,
+    remap: remapTabs,
+    prune: pruneTabs,
+  } = useTabs({ openFile });
 
   /**
    * v0.11.1：点开文件树里既不是笔记也不是 PDF 的东西。
@@ -1998,6 +2010,19 @@ export default function App() {
    */
   const topBarEl = (
     <TopBar
+      tabs={openTabs}
+      onSelectTab={(p) => void openFileInTab(p)}
+      onCloseTab={(p) => {
+        const next = closeTab(p);
+        if (p === currentPath) {
+          if (next) void openFileInTab(next);
+          else {
+            setCurrentPath(null);
+            setDoc(null);
+          }
+        }
+      }}
+      onNewTab={() => void onCreateNote('')}
       currentPath={pdfPath ?? currentPath}
       mode={pdfView || !currentPath ? null : viewMode}
       onToggleMode={() => setViewMode((m) => (m === 'edit' ? 'read' : 'edit'))}

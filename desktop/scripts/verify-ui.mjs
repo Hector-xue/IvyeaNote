@@ -510,6 +510,7 @@ const topBar = await evaluate(`(() => {
     top: Math.round(r.top), height: Math.round(r.height),
     fullWidth: Math.round(r.width) === Math.round(window.innerWidth),
     crumb: bar.querySelector('.tb-crumb')?.textContent?.trim() ?? null,
+    tabs: bar.querySelectorAll('.tb-tab').length,
     // 整条可拖：容器与面包屑上都要有 data-tauri-drag-region
     dragRegions: bar.querySelectorAll('[data-tauri-drag-region]').length,
     barIsDrag: bar.hasAttribute('data-tauri-drag-region'),
@@ -518,7 +519,8 @@ const topBar = await evaluate(`(() => {
 })()`);
 check('顶栏在窗口最上方、通栏，且 .app 紧接其下', topBar && topBar.top === 0 &&
   topBar.fullWidth && topBar.appTop === topBar.height, topBar);
-check('顶栏里有内容（面包屑），不是一条空白横带', !!topBar && (topBar.crumb ?? '').length > 0, topBar?.crumb);
+check('顶栏里有内容（标签页 / 面包屑），不是一条空白横带',
+  !!topBar && ((topBar.crumb ?? '').length > 0 || topBar.tabs > 0), topBar);
 check('整条顶栏可拖窗口（v0.11.3 就是丢了这个，用户点哪都拖不动）',
   !!topBar && topBar.barIsDrag && topBar.dragRegions >= 2, topBar && { barIsDrag: topBar.barIsDrag, n: topBar.dragRegions });
 
@@ -937,6 +939,169 @@ await new Promise((r) => setTimeout(r, 2600));
   check('文件名与正文 H1 是同一个标题（差别只在 `/` 这种文件名非法字符）时，不再重复顶一行',
     same.inline === 0 && /同名/.test(same.firstLine ?? ''), same);
   await shot('restore.png');
+}
+
+// ---------- 7.8 正文配色与顶栏标签（v0.11.11）----------
+{
+  // 造一篇把"该有颜色的地方"都写全的笔记
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      // 反引号不能直接写进这段字符串：它整段是模板字面量，写进去就把它截断了
+      const FENCE = String.fromCharCode(96, 96, 96);
+      const put = async (n, lines) => {
+        const fh = await handle.getFileHandle(n, { create: true });
+        const w = await fh.createWritable();
+        await w.write(new TextEncoder().encode(lines.join(NL)));
+        await w.close();
+      };
+      await put('配色样张.md', [
+        '# 配色样张', '',
+        '正文里有 ' + String.fromCharCode(96) + '行内代码' + String.fromCharCode(96) +
+          '、==高亮== 和 [链接](https://example.com)。', '',
+        '> 引用一行', '',
+        '- 列表项', '- [x] 已完成的任务', '',
+        '| 表头 | 值 |', '| --- | --- |', '| a | b |', '',
+        FENCE + 'js', 'const a = 1;', FENCE, '',
+      ]);
+      await put('第二篇.md', ['# 第二篇', '', '用来验标签切换。', '']);
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2500));
+
+  // --- 标签页：打开两篇，切换、关闭 ---
+  const openTwo = await evaluate(`(() => {
+    const names = [...document.querySelectorAll('.ft-file-name')];
+    const a = names.find(x => x.textContent.includes('配色样张'));
+    const b = names.find(x => x.textContent.includes('第二篇'));
+    a?.closest('.ft-file')?.click();
+    return !!a && !!b;
+  })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('第二篇'));
+    b?.closest('.ft-file')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const tabs = await evaluate(`(() => {
+    const els = [...document.querySelectorAll('.tb-tab')];
+    return {
+      count: els.length,
+      labels: els.map(e => e.querySelector('.tb-tab-name')?.textContent ?? ''),
+      active: els.find(e => e.classList.contains('on'))?.querySelector('.tb-tab-name')?.textContent ?? null,
+      inTopBar: !!document.querySelector('.top-bar .tb-tabs'),
+      hasNew: !!document.querySelector('.tb-tab-new'),
+    };
+  })()`);
+  check('顶栏里出现标签页，两篇都在，当前那篇是高亮的（不新增一整行）',
+    openTwo && tabs.inTopBar && tabs.hasNew && tabs.active === '第二篇' &&
+    tabs.labels.includes('配色样张') && tabs.labels.includes('第二篇'), tabs);
+
+  // 点回第一个标签要真的切过去
+  await evaluate(`(() => {
+    const t = [...document.querySelectorAll('.tb-tab')].find(e => e.textContent.includes('配色样张'));
+    t?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const switched = await evaluate(`(() => ({
+    active: document.querySelector('.tb-tab.on .tb-tab-name')?.textContent ?? null,
+    body: (document.querySelector('.cm-content')?.innerText ?? '').slice(0, 12),
+  }))()`);
+  check('点标签能切回那一篇（正文跟着换）',
+    switched.active === '配色样张' && /配色样张/.test(switched.body), switched);
+
+  // 关掉当前标签：应当切到剩下那个，而不是空白
+  await evaluate(`(() => { document.querySelector('.tb-tab.on .tb-tab-x')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const afterClose = await evaluate(`(() => ({
+    count: document.querySelectorAll('.tb-tab').length,
+    active: document.querySelector('.tb-tab.on .tb-tab-name')?.textContent ?? null,
+    hasEditor: !!document.querySelector('.cm-content'),
+  }))()`);
+  check('关掉当前标签后落到相邻那一篇上（不是掉回空白页）',
+    afterClose.active !== null && afterClose.hasEditor, afterClose);
+  await shot('tabs.png');
+
+  // --- 正文配色：量 computed 值，别靠眼睛 ---
+  await evaluate(`(() => {
+    const t = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('配色样张'));
+    t?.closest('.ft-file')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  // 切到阅读视图
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('阅读'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const colors = await evaluate(`(() => {
+    const norm = (c) => (c || '').replace(/ /g, '');
+    const accent = norm(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+    const q = document.querySelector('.md-preview blockquote');
+    const code = document.querySelector('.md-preview p code');
+    const link = document.querySelector('.md-preview a');
+    const mark = document.querySelector('.md-preview mark');
+    const li = document.querySelector('.md-preview li');
+    const cb = document.querySelector('.md-preview input[type=checkbox]');
+    const lang = document.querySelector('.md-preview .code-lang');
+    const body = document.querySelector('.md-preview p');
+    const toHex = (rgb) => rgb;
+    return {
+      accent,
+      quoteBorder: q ? toHex(getComputedStyle(q).borderLeftColor) : null,
+      codeColor: code ? getComputedStyle(code).color : null,
+      linkColor: link ? getComputedStyle(link).color : null,
+      markBg: mark ? getComputedStyle(mark).backgroundColor : null,
+      markerColor: li ? getComputedStyle(li, '::marker').color : null,
+      checkboxAccent: cb ? getComputedStyle(cb).accentColor : null,
+      langColor: lang ? getComputedStyle(lang).color : null,
+      bodyColor: body ? getComputedStyle(body).color : null,
+    };
+  })()`);
+  /*
+   * 深浅主题的品牌绿不是同一支（浅 #3f6b45 / 深 #7fb56e），所以**不能写死色值**：
+   * 上一轮跑完停在深色主题，写死就会红一片，而产物其实没问题。
+   * 这里拿页面里真实的 --accent 解析成 rgb 再比。
+   */
+  const accentRgb = await evaluate(`(() => {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const d = document.createElement('div');
+    d.style.color = v;
+    document.body.appendChild(d);
+    const rgb = getComputedStyle(d).color;
+    d.remove();
+    return rgb.replace(/ /g, '');
+  })()`);
+  const isGreen = (c) => (c ?? '').replace(/ /g, '') === accentRgb;
+  check('阅读态：引用左线 / 链接 / 语言名 / 列表符号 / 复选框都用品牌绿，正文仍是墨色',
+    isGreen(colors.quoteBorder) && isGreen(colors.linkColor) && isGreen(colors.langColor) &&
+    isGreen(colors.markerColor) && isGreen(colors.checkboxAccent) &&
+    !isGreen(colors.bodyColor) && colors.codeColor !== colors.bodyColor, colors);
+  await shot('colors-read.png');
+
+  // 编辑态同一套
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('编辑'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  await evaluate(`(() => { document.querySelector('.cm-content')?.blur(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const edit = await evaluate(`(() => {
+    const q = document.querySelector('.cm-live-quote');
+    const code = document.querySelector('.cm-live-code');
+    const box = document.querySelector('.cm-task-checked');
+    const fence = document.querySelector('.cm-live-fence-mark');
+    return {
+      quoteBorder: q ? getComputedStyle(q).borderLeftColor : null,
+      codeColor: code ? getComputedStyle(code).color : null,
+      checkedBg: box ? getComputedStyle(box).backgroundColor : null,
+      fenceColor: fence ? getComputedStyle(fence).color : null,
+    };
+  })()`);
+  check('编辑态与阅读态同一套颜色（引用线 / 勾选 / 围栏语言都是品牌绿）',
+    isGreen(edit.quoteBorder) && isGreen(edit.checkedBg) && isGreen(edit.fenceColor), edit);
+  await shot('colors-edit.png');
 }
 
 // ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------

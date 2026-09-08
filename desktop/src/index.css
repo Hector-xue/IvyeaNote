@@ -180,6 +180,110 @@ html.frameless.win-maximized #root {
   width: 30px;
   height: 30px;
 }
+/* ---- 顶栏标签页（v0.11.11）---- */
+/*
+ * 照 Obsidian：**只有当前那个标签是"纸面"**（浅色底、圆角），其余融进顶栏底色。
+ * 全部都画成按钮的话，一排方块会把顶栏变成工具栏，反而比空着还吵。
+ */
+.tb-tabs {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+  padding: 0 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tb-tabs::-webkit-scrollbar {
+  display: none;
+}
+/* 标签右边剩下的空白仍然要能拖窗口——这是 v0.11.3 丢过一次的东西 */
+.tb-drag {
+  flex: 1;
+  min-width: 24px;
+  align-self: stretch;
+}
+.tb-tab {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 10px;
+  border-radius: var(--r-1);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tb-tab:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.tb-tab.on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+/* 当前标签左侧一道品牌绿：一眼看出在哪一篇上（Obsidian 用的是同样的手法） */
+.tb-tab.on::before {
+  content: '';
+  width: 2px;
+  height: 14px;
+  margin-right: 6px;
+  margin-left: -6px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.tb-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tb-tab-x {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 4px;
+  opacity: 0;
+  cursor: pointer;
+}
+/* 关闭按钮只在 hover / 当前标签上出现：常显会让一排标签挂满 ✕ */
+.tb-tab:hover .tb-tab-x,
+.tb-tab.on .tb-tab-x {
+  opacity: 1;
+}
+.tb-tab-x:hover {
+  background: var(--n-3);
+  color: var(--text);
+}
+.tb-tab-new {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+.tb-tab-new:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .tb-crumb {
   flex: 1;
   min-width: 0;

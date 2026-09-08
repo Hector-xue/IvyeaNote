@@ -159,12 +159,23 @@ export const livePreviewTheme = {
     borderBottomRightRadius: 'var(--r-2, 8px)',
     paddingBottom: '4px',
   },
-  // 围栏那两行本身是语法不是内容：淡下去，但**不隐藏**——隐藏了就没法删它
-  '.cm-live-fence-mark': { opacity: '0.45', fontSize: '0.85em' },
+  // 围栏那两行本身是语法不是内容：淡下去，但**不隐藏**——隐藏了就没法删它。
+  // v0.11.11：给一点品牌绿，和阅读态代码块头上的语言名是同一个意思
+  '.cm-live-fence-mark': {
+    opacity: '0.75',
+    fontSize: '0.85em',
+    color: 'var(--accent, #3f6b45)',
+  },
+  /*
+   * v0.11.11：编辑态也要有颜色，且与阅读态**同一套**（用户：「该加颜色的地方
+   * 加点颜色，就用我的品牌绿」）。两边不一致的话，切一次视图颜色就变，
+   * 比没有颜色更糟。一律走 --accent，不写死色值——深色主题里它会自动换成提亮那支。
+   */
   '.cm-live-code': {
     fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
     fontSize: '0.9em',
-    background: 'rgba(127,127,127,0.14)',
+    color: 'color-mix(in srgb, var(--accent, #3f6b45) 88%, var(--text, #2b2a26))',
+    background: 'color-mix(in srgb, var(--accent, #3f6b45) 10%, transparent)',
     borderRadius: '4px',
     padding: '1px 4px',
   },
@@ -200,7 +211,8 @@ export const livePreviewTheme = {
   },
   '.cm-live-quote': {
     color: 'var(--muted, #888)',
-    borderLeft: '3px solid var(--border, #ccc)',
+    // v0.11.11：左边那道线换成品牌绿，与阅读态的 blockquote 对齐
+    borderLeft: '3px solid var(--accent, #3f6b45)',
     paddingLeft: '10px',
     opacity: '0.92',
   },
@@ -213,7 +225,7 @@ export const livePreviewTheme = {
   },
   '.cm-live-link:hover': { textDecoration: 'underline' },
   '.cm-task-checkbox': {
-    border: '1.5px solid var(--muted, #999)',
+    border: '1.5px solid color-mix(in srgb, var(--accent, #3f6b45) 55%, var(--muted, #999))',
     borderRadius: '3px',
     width: '14px',
     height: '14px',
@@ -226,7 +238,11 @@ export const livePreviewTheme = {
     textAlign: 'center',
     userSelect: 'none',
   },
-  '.cm-task-checked': { background: 'var(--accent, #4a8)', borderColor: 'var(--accent, #4a8)' },
+  '.cm-task-checked': {
+    background: 'var(--accent, #3f6b45)',
+    borderColor: 'var(--accent, #3f6b45)',
+    color: 'var(--accent-text, #fff)', // 绿底上的对勾要是白的，否则糊成一团
+  },
   '.cm-task-checked-text': { textDecoration: 'line-through', opacity: '0.88' },
 };
 
