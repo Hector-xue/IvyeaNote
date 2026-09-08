@@ -16,7 +16,9 @@ import { useTrash, trashPathFor, nextTrashName } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
 import { linkVaults } from './lib/vaultLink';
+import { baseNameOf, openWithSystem } from './lib/openExternal';
 import { TopBar } from './ui/TopBar';
+import type { MenuItem } from './ui/ContextMenu';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient } from './lib/api';
 import type { FileIO } from './lib/sync';
@@ -67,6 +69,7 @@ import {
   newVaultMeta,
   nextLocalVaultId,
   type PersistState,
+  type Tokens,
   type VaultMeta,
   loadActiveVaultId,
   saveActiveVaultId,
@@ -136,6 +139,26 @@ export default function App() {
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
   const [showLogin, setShowLogin] = useState(false);
+  /**
+   * 登录态过期（refresh token 也被服务端拒了）。
+   *
+   * **不清账号**：`clearAccount()` 之后 `activeVaultId` 会掉回本地库，
+   * 用户眼前那个云端库连同它绑定的磁盘目录会整个从界面上消失（笔记还在盘上，
+   * 但界面回不去）。这里只标记状态：停掉自动同步、把「重新登录」摆到明面上，
+   * 重新登录成功后 finishLogin 会把 vault 列表原样接回来。
+   */
+  const [sessionExpired, setSessionExpired] = useState(false);
+  /** 侧边栏展开/收起。落盘——不落盘的话每次重启又弹回来，等于没做 */
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => localStorage.getItem('ivnote.sidebarOpen') !== '0'
+  );
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((v) => {
+      localStorage.setItem('ivnote.sidebarOpen', v ? '0' : '1');
+      return !v;
+    });
+  }, []);
+  const expiredNotified = useRef(false);
   /** v0.4.0 T2：首启引导（仅未登录且首次启动显示） */
   const [showWelcome, setShowWelcome] = useState(() => !isWelcomed());
   /**
@@ -411,6 +434,52 @@ export default function App() {
     }
   }, [client, persist, toast]);
 
+  /**
+   * 导出为 PDF。
+   *
+   * 走的是**系统打印**（WebView2 / WebKitGTK 的打印对话框里选「另存为 PDF」），
+   * 不自己塞一个 PDF 生成库：排版结果和阅读视图一模一样、中文字体不用另外内嵌，
+   * 也不用为了一个功能多背几百 KB 依赖。打印样式在 index.css 的 `@media print` 里，
+   * 那段把界面（侧栏/顶栏/状态栏）全部藏掉，只留正文。
+   *
+   * 必须先切到阅读视图：编辑器是虚拟滚动的，只渲染视口内那几行——直接打印
+   * 会得到一份**只有一屏内容**的 PDF（这正是"看起来能用其实是坏的"那种功能）。
+   */
+  /** 在系统文件管理器里定位到这篇笔记（Obsidian 的「在系统资源管理器中显示」） */
+  const revealCurrent = useCallback(
+    async (rel: string) => {
+      const root = vault?.localPath;
+      if (!root || root.startsWith('opfs://')) return;
+      try {
+        const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+        await revealItemInDir(`${root.replace(/\/$/, '')}/${rel}`);
+      } catch (e) {
+        toast(`定位失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault?.localPath, toast]
+  );
+
+  const exportPdf = useCallback(async () => {
+    if (!currentPath) return;
+    setViewMode('read');
+    // 等阅读视图真的渲染出来再调打印：两帧足够 React 提交 + 浏览器排版
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try {
+      window.print();
+    } catch (e) {
+      toast(`导出失败：${errText(e)}`, 'error');
+    }
+  }, [currentPath, toast]);
+
+  const onAuthExpired = useCallback(() => {
+    setSessionExpired(true);
+    if (!expiredNotified.current) {
+      expiredNotified.current = true;
+      toast('登录已过期，请重新登录后继续同步', 'error');
+    }
+  }, [toast]);
+
   const {
     syncing,
     lastReport,
@@ -428,6 +497,7 @@ export default function App() {
     afterPull,
     errText,
     onUnlinked: relink,
+    onAuthExpired,
   });
 
   /*
@@ -475,16 +545,24 @@ export default function App() {
 
   const finishLogin = useCallback(
     async (serverUrl: string, email: string, userId: number, access: string, refresh: string) => {
+      /*
+       * 令牌轮换**必须接住**。这两个临时 client 以前传的是 `() => undefined`：
+       * 一旦中间发生 401 自动刷新，服务端会把旧 refresh token 删掉、发一个新的，
+       * 而新的被这里当场扔了 —— 存进 state 的那个已经作废，之后每一次刷新都是
+       * 「refresh token 无效或已过期」，除了重新登录没有别的出路。
+       */
+      let live: Tokens = { access, refresh };
+      const keepTokens = (t: Tokens) => {
+        live = t;
+      };
       // 先用临时 client 注册设备，拿到 device_id 后再落盘
-      const tmpTokens = { access, refresh };
       let deviceId = '';
       try {
-        const tmp = new SyncClient(serverUrl, tmpTokens, () => undefined);
+        const tmp = new SyncClient(serverUrl, live, keepTokens);
         deviceId = (await tmp.registerDevice()).device_id;
       } catch {
         deviceId = `local-${crypto.randomUUID()}`; // 注册失败不阻塞登录
       }
-      const acc = { serverUrl, email, userId, deviceId, tokens: tmpTokens };
       const cur = loadState();
       /*
        * 与服务端对齐 vault 列表、把本地库接上云端。**协调本身失败也不能算登录失败**，
@@ -496,15 +574,18 @@ export default function App() {
       let vaults = cur.vaults;
       let activeId: number | null = null;
       try {
-        const c = new SyncClient(serverUrl, acc.tokens, () => undefined, deviceId);
+        const c = new SyncClient(serverUrl, live, keepTokens, deviceId);
         const r = await linkVaults(c, cur, loadActiveVaultId() ?? LOCAL_VAULT_ID);
         vaults = r.vaults;
         activeId = r.activeId;
       } catch {
         // 连不上服务器：本地库原样留着，交给 relink 那条自愈路径
       }
+      const acc = { serverUrl, email, userId, deviceId, tokens: live };
       persist({ account: acc, vaults });
       setVaultId(activeId ?? Object.values(vaults)[0]?.id ?? null);
+      setSessionExpired(false);
+      expiredNotified.current = false;
     },
     [persist]
   );
@@ -553,12 +634,15 @@ export default function App() {
   // 编辑落盘后的推送已在 onEdit 防抖里触发，这里补齐其余时机；
   // doSync 内部有 syncingRef 重入保护，多时机并发安全。
   useEffect(() => {
-    if (!client || !prefs.autoSync) return;
+    // 登录态过期时不再自动重试：refresh 已经废了，重试一万次也是同一条错，
+    // 只会把红条刷得更频繁。等用户重新登录。
+    if (!client || !prefs.autoSync || sessionExpired) return;
     const timer = window.setTimeout(() => void doSync(), 2000); // 启动拉取一次
     const onVisible = () => {
       if (document.visibilityState === 'visible') void doSync();
     };
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
     const poll = window.setInterval(() => {
       if (document.visibilityState === 'visible') void doSync();
     }, 60_000);
@@ -566,8 +650,24 @@ export default function App() {
       window.clearTimeout(timer);
       window.clearInterval(poll);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
     };
-  }, [client, prefs.autoSync, doSync]);
+  }, [client, prefs.autoSync, doSync, sessionExpired]);
+
+  /*
+   * Ctrl+\\ 收起 / 展开侧边栏（和 Obsidian 同一个键位）。
+   * 顶栏那颗按钮的提示里写了这个键——写了就必须真的能用，否则又是一处
+   * 「看起来有、其实没有」。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key !== '\\') return;
+      e.preventDefault();
+      toggleSidebar();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleSidebar]);
 
   // 卸载时清理编辑防抖计时器
   useEffect(
@@ -638,10 +738,8 @@ export default function App() {
       void reloadExternalRef.current();
     };
     document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onVisible);
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onVisible);
     };
   }, [vault?.localPath, refreshFiles]);
 
@@ -1461,9 +1559,11 @@ export default function App() {
       }
       // 附件走 openPath 而不是 openUrl：file:// URL 在 Windows 上会被 opener 拒掉
       void (async () => {
+        const abs = `${root.replace(/\/$/, '')}/${rel}`;
         try {
-          const { openPath } = await import('@tauri-apps/plugin-opener');
-          await openPath(`${root.replace(/\/$/, '')}/${rel}`);
+          if ((await openWithSystem(abs)) === 'revealed') {
+            toast(`系统里没有能打开「${baseNameOf(abs)}」的程序，已在文件夹中定位`, 'info');
+          }
         } catch (e) {
           toast(`无法打开：${errText(e)}`, 'error');
         }
@@ -1824,6 +1924,36 @@ export default function App() {
       currentPath={pdfPath ?? currentPath}
       mode={pdfView || !currentPath ? null : viewMode}
       onToggleMode={() => setViewMode((m) => (m === 'edit' ? 'read' : 'edit'))}
+      sidebarOpen={sidebarOpen}
+      onToggleSidebar={toggleSidebar}
+      /*
+       * 「⋯」里只放**当前这篇笔记**的动作，而且刻意不重复界面上已有的按钮
+       * （阅读/编辑在左边那颗、分栏在状态栏）——同一个功能出现两次，用户第一句
+       * 话就是「按钮还有重复的」。
+       */
+      noteMenu={
+        currentPath && !pdfView
+          ? [
+              { id: 'export-pdf', label: '导出为 PDF…', icon: 'file', run: () => void exportPdf() },
+              { type: 'sep', id: 's-1' },
+              { id: 'rename', label: '重命名…', icon: 'edit', run: () => void requestRename(currentPath) },
+              { id: 'move', label: '移动到…', icon: 'move', run: () => setMoving({ path: currentPath, isDir: false }) },
+              { id: 'copy', label: '复制路径', icon: 'copy', run: () => void copyPath(currentPath) },
+              ...(isTauri && vault?.localPath && !vault.localPath.startsWith('opfs://')
+                ? ([
+                    {
+                      id: 'reveal',
+                      label: '在文件夹中显示',
+                      icon: 'folder',
+                      run: () => void revealCurrent(currentPath),
+                    },
+                  ] as MenuItem[])
+                : []),
+              { type: 'sep', id: 's-2' },
+              { id: 'del', label: '删除', icon: 'trash', danger: true, run: () => void onDeleteFile(currentPath) },
+            ]
+          : []
+      }
     />
   );
 
@@ -1867,7 +1997,8 @@ export default function App() {
 
   // 登录页只在用户主动唤起且尚未登录时显示；平时无账号也直达主界面（本地模式）
   // 注意：此处 early return 之前所有 hooks 均已调用完毕（v0.3.3 修复 Rules of Hooks 违例）
-  if (!state.account && showLogin) {
+  // 登录态过期时同样要能唤起登录页——账号还在 state 里，但它已经不好使了
+  if ((!state.account || sessionExpired) && showLogin) {
     return showGuide ? (
       <SetupGuide onBack={() => setShowGuide(false)} />
     ) : (
@@ -1941,6 +2072,7 @@ export default function App() {
           onLogout={onLogout}
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
+          sessionExpired={sessionExpired}
           syncDisabled={!state.account}
           sortMode={sortMode}
           onSortChange={setSortMode}
@@ -2017,6 +2149,8 @@ export default function App() {
           onLogout={onLogout}
           hasAccount={!!state.account}
           onOpenLogin={() => setShowLogin(true)}
+          sessionExpired={sessionExpired}
+          sidebarOpen={sidebarOpen}
           syncDisabled={!state.account}
           sortMode={sortMode}
           onSortChange={setSortMode}
@@ -2105,6 +2239,8 @@ export default function App() {
         onLogout={onLogout}
         hasAccount={!!state.account}
         onOpenLogin={() => setShowLogin(true)}
+        sessionExpired={sessionExpired}
+        sidebarOpen={sidebarOpen}
         syncDisabled={!state.account}
         sortMode={sortMode}
         onSortChange={setSortMode}

@@ -36,11 +36,79 @@ html.frameless #root {
   background: var(--bg);
   border-radius: 10px;
   overflow: hidden;
-  /* 一层扩散投影给"离开桌面"的层次，一条内描边给清晰的边界，两者缺一不可 */
+  /*
+   * v0.11.8：**投影必须落在这 10px 留白之内**。
+   * 上一版是 `0 10px 30px`——向下扩散 10+15=25px、四周 15px，全都超出留白，
+   * 被窗口边缘齐齐切掉：看到的不是柔和的影子，而是一圈生硬的深带，
+   * 用户的原话是「阴影太不自然」。现在最大扩散 4+6=10px，正好吃满留白不越界。
+   */
   box-shadow:
-    0 10px 30px rgba(0, 0, 0, 0.22),
-    0 2px 8px rgba(0, 0, 0, 0.14),
+    0 4px 12px rgba(0, 0, 0, 0.16),
+    0 1px 3px rgba(0, 0, 0, 0.1),
     inset 0 0 0 1px var(--border);
+}
+
+/*
+ * 缩放热区：整圈透明留白 + 往卡片里压 2px。
+ * 系统给无边框窗口的缩放边框在**窗口最外一像素**上，离看得见的卡片边还有 10px，
+ * 用户瞄着阴影的位置拖是拖不动的（2026-09-08 反馈）。
+ */
+.win-resize {
+  position: fixed;
+  z-index: 200;
+}
+.win-resize-n,
+.win-resize-s {
+  left: 12px;
+  right: 12px;
+  height: 12px;
+  cursor: ns-resize;
+}
+.win-resize-w,
+.win-resize-e {
+  top: 12px;
+  bottom: 12px;
+  width: 12px;
+  cursor: ew-resize;
+}
+.win-resize-n {
+  top: 0;
+}
+.win-resize-s {
+  bottom: 0;
+}
+.win-resize-w {
+  left: 0;
+}
+.win-resize-e {
+  right: 0;
+}
+.win-resize-nw,
+.win-resize-ne,
+.win-resize-sw,
+.win-resize-se {
+  width: 14px;
+  height: 14px;
+}
+.win-resize-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.win-resize-se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+.win-resize-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.win-resize-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
 }
 /* 最大化时窗口贴满屏幕：留白、圆角、投影全部收掉，否则四周会露出桌面 */
 html.frameless.win-maximized body {
@@ -1136,6 +1204,18 @@ button {
   background: color-mix(in srgb, #d33 12%, transparent);
   color: #c22;
   font-size: 13px;
+}
+/* 登录过期这条要给得出出路：一句话 + 一个能点的按钮，别只贴服务端原话 */
+.m-error-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.m-error-action .btn.small {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 12px;
 }
 .m-toast {
   position: absolute;
@@ -2450,4 +2530,56 @@ button {
 .img-view-name {
   color: rgba(255, 255, 255, 0.75);
   font-size: var(--fs-sm);
+}
+
+
+/*
+ * 导出为 PDF = 走系统打印（对话框里选「另存为 PDF」）。
+ * 打印时把界面全部藏掉，只留阅读视图的正文，并解掉滚动容器的高度限制——
+ * 不解的话打出来只有一屏（滚动区的可视部分）。
+ */
+@media print {
+  html,
+  body {
+    background: #fff !important;
+    padding: 0 !important;
+  }
+  .ribbon,
+  .sidebar,
+  .panel-resizer,
+  .top-bar,
+  .status-bar,
+  .right-panel,
+  .toast-host,
+  .dlg-mask,
+  .win-resize {
+    display: none !important;
+  }
+  #root {
+    display: block !important;
+    height: auto !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+  }
+  .app,
+  .editor-pane,
+  .editor-host,
+  .md-preview {
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .md-preview {
+    max-width: none !important;
+    padding: 0 !important;
+    color: #000;
+  }
+  /* 链接在纸上点不动，但地址要留得住 */
+  .md-preview a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-size: 0.85em;
+    color: #555;
+  }
 }

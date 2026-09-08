@@ -32,7 +32,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 
 // SEP 是模块加载时按 userAgent 定的，必须先伪装成 Windows 再 import
 vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebView2' });
-const { tauriIO, isSkippedDir, inSkippedDir } = await import('./fs-adapters');
+const { tauriIO, isSkippedDir, isSkippedFile, inSkippedDir } = await import('./fs-adapters');
 
 beforeEach(() => {
   calls.mkdir = [];
@@ -62,6 +62,7 @@ describe('点目录', () => {
   it('.git / .obsidian 不进文件列表，.trash / .ivyea 照常进', async () => {
     tree['E:\\v'] = [
       { name: 'a.md', isDirectory: false },
+      { name: '.gitignore', isDirectory: false },
       { name: '.git', isDirectory: true },
       { name: '.obsidian', isDirectory: true },
       { name: '.trash', isDirectory: true },
@@ -85,7 +86,13 @@ describe('点目录', () => {
     expect(isSkippedDir('笔记')).toBe(false);
     expect(inSkippedDir('.obsidian/plugins/x/main.js')).toBe(true);
     expect(inSkippedDir('.trash/a.md')).toBe(false);
-    // 文件名以点开头（.gitignore）不算目录，照常收进来
-    expect(inSkippedDir('.gitignore')).toBe(false);
+    // v0.11.8：点开头的**文件**也隐藏（用户报的就是侧栏最底下那个 .gitignore）
+    expect(isSkippedFile('.gitignore')).toBe(true);
+    expect(isSkippedFile('.DS_Store')).toBe(true);
+    // `.keep` 是空文件夹占位，去掉它「新建文件夹」就等于点了没反应
+    expect(isSkippedFile('.keep')).toBe(false);
+    expect(isSkippedFile('笔记.md')).toBe(false);
+    expect(inSkippedDir('.gitignore')).toBe(true);
+    expect(inSkippedDir('子目录/.keep')).toBe(false);
   });
 });

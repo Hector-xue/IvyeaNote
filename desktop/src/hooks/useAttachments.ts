@@ -10,6 +10,7 @@
  *    两个库里同名的图片会撞上——切过去还显示上一个库的那张。缓存现在跟着
  *    vaultPath 走，换库即清并回收 blob URL（原来这些 URL 一直到关窗口都不释放）。
  */
+import { baseNameOf, openWithSystem } from '../lib/openExternal';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FileIO } from '../lib/sync';
 import { attachmentDir, joinPath, type AttachMode } from '../lib/attachPath';
@@ -191,9 +192,12 @@ export function useAttachments(deps: AttachmentsDeps): Attachments {
         toast('这个库存在应用内部，系统应用打不开；请先在设置里绑定磁盘文件夹', 'error');
         return;
       }
+      const abs = `${vaultPath.replace(/\/$/, '')}/${path}`;
       try {
-        const { openPath } = await import('@tauri-apps/plugin-opener');
-        await openPath(`${vaultPath.replace(/\/$/, '')}/${path}`);
+        // 系统里没有能开这种文件的程序时退回「在文件夹中定位」，见 lib/openExternal
+        if ((await openWithSystem(abs)) === 'revealed') {
+          toast(`系统里没有能打开「${baseNameOf(abs)}」的程序，已在文件夹中定位`, 'ok');
+        }
       } catch (e) {
         toast(`无法打开：${errText(e)}`, 'error');
       }

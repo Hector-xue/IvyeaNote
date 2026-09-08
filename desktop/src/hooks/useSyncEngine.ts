@@ -38,6 +38,11 @@ export interface SyncEngineDeps {
    * 每次都失败，而唯一的出路（重新协调 vault 列表）此前只在登录那一刻跑。
    */
   onUnlinked?(): Promise<boolean>;
+  /**
+   * 登录态过期时的回调。重试没有意义，只能让用户重新登录——
+   * 调用方要据此停掉自动同步并把「重新登录」这个入口摆到明面上。
+   */
+  onAuthExpired?(): void;
 }
 
 export interface SyncEngine {
@@ -53,7 +58,8 @@ export interface SyncEngine {
 }
 
 export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
-  const { client, vault, io, deviceId, refresh, persist, afterPull, errText, onUnlinked } = deps;
+  const { client, vault, io, deviceId, refresh, persist, afterPull, errText, onUnlinked, onAuthExpired } =
+    deps;
   const [syncing, setSyncing] = useState(false);
   const [lastReport, setLastReport] = useState<SyncReport | null>(null);
   /** 重入保护用 ref 不用 state：并发触发点很多（启动 / 聚焦 / 轮询 / 编辑落盘 / WS 通知），
@@ -72,6 +78,7 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
       try {
         const report = await RUNNERS[mode](client, vault, io, deviceId, vault.localPath ?? '');
         setLastReport(report);
+        if (report.authExpired) onAuthExpired?.();
         if (report.unlinked && onUnlinked && !relinked.current) {
           relinked.current = true;
           // 接回来之后不能拿这里的 vault/io 重推：它们是**接之前**那个库的闭包。
@@ -104,7 +111,7 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
         setSyncing(false);
       }
     },
-    [client, vault, io, deviceId, refresh, persist, afterPull, errText, onUnlinked]
+    [client, vault, io, deviceId, refresh, persist, afterPull, errText, onUnlinked, onAuthExpired]
   );
 
   // 重接成功后补一轮完整同步。依赖只有 resyncAt：effect 执行时 `run` 已经是

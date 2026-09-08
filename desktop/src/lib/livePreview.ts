@@ -61,7 +61,13 @@ export const livePreviewTheme = {
   '.cm-live-h4, .cm-live-h5, .cm-live-h6': { fontSize: '1.05em', fontWeight: '650' },
   '.cm-live-bold': { fontWeight: '700' },
   '.cm-live-italic': { fontStyle: 'italic' },
-  '.cm-live-strike': { textDecoration: 'line-through', opacity: '0.7' },
+  /*
+   * v0.11.8：删除线的字**不能再压到七成透明**。
+   * 用户反馈「文档有些字的颜色太浅了」，指的就是这里：正文墨色是 #2b2a26，
+   * 压到 0.7 之后实测约等于 #6f6e6a，在纸色背景上已经进入"次要文字"的亮度，
+   * 整段读起来是灰的。删除线本身已经把"这条划掉了"说清楚了，颜色不必再帮腔。
+   */
+  '.cm-live-strike': { textDecoration: 'line-through', opacity: '0.88' },
   // 高亮：Obsidian 的 ==高亮== 。用品牌绿的极淡底，不用刺眼的荧光黄
   '.cm-live-mark': {
     background: 'color-mix(in srgb, var(--accent, #4a8) 22%, transparent)',
@@ -151,7 +157,7 @@ export const livePreviewTheme = {
     userSelect: 'none',
   },
   '.cm-task-checked': { background: 'var(--accent, #4a8)', borderColor: 'var(--accent, #4a8)' },
-  '.cm-task-checked-text': { textDecoration: 'line-through', opacity: '0.6' },
+  '.cm-task-checked-text': { textDecoration: 'line-through', opacity: '0.88' },
 };
 
 interface TaskHit {

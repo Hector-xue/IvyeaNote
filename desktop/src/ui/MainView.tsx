@@ -105,6 +105,13 @@ interface Props {
   /** 是否已登录（未登录=本地模式，显示「登录同步」而非「退出登录」） */
   hasAccount: boolean;
   onOpenLogin(): void;
+  /** 登录态过期：refresh token 也被服务端拒了，只能重新登录 */
+  sessionExpired?: boolean;
+  /**
+   * 侧边栏是否展开（Obsidian 的 Ctrl+\）。整块连同它右边那条拖宽手柄一起收掉——
+   * 只把 `<aside>` 藏了、留着手柄，会出现"一条能拖的缝"这种鬼东西。
+   */
+  sidebarOpen?: boolean;
   /** 笔记库选择器（由外层注入，保持受控状态） */
   vaultSelector: React.ReactNode;
   onCreateVault(): void;
@@ -312,6 +319,8 @@ export function MainView(props: Props) {
    * 状态栏一片祥和，另一台设备什么也收不到（2026-09-08 用户就是这么被误导的）。
    */
   const syncPending = !props.syncDisabled && !props.syncing && !props.lastReport;
+  /** 过期比"失败"更明确：告诉用户要做什么，而不是让他对着一条红字猜 */
+  const expired = !props.syncDisabled && !!props.sessionExpired;
   /** 编辑器交出来的「按 key 施加格式」入口。桌面只用它的 'image' 一路 */
   const [applyFormat, setApplyFormat] = useState<((key: string) => void) | null>(null);
   /*
@@ -382,6 +391,7 @@ export function MainView(props: Props) {
           <RibbonIcon name={props.theme === 'light' ? 'moon' : 'sun'} />
         </button>
       </nav>
+      {(props.sidebarOpen ?? true) && (
       <aside
         className="sidebar"
         style={{ width: sideW.width, minWidth: sideW.width, maxWidth: sideW.width }}
@@ -485,8 +495,11 @@ export function MainView(props: Props) {
         </div>
 
       </aside>
+      )}
 
-      <div className={`panel-resizer ${sideW.dragging ? 'dragging' : ''}`} {...sideW.handleProps} />
+      {(props.sidebarOpen ?? true) && (
+        <div className={`panel-resizer ${sideW.dragging ? 'dragging' : ''}`} {...sideW.handleProps} />
+      )}
       <main className="editor-pane">
         {/*
           v0.10.7：**顶部标签栏删掉了**（用户：「顶栏太丑了，删掉吧，把对应按钮
@@ -620,7 +633,7 @@ export function MainView(props: Props) {
             <button
               className={`st-item ${props.syncing ? 'busy' : ''} ${syncFailed ? 'st-fail' : ''}`}
               onClick={
-                props.syncDisabled
+                props.syncDisabled || expired
                   ? props.onOpenLogin
                   : syncFailed && props.onOpenSyncStatus
                     ? props.onOpenSyncStatus
@@ -629,7 +642,9 @@ export function MainView(props: Props) {
               title={
                 props.syncDisabled
                   ? '本地模式：笔记只存在这台设备上，点此登录后多端同步'
-                  : props.syncing
+                  : expired
+                    ? '登录已过期（服务端不再认这台设备的令牌）；点此重新登录，笔记不会丢'
+                    : props.syncing
                     ? '同步中…'
                     : syncFailed
                       ? `上次同步失败：${props.lastReport?.errors[0]}（点击查看还有什么没上去）`
@@ -639,12 +654,14 @@ export function MainView(props: Props) {
               }
             >
               <RibbonIcon
-                name={props.syncDisabled ? 'file' : syncFailed ? 'alert' : 'sync'}
+                name={props.syncDisabled ? 'file' : syncFailed || expired ? 'alert' : 'sync'}
                 size={13}
               />
               {props.syncDisabled
                 ? '本地模式'
-                : props.syncing
+                : expired
+                  ? '登录已过期'
+                  : props.syncing
                   ? '同步中'
                   : syncFailed
                     ? '同步失败'
