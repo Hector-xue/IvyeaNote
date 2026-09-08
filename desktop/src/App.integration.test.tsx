@@ -47,6 +47,12 @@ const { memFiles, memIO } = vi.hoisted(() => {
     async read(_vp, rel) {
       const v = memFiles.get(rel);
       if (v === undefined) throw new Error(`not found: ${rel}`);
+      /*
+       * **假的不能比真的宽松**：桌面端的 `read` 是 `readTextFile`，遇到不是合法
+       * UTF-8 的文件（图片 / PDF）直接抛。以前这个桩照单全收，于是「删图片删不掉」
+       * 这类问题在测试里永远看不见。
+       */
+      if (!/\.(md|markdown|txt)$/i.test(rel)) throw new Error(`stream did not contain valid UTF-8: ${rel}`);
       return v;
     },
     async write(_vp, rel, content) {
@@ -788,5 +794,58 @@ describe('登录着却没有云端库时自己接回来（v0.11.7）', () => {
     expect(JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!).vaults['4'].localPath).toBe(
       '/data/notes'
     );
+  });
+});
+
+/*
+ * 用户 2026-09-08 报的：在 Obsidian 里改了同一篇笔记，Ivyea Note 这边要「重新加载」
+ * 才看得到。文件监听从 v0.7.5 就有，但它只调 refreshFiles()——刷的是文件列表和索引，
+ * **从不碰编辑区的 doc**。回到前台这条兜底路同样一条都没有。
+ */
+describe('外部改动要能被看见（v0.11.7）', () => {
+  // 状态栏里有两个 .st-count（反向链接数、字数），字数是后面那个
+  const countText = () =>
+    [...document.querySelectorAll('.status-bar .st-count')].pop()?.textContent ?? '';
+
+  it('回到前台就把磁盘上的新内容读进正在打开的那篇', async () => {
+    await renderApp({ 'a.md': '# 标题' });
+    openNote('a.md');
+    await waitFor(() => {
+      if (!countText()) throw new Error('状态栏还没出字数');
+    });
+    const before = countText();
+
+    // 外部（Obsidian）改了同一个文件
+    memFiles.set('a.md', '# 标题\n\n这一段是在别的软件里加的，字数必须跟着变。');
+    fireEvent(document, new Event('visibilitychange'));
+
+    await waitFor(() => {
+      if (countText() === before) throw new Error(`字数没变：${countText()}`);
+    });
+  });
+
+});
+
+/*
+ * 2026-09-08 真机：「无法删除绑定目录的文件」。删除是"先读出来搬进 .trash 再删原文件"，
+ * 而读用的是文本读写 —— 图片 / PDF 过一遍 UTF-8 解码直接抛，于是删不掉；
+ * 重名递增又写死成只认 `.md`，非 .md 撞名时那个 while 会原地打转。
+ */
+describe('删除任何类型的文件（v0.11.7）', () => {
+  it('图片能删进回收站（此前文本读写在这一步抛）', async () => {
+    await renderApp({ 'a.md': '# A', '图.png': 'PNG-BYTES' });
+    fireEvent.click(fileNode('图.png')!.querySelector('button[title="删除"]')!);
+    await waitFor(() => {
+      if (!document.querySelector('.dlg-card')) throw new Error('确认框没出来');
+    });
+    fireEvent.click(document.querySelector('.dlg-card .btn.danger')!);
+
+    await waitFor(() => {
+      if (fileNode('图.png')) throw new Error('图片还在树里');
+    });
+    const trashed = [...memFiles.keys()].filter((p) => p.startsWith('.trash/'));
+    expect(trashed.length).toBe(1);
+    expect(trashed[0]).toMatch(/图\.png$/);
+    expect(memFiles.get(trashed[0])).toBe('PNG-BYTES'); // 内容一个字节都没坏
   });
 });

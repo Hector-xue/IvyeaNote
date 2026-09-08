@@ -18,7 +18,21 @@ export function originalPathOf(trashPath: string): string {
   return base.replace(STAMP_RE, '').replaceAll('__', '/');
 }
 
-/** 生成回收站落点（重名时追加 -1，调用方需保证最终不冲突） */
+/**
+ * 回收站里重名时的下一个候选：序号加在**扩展名之前**。
+ *
+ * 此前调用方写死 `replace(/(\.md)$/i, '-1$1')` —— 非 .md 文件（图片 / PDF）压根
+ * 匹配不上，`while (exists)` 那个循环于是原地打转，**删一张同名图片能把界面卡死**。
+ */
+export function nextTrashName(rel: string): string {
+  const dot = rel.lastIndexOf('.');
+  const base = dot > 0 ? rel.slice(0, dot) : rel;
+  const ext = dot > 0 ? rel.slice(dot) : '';
+  const m = /^(.*)-(\d+)$/.exec(base);
+  return m ? `${m[1]}-${Number(m[2]) + 1}${ext}` : `${base}-1${ext}`;
+}
+
+/** 生成回收站落点（重名时用 nextTrashName 递增） */
 export function trashPathFor(path: string, now = new Date()): string {
   const base = path.replaceAll('/', '__');
   const stamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -78,8 +92,13 @@ export function useTrash(deps: TrashDeps): Trash {
           toast(`恢复失败：${original} 已存在同名笔记`, 'error');
           return;
         }
-        const content = await io.read(vaultPath, trashPath);
-        await io.write(vaultPath, original, content);
+        /*
+         * **按二进制搬**。此前恢复走的是 read/write 文本：图片、PDF 这些一旦经过
+         * `readTextFile` 的 UTF-8 解码就再也回不来了——要么当场抛错（于是"恢复不了"），
+         * 要么被有损解码成一堆替换字符写回去（文件还在、内容已经废了）。
+         */
+        const bytes = await io.readBinary(vaultPath, trashPath);
+        await io.writeBinary(vaultPath, original, bytes);
         await io.remove(vaultPath, trashPath);
         setList((l) => l.filter((p) => p !== trashPath));
         await refreshFiles();

@@ -13,6 +13,7 @@
  * `list`/`listMeta` 因此都只是一次调用；`exists` 也走缓存，不再重新走树。
  */
 import type { FileIO, FileMeta } from './sync';
+import { inSkippedDir } from './fs-adapters';
 
 /** `content://` 前缀＝SAF 树 URI，不是磁盘路径 */
 export function isSafPath(p: string | null | undefined): boolean {
@@ -65,12 +66,15 @@ function bytesToBase64(bytes: Uint8Array): string {
 export const safIO: FileIO = {
   async list(vaultPath) {
     const entries = await call<SafEntry[]>('list_entries', { tree: vaultPath });
-    return entries.map((e) => e.path);
+    // 与桌面端同一套规矩：`.git` / `.obsidian` 这类点目录不进列表（见 fs-adapters）
+    return entries.filter((e) => !inSkippedDir(e.path)).map((e) => e.path);
   },
 
   async listMeta(vaultPath) {
     const entries = await call<SafEntry[]>('list_entries', { tree: vaultPath });
-    return entries.map((e): FileMeta => ({ path: e.path, mtime: e.mtime, size: e.size }));
+    return entries
+      .filter((e) => !inSkippedDir(e.path))
+      .map((e): FileMeta => ({ path: e.path, mtime: e.mtime, size: e.size }));
   },
 
   read(vaultPath, relPath) {

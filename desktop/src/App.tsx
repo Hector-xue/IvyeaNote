@@ -12,7 +12,7 @@ import { useObsidianImport } from './hooks/useObsidianImport';
 import { useTemplates } from './hooks/useTemplates';
 import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
-import { useTrash, trashPathFor } from './hooks/useTrash';
+import { useTrash, trashPathFor, nextTrashName } from './hooks/useTrash';
 import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
 import { linkVaults } from './lib/vaultLink';
@@ -124,6 +124,7 @@ export default function App() {
    *  否则每切换一次笔记就重建一次同步引擎。用 ref 旁路。 */
   const currentPathRef = useRef<string | null>(null);
   currentPathRef.current = currentPath;
+  const splitPathRef = useRef<string | null>(null);
   const [doc, setDoc] = useState<string | null>(null);
   /**
    * v0.8.2 E9：编辑区左右分栏。第二个窗格自带路径与内容——
@@ -131,6 +132,7 @@ export default function App() {
    */
   const [splitPath, setSplitPath] = useState<string | null>(null);
   const [splitDoc, setSplitDoc] = useState<string | null>(null);
+  splitPathRef.current = splitPath;
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
   const [showLogin, setShowLogin] = useState(false);
@@ -332,6 +334,44 @@ export default function App() {
       setDoc(null);
     }
   }, [vault, io]);
+
+  /**
+   * 外部（Obsidian / VSCode / 另一台设备）改了磁盘上的文件 → 把**正在打开的那篇**
+   * 重新读进编辑区。
+   *
+   * 文件监听此前只调 `refreshFiles()`，而它刷的是文件列表和索引、**从不碰 `doc`**。
+   * 于是外部改动的表现是：侧栏里新文件会冒出来，你正开着的那篇却一直是旧内容，
+   * 非得切走再切回来才看得到。编辑器一侧的「外部改动回灌」v0.9.1 就写好了
+   * （`MarkdownEditor` 认 props.doc 的变化并尽量保住光标），缺的一直是有人去 `setDoc`。
+   *
+   * 有未落盘的本地编辑就不覆盖：`saveTimers` 里还挂着这条路径 = 用户刚敲完还没写盘，
+   * 这时候拿磁盘内容盖上去就是吃掉刚敲的字。
+   */
+  const reloadExternal = useCallback(async () => {
+    if (!vault) return;
+    const root = vault.localPath ?? '';
+    const cur = currentPathRef.current;
+    const spl = splitPathRef.current;
+    if (cur && !saveTimers.current.has(cur)) {
+      try {
+        const text = await io.read(root, cur);
+        setDoc((prev) => (prev === text ? prev : text));
+      } catch {
+        // 被外部删了/改名了：列表刷新会把它从树里去掉，这里不动编辑区
+      }
+    }
+    if (spl && spl !== cur && !saveTimers.current.has(spl)) {
+      try {
+        const text = await io.read(root, spl);
+        setSplitDoc((prev) => (prev === text ? prev : text));
+      } catch {
+        /* 同上 */
+      }
+    }
+  }, [vault, io]);
+  /** 给文件监听用：走 ref 才不会每次 doc 变化都重装一次 watcher */
+  const reloadExternalRef = useRef(reloadExternal);
+  reloadExternalRef.current = reloadExternal;
 
   /**
    * 把当前这个「服务端不认的库」重新接到云端。
@@ -565,6 +605,7 @@ export default function App() {
             if (paths.length > 0 && paths.every((p) => p.replace(/\\/g, '/').includes('/.ivyea/')))
               return;
             void refreshFiles();
+            void reloadExternalRef.current();
           },
           { recursive: true, delayMs: 800 }
         );
@@ -578,6 +619,29 @@ export default function App() {
     return () => {
       disposed = true;
       stop?.();
+    };
+  }, [vault?.localPath, refreshFiles]);
+
+  /*
+   * 回到前台就对一次账。
+   *
+   * 系统级文件监听并不总是有：安卓的 SAF 树没有 watch，桌面上它也可能因为平台/权限
+   * 悄悄起不来（`watch` 失败只有一行 console.warn）。而「切到 Obsidian 改一改、
+   * 切回来」正是最常见的动作——**这条路不依赖任何原生能力，只是重读一遍**，
+   * 是外部改动能被看见的兜底保证。
+   */
+  useEffect(() => {
+    if (!vault?.localPath) return;
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      void refreshFiles();
+      void reloadExternalRef.current();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
     };
   }, [vault?.localPath, refreshFiles]);
 
@@ -734,12 +798,13 @@ export default function App() {
           void maybeRenameToH1(path, text);
         } catch (e) {
           console.error('写盘失败', e);
+          toast(`保存失败：${errText(e)}`, 'error');
         } finally {
           saveTimers.current.delete(path);
         }
       }, 800));
     },
-    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex]
+    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex, toast]
   );
 
   /**
@@ -998,10 +1063,16 @@ export default function App() {
         // 所以路径生成收在 hooks/useTrash 里，不再在这儿手拼。
         let trashRel = trashPathFor(path);
         while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
-          trashRel = trashRel.replace(/(\.md)$/i, `-1$1`);
+          trashRel = nextTrashName(trashRel);
         }
-        const content = await io.read(vault.localPath ?? '', path);
-        await io.write(vault.localPath ?? '', trashRel, content);
+        /*
+         * **按二进制搬进回收站**。此前这里是 `io.read`（文本）——删一张图片或 PDF 时
+         * `readTextFile` 解不出合法 UTF-8 直接抛，于是"删不掉"；就算侥幸解出来，
+         * 写进回收站的也已经是被有损解码过的废文件。笔记本身是 UTF-8 文本，
+         * 按字节搬同样无损，没有必要分两条路。
+         */
+        const bytes = await io.readBinary(vault.localPath ?? '', path);
+        await io.writeBinary(vault.localPath ?? '', trashRel, bytes);
         await io.remove(vault.localPath ?? '', path);
         if (currentPath === path) {
           setCurrentPath(null);
