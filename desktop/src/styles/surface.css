@@ -1875,3 +1875,69 @@ button.st-item:hover {
   text-align: center;
 }
 .base-muted { color: var(--muted); font-size: 12px; }
+
+/* ---- 手机端：大纲弹层与"标题不冻结"（v0.11.13）---- */
+
+/* 大纲复用底部菜单那套卡片；标题行左对齐、按层级缩进，所以不给图标位 */
+.m-outline2 .m-sheet2-item {
+  min-height: 44px;
+  gap: 0;
+}
+/* 「大纲」这两个字要在把手正下方居中，不然它会孤零零挂在卡片外的左上角 */
+.m-outline2 .m-sheet2-title {
+  text-align: center;
+  padding-bottom: 10px;
+}
+/*
+ * 分隔线从内容处起画。底部菜单缩进 50px 是为了避开左边那栏图标，
+ * 而大纲没有图标——照抄那个数值会让线看起来无缘无故往里缩一块。
+ */
+.m-outline2 .m-sheet2-item + .m-sheet2-item::before {
+  left: 16px;
+}
+.m-outline-item .m-sheet2-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * **手机端标题跟着正文滚，不再钉在顶上。**
+ *
+ * 用户原话：「有的文件标题冻结顶部，有的不冻结，我想要的是手机端标题不冻结」。
+ * 原因不是哪里写了 sticky，而是布局：`.m-main` 是 flex 列，标题在编辑器**外面**，
+ * 而编辑器自己内部滚动——于是标题永远停在那儿。
+ *
+ * 改法是把滚动交给 `.m-main`：编辑器与阅读区都不再自己滚，高度随内容长。
+ * 这也是 Obsidian 移动端的行为（内联标题是文档的一部分，划两下就走）。
+ * 只在手机端这么做：桌面端要保持"编辑区自己滚、标题常驻"。
+ */
+.m-app .m-main {
+  /* flex 子项默认 min-height:auto，撑破容器就不会滚——这一条不给，overflow 是摆设 */
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/*
+ * 让高度真的随内容长：`.md-body` / `.editor-host` 在桌面是 `flex:1`（把编辑器
+ * 钉在容器高度上、由它自己内部滚），手机端要反过来——它们不再吃满高度，
+ * 编辑器也不再自己滚，整段内容交给 `.m-main` 滚。
+ * 只改这三层里的任何一层都不够：上面钉着高度，下面 overflow 放开也没用。
+ */
+.m-app .m-main .md-body,
+.m-app .m-main .editor-host {
+  flex: none;
+  display: block;
+  min-height: 0;
+}
+.m-app .m-main .cm-editor {
+  height: auto;
+  min-height: 0;
+}
+.m-app .m-main .cm-scroller {
+  overflow: visible;
+}
+.m-app .m-main .md-preview {
+  overflow: visible;
+  flex: none;
+}

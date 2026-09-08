@@ -116,6 +116,9 @@ vi.mock('@codemirror/state', () => ({
   // 桩里缺了会在 import 期就炸掉整个测试文件
   Facet: { define: () => ({ of: () => ({}) }) },
   Range: class {},
+  // v0.11.13：区分"程序灌进来的内容"与"人敲的字"（打开笔记不该触发改名）。
+  // 桩里缺了会在 import 期就炸掉整个测试文件。
+  Annotation: { define: () => ({ of: () => ({}) }) },
 }));
 
 import App from './App';

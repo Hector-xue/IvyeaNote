@@ -146,7 +146,16 @@ export function MobileView(props: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   /** v0.10.0：视图模式提到这里——顶栏要显示它，底部格式条要按它决定给不给 */
   const [mode, setMode] = useState<'edit' | 'read'>('edit');
-  const [formatOpen, setFormatOpen] = useState(false);
+  /*
+   * v0.11.13：格式条不再由一个常驻按钮开关，而是**编辑器一拿到焦点就出现**
+   * （Obsidian 是键盘弹起时出现，一个意思）。
+   *
+   * 当初做成显式开关的理由是"WebView 里检测键盘不可靠"——那是对的，但键盘不等于
+   * 焦点：`focusin` / `focusout` 在 WebView 里是可靠的，而"光标在正文里"正是
+   * 格式条唯一有用的时刻。省下来的那个位置给了大纲与同步（用户：底部三个都不是高频的）。
+   */
+  const [editorFocused, setEditorFocused] = useState(false);
+  const formatOpen = editorFocused && mode === 'edit';
   /** 编辑器交出来的「按 key 施加格式」入口 */
   const [applyFormat, setApplyFormat] = useState<((key: string) => void) | null>(null);
   /*
@@ -470,7 +479,20 @@ export function MobileView(props: Props) {
   ) : null;
 
   return (
-    <div className={`m-app ${drawerOpen ? 'drawer-open' : ''} ${formatOpen ? 'format-open' : ''}`}>
+    <div
+      className={`m-app ${drawerOpen ? 'drawer-open' : ''} ${formatOpen ? 'format-open' : ''}`}
+      /*
+       * 焦点进出编辑器 → 格式条显隐。用 focusin/focusout 委托在根上，
+       * 不用给 MarkdownEditor 新增回调；点格式条上的按钮时它自己
+       * `onPointerDown` 阻止了抢焦点，所以不会把自己关掉。
+       */
+      onFocus={(e) => {
+        if ((e.target as HTMLElement).closest?.('.cm-content')) setEditorFocused(true);
+      }}
+      onBlur={(e) => {
+        if ((e.target as HTMLElement).closest?.('.cm-content')) setEditorFocused(false);
+      }}
+    >
       <Drawer
         open={drawerOpen}
         vaultName={props.vault.name}
@@ -607,7 +629,10 @@ export function MobileView(props: Props) {
           window.setTimeout(() => document.querySelector<HTMLInputElement>('.m-dr-search input')?.focus(), 120);
         }}
         onCreate={props.onCreateNote}
-        onToggleFormat={() => setFormatOpen((v) => !v)}
+        onOutline={() => setShowOutline(true)}
+        outlineAvailable={headings.length > 0}
+        onSync={props.onSync}
+        syncing={props.syncing}
       />
 
       <Sheet
@@ -627,22 +652,35 @@ export function MobileView(props: Props) {
 
       {/* P6：大纲浮层 */}
       {showOutline && (
+        /*
+         * v0.11.13：大纲改成和底部菜单**同一套形状**——贴着底边、上面两角圆、
+         * 顶上一条把手。此前它是 `.m-outline`：直角、且位置由外层 flex 决定，
+         * 于是浮在半空中（用户：「大纲的弹窗是直角且位置不对」）。
+         * 同一个应用里两种弹层形状，只会让人觉得是两个应用。
+         */
         <div className="m-sheet-mask" onClick={() => setShowOutline(false)}>
-          <div className="m-outline" onClick={(e) => e.stopPropagation()}>
-            <div className="m-sheet-title">大纲</div>
-            <ul className="m-outline-list">
-              {headings.map((h, i) => (
-                <li key={i}>
+          <div
+            className="m-sheet2 m-outline2"
+            role="dialog"
+            aria-label="大纲"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="m-sheet2-grip" aria-hidden="true" />
+            <div className="m-sheet2-title">大纲</div>
+            <div className="m-sheet2-scroll">
+              <div className="m-sheet2-group">
+                {headings.map((h, i) => (
                   <button
-                    className="m-sheet-item outline-item"
+                    key={i}
+                    className="m-sheet2-item m-outline-item"
                     style={{ paddingLeft: `${(h.level - 1) * 14 + 16}px` }}
                     onClick={() => jumpToOffset(h.offset)}
                   >
-                    {h.text}
+                    <span className="m-sheet2-label">{h.text}</span>
                   </button>
-                </li>
-              ))}
-            </ul>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}

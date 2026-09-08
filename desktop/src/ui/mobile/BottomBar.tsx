@@ -10,6 +10,14 @@
  * - 上层是格式条，点「格式」展开，横向可滚，收在导航之上——
  *   Obsidian 是键盘弹起时自动出现，WebView 里检测键盘不可靠，改成显式开关。
  *
+ * v0.11.13：**这四个键按"手机上真正高频"重排**——用户原话「底部的三个按钮都不是
+ * 高频常用的」。原来是 搜索 / 新建 / 格式：
+ * - 「格式」不该占一个常驻位。它只在**编辑且光标在正文里**时有用，所以改成
+ *   编辑器获得焦点时格式条自动出现（Obsidian 是键盘弹起时出现，一个意思），
+ *   省下的位置给真正高频的两件事；
+ * - 补上**大纲**：长文在手机上没有它就只能一路划，而它原先藏在「⋯」菜单第二层；
+ * - 补上**同步**：这是这个产品的核心动作，之前手机上要点开「⋯」才找得到。
+ *
  * v0.10.2：**删掉了「返回」与「更多」**。
  * 「返回」做的事就是打开抽屉，和顶栏左上角那个侧栏键一模一样（左缘右滑也是它）；
  * 「更多」连图标带动作与顶栏右上角**完全相同**（都是 setMenu('note')）。
@@ -32,7 +40,14 @@ interface Props {
   formats: FormatAction[];
   onSearch(): void;
   onCreate(): void;
-  onToggleFormat(): void;
+  /** v0.11.13：大纲。长文在手机上没有它就只能一路划 */
+  onOutline(): void;
+  outlineAvailable: boolean;
+  /** v0.11.13：立即同步 + 同步中状态 */
+  onSync(): void;
+  syncing: boolean;
+  /** 还有没推上去的改动：给同步键点一个小圆点 */
+  dirty?: boolean;
 }
 
 export function BottomBar(props: Props) {
@@ -63,12 +78,19 @@ export function BottomBar(props: Props) {
           <RibbonIcon name="plus" size={21} />
         </button>
         <button
-          className={`m-nav-btn ${props.formatOpen ? 'on' : ''}`}
-          onClick={props.onToggleFormat}
-          disabled={!props.formatAvailable}
-          aria-label="格式"
+          className="m-nav-btn"
+          onClick={props.onOutline}
+          disabled={!props.outlineAvailable}
+          aria-label="大纲"
         >
-          <RibbonIcon name="text-format" size={21} />
+          <RibbonIcon name="outline" size={21} />
+        </button>
+        <button
+          className={`m-nav-btn ${props.syncing ? 'spin' : ''} ${props.dirty ? 'dot' : ''}`}
+          onClick={props.onSync}
+          aria-label="立即同步"
+        >
+          <RibbonIcon name="sync" size={21} />
         </button>
       </nav>
     </div>

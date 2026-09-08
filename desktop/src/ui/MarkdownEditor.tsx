@@ -5,7 +5,7 @@
  * - 阅读模式：marked + DOMPurify 渲染，图片按相对路径真实显示
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { EditorState, type Extension } from '@codemirror/state';
+import { Annotation, EditorState, type Extension } from '@codemirror/state';
 import {
   EditorView,
   keymap,
@@ -179,7 +179,10 @@ function cmExtensions(
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     ...(getTitles ? [autocompletion({ override: [wikiCompletion(getTitles)] })] : []),
     EditorView.updateListener.of((u) => {
-      if (u.docChanged) onEdit(u.state.doc.toString());
+      if (!u.docChanged) return;
+      // 程序灌进来的那一次不算"用户编辑"（见 ExternalDoc 的说明）
+      if (u.transactions.some((tr) => tr.annotation(ExternalDoc))) return;
+      onEdit(u.state.doc.toString());
     }),
     /*
      * v0.10.2：编辑态点击链接。装饰由 livePreview 打上 `.cm-live-link` 与 data-href。
@@ -360,6 +363,18 @@ function renderProps(props: [string, string][]): string {
     .join('');
   return `<div class="md-props">${rows}</div>`;
 }
+
+/**
+ * v0.11.13：**把"程序灌进来的内容"和"人敲的字"分开。**
+ *
+ * `updateListener` 原来对任何 `docChanged` 都调 `onEdit`——包括切换笔记时
+ * 把文件内容 dispatch 进编辑器的那一次。后果是**光打开一篇笔记就会**：
+ * 防抖写盘一次（mtime 变、同步多一条变更）、并且触发 titleSync 按 H1 改名。
+ * 用户看到的就是「文件本来就是这个名字，还非要再命名一次」。
+ *
+ * 给那次 dispatch 打个标注，监听器见到就跳过；人敲的字没有这个标注，照常上报。
+ */
+const ExternalDoc = Annotation.define<boolean>();
 
 export function renderMarkdown(md: string): string {
   const { props, body } = splitFrontmatter(md);
@@ -621,6 +636,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     v.dispatch({
       changes: { from: 0, to: cur.length, insert: incoming },
       selection: { anchor },
+      annotations: ExternalDoc.of(true),
     });
     lastEmitted.current = incoming;
   }, [props.doc, mode]);
