@@ -1482,10 +1482,13 @@ button.st-item:hover {
 .m-sheet-mask {
   position: fixed;
   z-index: 70;
+  /* 背后的正文虚化一层：菜单弹出时视线才会落在菜单上 */
+  backdrop-filter: blur(2px);
 }
 .m-sheet2 {
   position: fixed;
   z-index: 71;
+  animation: sheet-up 0.2s cubic-bezier(0.32, 0.72, 0, 1);
   left: 8px; right: 8px; bottom: 8px;
   max-height: 78vh;
   display: flex; flex-direction: column;
@@ -1504,22 +1507,34 @@ button.st-item:hover {
 .m-sheet2-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .m-sheet2-group {
   background: var(--panel);
-  border-radius: 14px;
+  border-radius: var(--r-3);
   overflow: hidden;
+  box-shadow: var(--shadow-pop);
 }
 .m-sheet2-item {
+  position: relative;
   display: flex; align-items: center; gap: 14px;
   width: 100%;
-  padding: 14px 16px;
+  min-height: 52px;
+  padding: 13px 16px;
   border: none; background: transparent;
-  color: var(--text); font: inherit; font-size: 15px;
+  color: var(--text); font: inherit; font-size: 16px;
   text-align: left;
 }
-.m-sheet2-item + .m-sheet2-item { border-top: 1px solid var(--border); }
+/*
+ * 组内分隔线**从文字处起画**，不横穿图标那一栏（Obsidian、iOS 设置页都是这样）。
+ * 通栏的横线会把图标切成一排孤立的小方块，这也是上一版看着"散"的原因之一。
+ */
+.m-sheet2-item + .m-sheet2-item::before {
+  content: '';
+  position: absolute;
+  left: 50px; right: 0; top: 0;
+  border-top: 1px solid var(--border);
+}
 .m-sheet2-item:active { background: var(--panel-2); }
 .m-sheet2-item:disabled { opacity: 0.4; }
 .m-sheet2-item.danger { color: #d95a4a; }
-.m-sheet2-ico { display: inline-flex; color: var(--muted); }
+.m-sheet2-ico { display: inline-flex; width: 22px; justify-content: center; color: var(--muted); }
 .m-sheet2-item.danger .m-sheet2-ico { color: inherit; }
 .m-sheet2-label { flex: 1; min-width: 0; }
 .m-sheet2-check { color: var(--accent); display: inline-flex; }
@@ -1534,6 +1549,16 @@ button.st-item:hover {
 }
 
 /* ---- 抽屉：文件浏览器 ---- */
+/*
+ * v0.11.10：抽屉的右边由「一条直角描边」改成圆角 + 阴影。
+ *
+ * 用户原话：「侧边栏展开的直角改为 R 角」。参照 Obsidian 移动端——它的抽屉是
+ * **浮在正文之上的一张卡**，圆角与阴影就是在说"这层在上面"；一条直角描边
+ * 传达的是"这里被切开了"，两种观感差在这一点上。
+ *
+ * `overflow: hidden` 必须给：里面的搜索框、文件行都是通栏底色，不裁的话
+ * 会从圆角缺口处露出直角来（这一类"圆角没生效"多半就是缺这一句）。
+ */
 .m-drawer2 {
   position: fixed;
   top: 0; bottom: 0; left: 0;
@@ -1541,7 +1566,10 @@ button.st-item:hover {
   z-index: 50;
   display: flex; flex-direction: column;
   background: var(--panel);
-  border-right: 1px solid var(--border);
+  border-top-right-radius: var(--r-4);
+  border-bottom-right-radius: var(--r-4);
+  overflow: hidden;
+  box-shadow: var(--shadow-pop);
   padding-top: env(safe-area-inset-top);
   transform: translateX(-102%);
   transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
@@ -1693,3 +1721,137 @@ button.st-item:hover {
 .ft-file:focus-within .ft-actions {
   opacity: 1;
 }
+
+/* ---- .base 表格视图（v0.11.10）---- */
+/*
+ * 版式照 Obsidian 的 Bases：一条标题行、一条「N 个结果」的信息条、
+ * 一张只有横线的表。竖线一律不要——竖线会把表格变成牢笼（正文表格那边
+ * 早就定了这条，两处要一致）。
+ */
+.base-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.base-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.base-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text);
+}
+.base-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.base-actions { display: flex; gap: 6px; }
+.base-btn {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: var(--r-1);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.base-btn:hover { color: var(--text); background: var(--panel-2); }
+.base-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-3);
+  color: var(--muted);
+  font-size: 12px;
+}
+.base-tabs { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
+.base-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  padding: 3px 10px;
+  border-radius: var(--r-1);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.base-tab.on { background: var(--panel-2); color: var(--text); }
+.base-count { margin-left: auto; flex: 0 0 auto; }
+.base-note,
+.base-skipped {
+  margin: 0 var(--sp-3) var(--sp-2);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+.base-skipped p { margin: 2px 0; }
+.base-skipped code,
+.base-note code {
+  font-family: var(--font-mono);
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: var(--r-1);
+  background: var(--bg);
+}
+.base-table-wrap { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--sp-3) var(--sp-4); }
+.base-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.base-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.base-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--n-8);
+  vertical-align: top;
+}
+.base-table tbody tr:hover td { background: var(--panel-2); }
+.base-table tr.base-group td {
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--panel-2);
+  padding: 4px 10px;
+}
+.base-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.base-link:hover { text-decoration: underline; }
+.base-empty {
+  padding: var(--sp-5) var(--sp-3);
+  color: var(--muted);
+  text-align: center;
+}
+.base-muted { color: var(--muted); font-size: 12px; }

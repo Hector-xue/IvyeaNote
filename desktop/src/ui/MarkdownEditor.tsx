@@ -287,9 +287,84 @@ marked.use({
   ],
 });
 
+/**
+ * v0.11.10：阅读态的代码块做成一张卡片——语言名 + 复制按钮。
+ *
+ * marked 给出的是光秃秃的 `<pre><code class="language-js">`，靠 CSS 只能加个底色；
+ * 对比 Obsidian，缺的是"这是什么语言"和"一键复制"这两件每天都要用的事。
+ *
+ * 和 `decorateCallouts` 一样在**净化之后**做，且只包一层自己的容器与按钮，
+ * 不把任何用户内容重新塞回 HTML（语言名取自 class，已被净化器过滤过）。
+ */
+export function decorateCodeBlocks(html: string): string {
+  return html.replace(
+    /<pre><code(\s+class="language-([^"]*)")?>/g,
+    (_m, _cls: string | undefined, lang: string | undefined) => {
+      const name = (lang ?? '').replace(/[^a-zA-Z0-9+#._-]/g, '');
+      const label = name ? `<span class="code-lang">${name}</span>` : '<span class="code-lang"></span>';
+      return (
+        `<div class="code-block"><div class="code-head">${label}` +
+        `<button type="button" class="code-copy" title="复制代码">复制</button></div>` +
+        `<pre><code${name ? ` class="language-${name}"` : ''}>`
+      );
+    }
+  ).replace(/<\/code><\/pre>/g, '</code></pre></div>');
+}
+
+/**
+ * v0.11.10：frontmatter 在阅读态渲染成「属性」区，不再当正文。
+ *
+ * 之前那段 `---\nstatus: doing\n---` 会被 marked 读成「分隔线 + 二级标题」——
+ * 阅读一篇带属性的笔记，开头就是一条横线加一行巨大的 `status: doing`。
+ * Obsidian 把它显示成文档顶部的属性面板。`.base` 视图筛的正是这些属性，
+ * 现在开始会有越来越多的笔记带上它们，这条不修就会天天看见。
+ *
+ * 只做**显示**：不解析类型、不可编辑（编辑仍然回到源码），
+ * 值原样按文本显示，转义后再拼进 HTML。
+ */
+export function splitFrontmatter(md: string): { props: [string, string][]; body: string } {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/.exec(md);
+  if (!m) return { props: [], body: md };
+  const props: [string, string][] = [];
+  let pendingKey: string | null = null;
+  for (const raw of m[1].split(/\r?\n/)) {
+    const line = raw.trimEnd();
+    if (!line.trim()) continue;
+    // `- 值`：接在上一个键后面的列表项
+    const item = /^\s*-\s+(.*)$/.exec(line);
+    if (item && pendingKey) {
+      const last = props[props.length - 1];
+      last[1] = last[1] ? `${last[1]}, ${item[1]}` : item[1];
+      continue;
+    }
+    const kv = /^([^:]+):\s*(.*)$/.exec(line);
+    if (!kv) continue;
+    pendingKey = kv[1].trim();
+    props.push([pendingKey, kv[2].trim()]);
+  }
+  return { props, body: md.slice(m[0].length) };
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+}
+
+function renderProps(props: [string, string][]): string {
+  if (props.length === 0) return '';
+  const rows = props
+    .map(
+      ([k, v]) =>
+        `<div class="md-prop"><span class="md-prop-key">${escapeHtml(k)}</span>` +
+        `<span class="md-prop-val">${escapeHtml(v)}</span></div>`
+    )
+    .join('');
+  return `<div class="md-props">${rows}</div>`;
+}
+
 export function renderMarkdown(md: string): string {
-  const raw = marked.parse(md, { async: false }) as string;
-  return decorateCallouts(DOMPurify.sanitize(raw));
+  const { props, body } = splitFrontmatter(md);
+  const raw = marked.parse(body, { async: false }) as string;
+  return renderProps(props) + decorateCodeBlocks(decorateCallouts(DOMPurify.sanitize(raw)));
 }
 
 interface ToolBtn {
@@ -658,6 +733,32 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     }
 
     /*
+     * v0.11.10：代码块的「复制」。委托在容器上，重渲染不会丢监听。
+     */
+    const onCopyClick = (ev: Event) => {
+      const btn = (ev.target as HTMLElement | null)?.closest?.('button.code-copy');
+      if (!btn) return;
+      const code = btn.closest('.code-block')?.querySelector('code');
+      if (!code) return;
+      ev.preventDefault();
+      void navigator.clipboard?.writeText(code.textContent ?? '').then(
+        () => {
+          btn.textContent = '已复制';
+          setTimeout(() => {
+            btn.textContent = '复制';
+          }, 1200);
+        },
+        () => {
+          btn.textContent = '复制失败';
+          setTimeout(() => {
+            btn.textContent = '复制';
+          }, 1200);
+        }
+      );
+    };
+    el.addEventListener('click', onCopyClick);
+
+    /*
      * v0.10.2：**所有** <a> 的点击都在这里接管，一个事件委托搞定。
      *
      * 此前只给 `a.wikilink` 逐个绑了 click，于是普通 `[文字](https://…)`
@@ -678,7 +779,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     };
     el.addEventListener('click', onLinkClick);
 
-    if (!props.resolveImage) return () => el.removeEventListener('click', onLinkClick);
+    if (!props.resolveImage)
+      return () => {
+        el.removeEventListener('click', onLinkClick);
+        el.removeEventListener('click', onCopyClick);
+      };
     let cancelled = false;
     const imgs = Array.from(el.querySelectorAll('img'));
     void (async () => {
@@ -723,6 +828,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     return () => {
       cancelled = true;
       el.removeEventListener('click', onLinkClick);
+      el.removeEventListener('click', onCopyClick);
     };
   }, [mode, props.doc, props.resolveImage, props.currentPath]);
 

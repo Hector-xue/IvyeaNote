@@ -28,6 +28,14 @@ export interface VaultMeta {
   bases: Record<string, string>;
   /** path -> 已确认删除的服务端版本号（防止本地删除被反复重推） */
   tombstones?: Record<string, number>;
+  /**
+   * v0.11.10：附件（非 .md 文件）最后一次同步成功的 blob sha256。
+   *
+   * 文本笔记的"共同祖先"是全文（`bases`），附件不可能也不需要留全文——
+   * 一份 20MB 的 PDF 存进 localStorage 会当场把库撑爆。附件不做 3-way 合并，
+   * 只需要回答一个问题：**这个文件自上次同步后有没有被改过**，哈希就够了。
+   */
+  assets?: Record<string, string>;
 }
 
 export interface Account {

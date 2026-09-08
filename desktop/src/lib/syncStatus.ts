@@ -64,7 +64,14 @@ export function originalOfConflict(path: string): string {
  */
 export function classifyVault(
   contents: ReadonlyMap<string, string>,
-  meta: Pick<VaultMeta, 'versions' | 'bases' | 'tombstones'>
+  meta: Pick<VaultMeta, 'versions' | 'bases' | 'tombstones' | 'assets'>,
+  /**
+   * v0.11.10：附件（PDF / 图片 / .base）的 path → 当前内容 sha256。
+   *
+   * 不传就是老行为。传了才谈得上"看得见"——附件开始同步之后，
+   * 面板要是只统计 `.md`，它就会在 PDF 卡住时一口咬定"全部已同步"。
+   */
+  assetHashes?: ReadonlyMap<string, string>
 ): FileSyncStatus[] {
   const out: FileSyncStatus[] = [];
   for (const [path, content] of contents) {
@@ -83,10 +90,18 @@ export function classifyVault(
       version,
     });
   }
+  for (const [path, hash] of assetHashes ?? []) {
+    const version = meta.versions[path];
+    if (version === undefined) {
+      out.push({ path, state: 'new' });
+      continue;
+    }
+    out.push({ path, state: meta.assets?.[path] === hash ? 'synced' : 'modified', version });
+  }
   // 本地已经没了、但服务端还有的：删除意图待推送。
   // 墓碑记着的那些是「已经推过删除」，不该再算待办，否则面板永远清不空。
   for (const [path, ver] of Object.entries(meta.versions)) {
-    if (contents.has(path)) continue;
+    if (contents.has(path) || assetHashes?.has(path)) continue;
     if (meta.tombstones?.[path] === ver) continue;
     out.push({ path, state: 'deleted', version: ver });
   }
