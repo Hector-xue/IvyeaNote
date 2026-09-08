@@ -82,6 +82,8 @@ interface Props {
   onLogout(): void;
   hasAccount: boolean;
   onOpenLogin(): void;
+  /** 登录态过期：refresh token 也被服务端拒了，只能重新登录 */
+  sessionExpired?: boolean;
   syncDisabled?: boolean;
   sortMode: SortMode;
   onSortChange(m: SortMode): void;
@@ -490,7 +492,21 @@ export function MobileView(props: Props) {
           onToggleMode={() => setMode(mode === 'edit' ? 'read' : 'edit')}
           onMore={() => setMenu('note')}
         />
-        {hasError && <div className="m-error">⚠ {report!.errors[0]}</div>}
+        {/*
+          登录过期要给**出路**，不能只把服务端那句原话贴出来。
+          手机端 2026-09-08 就卡在「拉取失败：refresh token 无效或已过期」这条红条上：
+          说的是实情，但用户既不知道该做什么，界面上也没有能点的地方。
+        */}
+        {props.sessionExpired ? (
+          <div className="m-error m-error-action">
+            <span>⚠ 登录已过期，笔记不会丢</span>
+            <button className="btn small" onClick={props.onOpenLogin}>
+              重新登录
+            </button>
+          </div>
+        ) : (
+          hasError && <div className="m-error">⚠ {report!.errors[0]}</div>
+        )}
 
         {props.pdfView ? (
           <PdfViewer

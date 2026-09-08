@@ -294,3 +294,39 @@ describe('服务端不认这个库时要能自愈（v0.11.7）', () => {
     expect(r.errors.length).toBe(1);
   });
 });
+
+/*
+ * 2026-09-08 手机端：一条永远不会消失的红条「拉取失败：refresh token 无效或已过期」。
+ * 服务端把 refresh token 轮换掉之后，重试多少次都是同一个 401——报告必须把这件事
+ * 单独标出来，上层才能停掉自动重试并把「重新登录」摆到明面上。
+ */
+describe('登录态过期要能被认出来（v0.11.8）', () => {
+  it('refresh 也失败（401 refresh_invalid）→ authExpired', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      throw new ApiError(401, 'refresh_invalid', 'refresh token 无效或已过期');
+    };
+    const r = await run(newVaultMeta(1, 'v'), memIO(new Map([['a.md', 'x']])), server);
+    expect(r.authExpired).toBe(true);
+    expect(r.unlinked).toBeFalsy(); // 别和「库没接上」混成一件事
+  });
+
+  it('拉取阶段的 401 同样算数', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { pullPage: () => Promise<never> }).pullPage = async () => {
+      throw new ApiError(401, 'refresh_invalid', 'refresh token 无效或已过期');
+    };
+    const r = await run(newVaultMeta(1, 'v'), memIO(new Map()), server);
+    expect(r.authExpired).toBe(true);
+  });
+
+  it('403 只是库没接上，不是登录过期', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      throw new ApiError(403, 'forbidden', 'vault 不存在或不属于你');
+    };
+    const r = await run(newVaultMeta(1, 'v'), memIO(new Map([['a.md', 'x']])), server);
+    expect(r.unlinked).toBe(true);
+    expect(r.authExpired).toBeFalsy();
+  });
+});

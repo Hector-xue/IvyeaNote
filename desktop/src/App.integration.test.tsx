@@ -89,6 +89,8 @@ vi.mock('./lib/fs-adapters', () => ({
 const api = vi.hoisted(() => ({
   calls: { listVaults: 0, createVault: [] as string[] },
   remote: [] as { id: number; name: string }[],
+  /** 让同步请求以「登录态过期」失败（401 + refresh_invalid） */
+  authExpired: false,
 }));
 vi.mock('./lib/api', async (orig) => {
   const real = await orig<typeof import('./lib/api')>();
@@ -107,9 +109,11 @@ vi.mock('./lib/api', async (orig) => {
       return v;
     }
     async push() {
+      if (api.authExpired) throw new real.ApiError(401, 'refresh_invalid', 'refresh token 无效或已过期');
       return { results: [] };
     }
     async pullPage(_id: number, cursor: number) {
+      if (api.authExpired) throw new real.ApiError(401, 'refresh_invalid', 'refresh token 无效或已过期');
       return { changes: [], next_cursor: cursor };
     }
     async putBlob() {}
@@ -165,6 +169,7 @@ beforeEach(() => {
   memFiles.clear();
   api.calls = { listVaults: 0, createVault: [] };
   api.remote = [];
+  api.authExpired = false;
 });
 
 /** jsdom 没有 DataTransfer：给拖拽事件造一个够用的替身 */
@@ -847,5 +852,110 @@ describe('删除任何类型的文件（v0.11.7）', () => {
     expect(trashed.length).toBe(1);
     expect(trashed[0]).toMatch(/图\.png$/);
     expect(memFiles.get(trashed[0])).toBe('PNG-BYTES'); // 内容一个字节都没坏
+  });
+});
+
+/*
+ * 手机端 2026-09-08：一条永远消不掉的红条「拉取失败：refresh token 无效或已过期」，
+ * 而界面上没有任何一处告诉你该重新登录、也没有能点的入口。
+ */
+describe('登录态过期要说人话并给出路（v0.11.8）', () => {
+  it('同步撞上 401 → 状态栏变成「登录已过期」，点它能唤起登录页', async () => {
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'https://example.test',
+          email: 'u@example.test',
+          userId: 9,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: {
+          '1': { id: 1, name: '云端库', localPath: '/data/notes', cursor: 0, versions: {}, bases: {} },
+        },
+      })
+    );
+    localStorage.setItem('ivnote.activeVault', '1');
+    api.remote = [{ id: 1, name: '云端库' }];
+    api.authExpired = true;
+    memFiles.set('a.md', '# A');
+    render(<App />);
+
+    const syncBtn = () =>
+      [...document.querySelectorAll('.status-bar button')].find((b) =>
+        (b.textContent ?? '').includes('登录已过期')
+      ) as HTMLElement | undefined;
+
+    await waitFor(
+      () => {
+        if (!syncBtn()) throw new Error(`状态栏还没提示过期：${document.querySelector('.status-bar')?.textContent}`);
+      },
+      { timeout: 4000 }
+    );
+    fireEvent.click(syncBtn()!);
+    await waitFor(() => {
+      if (!document.querySelector('.login-wrap')) throw new Error('登录页没出来');
+    });
+  });
+});
+
+/*
+ * 2026-09-08 用户：「顶部状态栏感觉空空的，能增加一些功能按钮吗？但是不能为了凑数
+ * 而凑数，要高频使用的那种」「我的侧边栏也不能收起」「没有汉堡菜单，也没有导出为
+ * PDF 的功能」。
+ *
+ * 所以顶栏只加两样：左边侧栏折叠（Obsidian 就在这个位置），右边「⋯」笔记动作。
+ * 已经在别处有按钮的（阅读/编辑、分栏）坚决不重复——用户上一轮的原话是
+ * 「页面上下的功能按钮还有重复的」。
+ */
+describe('顶栏与侧栏（v0.11.8）', () => {
+  const sideToggle = () =>
+    document.querySelector<HTMLElement>('.top-bar button[aria-label="切换侧边栏"]');
+  const moreBtn = () =>
+    document.querySelector<HTMLElement>('.top-bar button[aria-label="更多操作"]');
+
+  it('侧边栏能收起、能展开，而且状态记得住', async () => {
+    await renderApp({ 'a.md': '# A' });
+    expect(document.querySelector('.sidebar')).toBeTruthy();
+    const resizersBefore = document.querySelectorAll('.panel-resizer').length;
+
+    fireEvent.click(sideToggle()!);
+    await waitFor(() => {
+      if (document.querySelector('.sidebar')) throw new Error('侧栏没收起');
+    });
+    // 连同**侧栏那条**拖宽手柄一起收掉，不留"一条能拖的缝"
+    // （右侧面板也有一条同名手柄，所以按数量比，别一竿子打死）
+    expect(document.querySelectorAll('.panel-resizer').length).toBe(resizersBefore - 1);
+    expect(localStorage.getItem('ivnote.sidebarOpen')).toBe('0');
+
+    fireEvent.click(sideToggle()!);
+    await waitFor(() => {
+      if (!document.querySelector('.sidebar')) throw new Error('侧栏没展开');
+    });
+  });
+
+  it('没开笔记时不摆一个点开是空的「⋯」', async () => {
+    await renderApp({ 'a.md': '# A' });
+    expect(moreBtn()).toBeNull();
+  });
+
+  it('开着笔记时「⋯」里有导出 PDF / 重命名 / 删除，且不重复已有的按钮', async () => {
+    await renderApp({ 'a.md': '# A' });
+    openNote('a.md');
+    await waitFor(() => {
+      if (!moreBtn()) throw new Error('顶栏没有「⋯」');
+    });
+    fireEvent.click(moreBtn()!);
+    await waitFor(() => {
+      if (!document.querySelector('[role="menu"], .ctx-menu')) throw new Error('菜单没出来');
+    });
+    const labels = [...document.querySelectorAll('[role="menuitem"]')].map((b) => b.textContent);
+    expect(labels).toContain('导出为 PDF…');
+    expect(labels).toContain('重命名…');
+    expect(labels).toContain('删除');
+    // 阅读/编辑与分栏在别处已经有按钮了，菜单里不再重复一遍
+    expect(labels).not.toContain('阅读视图');
+    expect(labels).not.toContain('分栏');
   });
 });

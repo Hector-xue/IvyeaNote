@@ -52,15 +52,24 @@ function parentOf(abs: string): string {
  * 自己的 `.trash`/`.ivyea` 必须留着：回收站面板和索引快照要读它们。
  */
 const OWN_DOT_DIRS = new Set(['.trash', '.ivyea']);
+/**
+ * 点开头的**文件**同样隐藏（`.gitignore`、`.DS_Store`…），Obsidian 也是这么做的。
+ * `.keep` 是我们自己的空文件夹占位，去掉它「新建文件夹」就等于点了没反应。
+ */
+const OWN_DOT_FILES = new Set(['.keep']);
 
 export function isSkippedDir(name: string): boolean {
   return name.startsWith('.') && !OWN_DOT_DIRS.has(name);
 }
 
+export function isSkippedFile(name: string): boolean {
+  return name.startsWith('.') && !OWN_DOT_FILES.has(name);
+}
+
 /** 路径（相对库根）是否落在被跳过的点目录里 */
 export function inSkippedDir(rel: string): boolean {
   const segs = rel.split('/');
-  return segs.slice(0, -1).some(isSkippedDir);
+  return segs.slice(0, -1).some(isSkippedDir) || isSkippedFile(segs[segs.length - 1] ?? '');
 }
 
 // ---------- Tauri 实现 ----------
@@ -73,6 +82,7 @@ async function walk(absDir: string, prefix: string, out: string[]): Promise<void
       if (isSkippedDir(e.name)) continue;
       await walk(join(absDir, e.name), rel, out);
     } else {
+      if (isSkippedFile(e.name)) continue;
       out.push(rel);
     }
   }
@@ -146,6 +156,7 @@ async function opfsWalk(dir: DirHandle, prefix: string, out: string[]): Promise<
       if (isSkippedDir(h.name)) continue;
       await opfsWalk((await dir.getDirectoryHandle(h.name)) as DirHandle, rel, out);
     } else {
+      if (isSkippedFile(h.name)) continue;
       out.push(rel);
     }
   }
@@ -162,6 +173,7 @@ async function opfsWalkMeta(
       if (isSkippedDir(h.name)) continue;
       await opfsWalkMeta((await dir.getDirectoryHandle(h.name)) as DirHandle, rel, out);
     } else {
+      if (isSkippedFile(h.name)) continue;
       const file = await (h as FileSystemFileHandle).getFile();
       out.push({ path: rel, mtime: file.lastModified, size: file.size });
     }

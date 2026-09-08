@@ -41,6 +41,15 @@ export interface SyncReport {
    * 「推送失败：vault 不存在或不属于你」，而且没有任何一条路能让它自己好。
    */
   unlinked?: boolean;
+  /**
+   * 登录态过期：access token 401 之后连 refresh 也被服务端拒了。
+   *
+   * 和 `unlinked` 一样，这不是"重试就好"的错——refresh token 已经不在服务端了
+   * （被轮换掉、或是超过 30 天），**唯一的出路是重新登录**。没有这个标记，
+   * 用户看到的就是一条永远不会消失的红条：「拉取失败：refresh token 无效或已过期」，
+   * 而应用既不提示要重登、也不给入口（2026-09-08 手机端就卡在这里）。
+   */
+  authExpired?: boolean;
 }
 
 const MAX_BATCH = 200;
@@ -69,6 +78,18 @@ function markUnlinked(e: unknown, report: SyncReport): void {
   if (e instanceof ApiError && e.status === 403) report.unlinked = true;
 }
 
+/**
+ * 401 / refresh_invalid = 登录态过期。
+ *
+ * `SyncClient.req` 拿到 401 会先自动用 refresh 轮换重试一次；能走到这里说明
+ * **连 refresh 都失败了**，再试多少次都一样，只能让用户重新登录。
+ */
+function markAuthExpired(e: unknown, report: SyncReport): void {
+  if (e instanceof ApiError && (e.code === 'refresh_invalid' || e.status === 401)) {
+    report.authExpired = true;
+  }
+}
+
 function isTextNote(path: string): boolean {
   return path.toLowerCase().endsWith('.md') || path.toLowerCase().endsWith('.markdown');
 }
@@ -91,6 +112,7 @@ export async function syncVault(
     conflicts: [...a.conflicts, ...b.conflicts],
     errors: [...a.errors, ...b.errors],
     unlinked: a.unlinked || b.unlinked,
+    authExpired: a.authExpired || b.authExpired,
   };
 }
 
@@ -181,6 +203,7 @@ export async function pushOnly(
       }
     } catch (e) {
       markUnlinked(e, report);
+      markAuthExpired(e, report);
       report.errors.push(`推送失败：${msg(e)}`);
       break;
     }
@@ -212,6 +235,7 @@ export async function pullOnly(
       page = await client.pullPage(meta.id, cursor);
     } catch (e) {
       markUnlinked(e, report);
+      markAuthExpired(e, report);
       report.errors.push(`拉取失败：${msg(e)}`);
       break;
     }
@@ -220,6 +244,7 @@ export async function pullOnly(
       try {
         await applyRemote(client, meta, io, vaultPath, ch, report);
       } catch (e) {
+        markAuthExpired(e, report);
         report.errors.push(`应用 ${ch.path} 失败：${msg(e)}`);
       }
     }
