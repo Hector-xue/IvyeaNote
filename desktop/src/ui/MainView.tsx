@@ -304,6 +304,14 @@ export function MainView(props: Props) {
   const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
   /** 上一次同步报告里有错 = 现在的状态不是"已同步"。别再一律写「已同步」 */
   const syncFailed = !props.syncDisabled && (props.lastReport?.errors.length ?? 0) > 0;
+  /**
+   * 一份同步报告都还没有 = 这个会话里**一次都没同步成功过**，同样说不出「已同步」。
+   *
+   * 报告是 null 时 `syncFailed` 也是 false，于是这里照样写「已同步」——
+   * 而"登录着、但同步引擎因为库没接上根本没跑完过"正好就是这种状态：
+   * 状态栏一片祥和，另一台设备什么也收不到（2026-09-08 用户就是这么被误导的）。
+   */
+  const syncPending = !props.syncDisabled && !props.syncing && !props.lastReport;
   /** 编辑器交出来的「按 key 施加格式」入口。桌面只用它的 'image' 一路 */
   const [applyFormat, setApplyFormat] = useState<((key: string) => void) | null>(null);
   /*
@@ -625,7 +633,9 @@ export function MainView(props: Props) {
                     ? '同步中…'
                     : syncFailed
                       ? `上次同步失败：${props.lastReport?.errors[0]}（点击查看还有什么没上去）`
-                      : '已自动同步；点击立即同步一次'
+                      : syncPending
+                        ? '这台设备还没同步过；点击立即同步一次'
+                        : '已自动同步；点击立即同步一次'
               }
             >
               <RibbonIcon
@@ -638,7 +648,9 @@ export function MainView(props: Props) {
                   ? '同步中'
                   : syncFailed
                     ? '同步失败'
-                    : '已同步'}
+                    : syncPending
+                      ? '待同步'
+                      : '已同步'}
             </button>
             {/*
               v0.11.2：**打开 PDF 时不再显示「0 词 · 0 字符」**——那是当前笔记的字数，
