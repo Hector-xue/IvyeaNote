@@ -544,6 +544,230 @@ check('没有自绘边框时布局不塌（状态栏仍在窗口内）', await e
 
 await shot('app.png');
 
+// ---------- 7.5 代码块与 .base 表格（v0.11.10）----------
+/*
+ * 两件事都只有在真实产物里才验得出来：
+ * - 代码块：装饰是 CodeMirror 在运行时按行加的，`scanFences` 的单测证明不了
+ *   那一行真的有底色（v0.11.9 之前那三个反引号就是光秃秃地摆在正文里）。
+ * - `.base`：它要读库里其它笔记的 frontmatter，然后画成表——纯函数测得到求值，
+ *   测不到"点开它出不出得来这张表"。
+ */
+await evaluate(`(async () => {
+  const root = await navigator.storage.getDirectory();
+  let dir = null;
+  for await (const [name, handle] of root.entries()) {
+    if (handle.kind === 'directory' && name.startsWith('vault-')) { dir = handle; break; }
+  }
+  if (!dir) return 'no-vault-dir';
+  const put = async (name, text) => {
+    const fh = await dir.getFileHandle(name, { create: true });
+    const w = await fh.createWritable();
+    await w.write(new TextEncoder().encode(text));
+    await w.close();
+  };
+  const NL = String.fromCharCode(10);
+  await put('甲.md', ['---', 'status: doing', '---', '', '甲的正文 #项目', ''].join(NL));
+  await put('乙.md', ['---', 'status: done', '---', '', '乙的正文 #项目', ''].join(NL));
+  await put('丙.md', ['没有属性的一篇', ''].join(NL));
+  await put('个人空间.base', [
+    'filters:',
+    '  and:',
+    '    - file.hasTag("项目")',
+    'properties:',
+    '  status:',
+    '    displayName: 状态',
+    'views:',
+    '  - type: table',
+    '    name: 我的表',
+    '    order:',
+    '      - file.name',
+    '      - status',
+    '',
+  ].join(NL));
+  return 'ok';
+})()`);
+await send('Page.reload');
+await new Promise((r) => setTimeout(r, 2600));
+
+// --- 代码块：往笔记里敲一段围栏代码 ---
+{
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('甲'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const cb = await evaluate(`(() => { const c = document.querySelector('.cm-content'); if (!c) return null;
+    const r = c.getBoundingClientRect(); return { x: Math.round(r.left + 40), y: Math.round(r.bottom - 12) } })()`);
+  if (cb) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: cb.x, y: cb.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35 });
+    for (const line of ['', '```js', 'const a = 1;', '```', '']) {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+      if (line) await send('Input.insertText', { text: line });
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+    await evaluate(`(() => { document.querySelector('.cm-content')?.blur(); return true })()`);
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  const fence = await evaluate(`(() => {
+    const lines = [...document.querySelectorAll('.cm-live-fence')];
+    if (lines.length === 0) return { n: 0 };
+    const cs = getComputedStyle(lines[Math.floor(lines.length / 2)]);
+    return {
+      n: lines.length,
+      open: document.querySelectorAll('.cm-live-fence-open').length,
+      close: document.querySelectorAll('.cm-live-fence-close').length,
+      bg: cs.backgroundColor,
+      font: cs.fontFamily.slice(0, 24),
+    };
+  })()`);
+  check('编辑态的围栏代码块有底色、等宽字，首尾各画一条边（此前 ``` 只是三个字面反引号）',
+    fence.n >= 3 && fence.open >= 1 && fence.close >= 1 &&
+    fence.bg !== 'rgba(0, 0, 0, 0)' && /mono|Consol|SFMono/i.test(fence.font ?? ''), fence);
+
+  // --- 阅读态：代码块卡片 + 复制按钮 ---
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('阅读'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const readCode = await evaluate(`(() => {
+    const box = document.querySelector('.md-preview .code-block');
+    if (!box) return null;
+    const cs = getComputedStyle(box);
+    return {
+      lang: box.querySelector('.code-lang')?.textContent ?? '',
+      copy: !!box.querySelector('button.code-copy'),
+      border: cs.borderTopWidth,
+      radius: cs.borderTopLeftRadius,
+    };
+  })()`);
+  check('阅读态的代码块是一张卡片：语言名 + 复制按钮 + 描边',
+    !!readCode && readCode.copy && readCode.lang === 'js' && parseFloat(readCode.border) >= 1, readCode);
+  await shot('code-block.png');
+}
+
+// --- .base：点开它，表要画出来 ---
+{
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('编辑视图'));
+    b?.click(); return true })()`);
+  const clicked = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('个人空间'));
+    if (!el) return false;
+    el.closest('.ft-file').click();
+    return true;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const base = await evaluate(`(() => {
+    const v = document.querySelector('.base-view');
+    if (!v) return null;
+    const heads = [...v.querySelectorAll('.base-table th')].map(x => x.textContent.trim().replace(/[↑↓\\s]*$/, ''));
+    const rows = [...v.querySelectorAll('.base-table tbody tr')];
+    return {
+      count: v.querySelector('.base-count')?.textContent ?? '',
+      heads,
+      rows: rows.length,
+      first: rows[0]?.innerText.replace(/\s+/g, ' ').trim() ?? '',
+      skipped: v.querySelector('.base-skipped')?.textContent ?? null,
+    };
+  })()`);
+  check('点开 .base 出来的是表格视图，不是"交给 Obsidian"',
+    clicked && !!base && base.rows === 2, base);
+  check('列名走 displayName，结果数与筛选一致（丙.md 没有 #项目，被筛掉）',
+    !!base && base.heads[0] === '名称' && base.heads[1] === '状态' && /2 个结果/.test(base.count), base);
+  await shot('base-view.png');
+
+  // 点第一行应该打开那篇笔记
+  await evaluate(`(() => { document.querySelector('.base-table .base-link')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  check('点表里的一行会打开那篇笔记（表随之关闭）', await evaluate(`(() => {
+    return !document.querySelector('.base-view') && !!document.querySelector('.cm-content');
+  })()`));
+}
+
+// ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------
+/*
+ * 用户报的是「侧边栏展开的直角改为 R 角」「按钮弹窗也不好看」。
+ * 这两件事只有把窗口缩到手机尺寸、真的把抽屉和菜单打开才量得到——
+ * 桌面视口下这两个组件根本不渲染。
+ */
+{
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 390, height: 780, deviceScaleFactor: 2, mobile: true,
+  });
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+
+  const isMobileLayout = await evaluate(`!!document.querySelector('.m-app')`);
+  check('窄屏走的是移动端布局', isMobileLayout);
+
+  // 打开抽屉
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const drawer = await evaluate(`(() => {
+    const d = document.querySelector('.m-drawer2');
+    if (!d) return null;
+    const cs = getComputedStyle(d);
+    return {
+      open: d.classList.contains('open'),
+      topRight: cs.borderTopRightRadius,
+      bottomRight: cs.borderBottomRightRadius,
+      overflow: cs.overflow,
+      shadow: cs.boxShadow !== 'none',
+    };
+  })()`);
+  check('抽屉右侧是圆角、有投影，并裁切内容（用户点名的"直角改 R 角"）',
+    !!drawer && drawer.open && parseFloat(drawer.topRight) >= 12 &&
+    parseFloat(drawer.bottomRight) >= 12 && drawer.overflow === 'hidden' && drawer.shadow, drawer);
+  await shot('mobile-drawer.png');
+
+  // 抽屉里长按一个文件 → 底部菜单
+  const row = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('甲'));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (row) {
+    // 长按是 touch 事件里自己计时的（安卓 WebView 的 contextmenu 时有时无，
+    // 所以两条路都留着）。这里走真的触摸：按下、停 700ms、抬起。
+    const touch = [{ x: row.x, y: row.y, radiusX: 6, radiusY: 6, force: 1, id: 1 }];
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: touch });
+    await new Promise((r) => setTimeout(r, 800));
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  const sheet = await evaluate(`(() => {
+    const g = document.querySelector('.m-sheet2-group');
+    if (!g) return null;
+    const gs = getComputedStyle(g);
+    const items = [...g.querySelectorAll('.m-sheet2-item')];
+    const it = items[0] ? items[0].getBoundingClientRect() : null;
+    const sep = items[1] ? getComputedStyle(items[1], '::before') : null;
+    return {
+      groups: document.querySelectorAll('.m-sheet2-group').length,
+      radius: gs.borderTopLeftRadius,
+      shadow: gs.boxShadow !== 'none',
+      itemH: it ? Math.round(it.height) : null,
+      sepLeft: sep ? sep.left : null,
+      icons: g.querySelectorAll('.m-sheet2-ico svg').length,
+    };
+  })()`);
+  check('底部菜单是分组圆角卡片，行高够按，分隔线从文字处起画（不横穿图标栏）',
+    !!sheet && parseFloat(sheet.radius) >= 12 && sheet.shadow && (sheet.itemH ?? 0) >= 48 &&
+    parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
+  await shot('mobile-sheet.png');
+
+  await send('Emulation.clearDeviceMetricsOverride');
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
+}
+
 // ---------- 8. 深色主题也扫一遍 ----------
 await evaluate(`(() => {
   const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === '切换主题');

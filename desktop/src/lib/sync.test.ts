@@ -330,3 +330,181 @@ describe('登录态过期要能被认出来（v0.11.8）', () => {
     expect(r.authExpired).toBeFalsy();
   });
 });
+
+// ---------- 附件同步（v0.11.10）----------
+//
+// 单独一套字节级的假服务端与假文件系统：上面那套 blobStore 存的是 string，
+// 它验不出"PDF 被当成文本走了一遍 UTF-8 编解码"这类损坏——而这正是附件同步
+// 唯一真正要保证的事。
+
+function memBytesIO(files: Map<string, Uint8Array>): FileIO {
+  return {
+    async list() {
+      return [...files.keys()];
+    },
+    async listMeta() {
+      return [...files.keys()].map((p) => ({ path: p, mtime: 0, size: files.get(p)!.length }));
+    },
+    async read(_vp, rel) {
+      const v = files.get(rel);
+      if (v === undefined) throw new Error(`not found: ${rel}`);
+      return new TextDecoder().decode(v);
+    },
+    async write(_vp, rel, content) {
+      files.set(rel, new TextEncoder().encode(content));
+    },
+    async readBinary(_vp, rel) {
+      const v = files.get(rel);
+      if (v === undefined) throw new Error(`not found: ${rel}`);
+      return v;
+    },
+    async writeBinary(_vp, rel, data) {
+      files.set(rel, data);
+    },
+    async remove(_vp, rel) {
+      files.delete(rel);
+    },
+    async exists(_vp, rel) {
+      return files.has(rel);
+    },
+  };
+}
+
+function mockBytesServer(changes: ServerChangeRow[], blobs: Map<string, Uint8Array>) {
+  let seq = changes.reduce((m, c) => Math.max(m, c.seq), 0);
+  const versions = new Map<string, number>();
+  for (const c of changes) versions.set(c.path, c.version);
+  return {
+    push: async (_vaultId: number, batch: PushChange[]) => {
+      const results: PushResult[] = [];
+      for (const ch of batch) {
+        const cur = versions.get(ch.path) ?? 0;
+        if (ch.base_version < cur) {
+          results.push({ client_change_id: ch.client_change_id, status: 'conflict', server_version: cur });
+          continue;
+        }
+        if (ch.op === 'upsert' && (!ch.blob_hash || !blobs.has(ch.blob_hash))) {
+          results.push({ client_change_id: ch.client_change_id, status: 'rejected', reason: 'blob 未上传' });
+          continue;
+        }
+        const next = cur + 1;
+        versions.set(ch.path, next);
+        changes.push({
+          seq: ++seq,
+          path: ch.path,
+          op: ch.op,
+          version: next,
+          device_id: 'self',
+          blob_hash: ch.blob_hash,
+        });
+        results.push({ client_change_id: ch.client_change_id, status: 'accepted', version: next });
+      }
+      return { results };
+    },
+    pullPage: async (_vaultId: number, cursor: number) => {
+      const page = changes.filter((c) => c.seq > cursor).slice(0, 500);
+      const next = page.length ? page[page.length - 1].seq : cursor;
+      return { changes: page.map(({ ...c }) => c), next_cursor: next };
+    },
+    getBlob: async (hash: string) => {
+      const b = blobs.get(hash)!;
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+    },
+    putBlob: async (bytes: Uint8Array) => {
+      blobs.set(await sha256(bytes), bytes.slice());
+    },
+  } as unknown as SyncClient;
+}
+
+/** 一段绝不是合法 UTF-8 的字节（PDF 头 + 0x00 + 孤立的 0xFF）*/
+const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0xff, 0xfe, 0x01]);
+
+describe('附件同步（PDF / 图片 / .base）', () => {
+  it('A1 本地 PDF 会被推上去，并记下它的哈希', async () => {
+    const local = new Map<string, Uint8Array>([['Attachments/a.pdf', PDF_BYTES]]);
+    const blobs = new Map<string, Uint8Array>();
+    const meta = newVaultMeta(1, 'v');
+    const report = await run(meta, memBytesIO(local), mockBytesServer([], blobs));
+
+    expect(report.errors).toEqual([]);
+    expect(report.pushed).toBe(1);
+    expect(meta.assets?.['Attachments/a.pdf']).toBe(await sha256(PDF_BYTES));
+    expect([...blobs.values()][0]).toEqual(PDF_BYTES);
+  });
+
+  it('A2 远端 PDF 拉下来必须逐字节一致（不许走一遍文本编解码）', async () => {
+    const local = new Map<string, Uint8Array>();
+    const blobs = new Map<string, Uint8Array>();
+    const hash = await sha256(PDF_BYTES);
+    blobs.set(hash, PDF_BYTES);
+    const changes: ServerChangeRow[] = [
+      { seq: 1, path: 'a.pdf', op: 'upsert', version: 1, device_id: 'other', blob_hash: hash },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    const report = await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(report.pulled).toBe(1);
+    expect(local.get('a.pdf')).toEqual(PDF_BYTES);
+    expect(meta.assets?.['a.pdf']).toBe(hash);
+  });
+
+  it('A3 没动过的附件不会被反复上传', async () => {
+    const local = new Map<string, Uint8Array>([['a.pdf', PDF_BYTES]]);
+    const blobs = new Map<string, Uint8Array>();
+    const changes: ServerChangeRow[] = [];
+    const meta = newVaultMeta(1, 'v');
+    await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+    const second = await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(second.pushed).toBe(0);
+    expect(second.errors).toEqual([]);
+  });
+
+  it('A4 附件不会被当成"本地已删"而推出删除（localAll 回归）', async () => {
+    const local = new Map<string, Uint8Array>([
+      ['n.md', new TextEncoder().encode('hi')],
+      ['a.pdf', PDF_BYTES],
+    ]);
+    const blobs = new Map<string, Uint8Array>();
+    const changes: ServerChangeRow[] = [];
+    const meta = newVaultMeta(1, 'v');
+    await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+    await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(changes.some((c) => c.op === 'delete')).toBe(false);
+    expect(local.has('a.pdf')).toBe(true);
+  });
+
+  it('A5 两端都改：服务端版本落原路径，本地那份留成同扩展名的冲突副本', async () => {
+    const mine = new Uint8Array([1, 2, 3, 4]);
+    const theirs = new Uint8Array([9, 9, 9]);
+    const local = new Map<string, Uint8Array>([['a.pdf', mine]]);
+    const blobs = new Map<string, Uint8Array>();
+    const theirHash = await sha256(theirs);
+    blobs.set(theirHash, theirs);
+    const changes: ServerChangeRow[] = [
+      { seq: 5, path: 'a.pdf', op: 'upsert', version: 5, device_id: 'other', blob_hash: theirHash },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 4;
+    meta.versions['a.pdf'] = 4;
+    meta.assets = { 'a.pdf': await sha256(new Uint8Array([7, 7])) }; // 上次同步时是别的内容 = 本地改过
+
+    const report = await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(local.get('a.pdf')).toEqual(theirs);
+    const copy = report.conflicts[0];
+    expect(copy).toMatch(/^a\.conflict-.*\.pdf$/);
+    expect(local.get(copy)).toEqual(mine);
+  });
+
+  it('A6 超过 50MB 的附件说清楚原因，而不是静默不同步', async () => {
+    const big = new Uint8Array((50 << 20) + 1);
+    const local = new Map<string, Uint8Array>([['big.zip', big]]);
+    const meta = newVaultMeta(1, 'v');
+    const report = await run(meta, memBytesIO(local), mockBytesServer([], new Map()));
+
+    expect(report.pushed).toBe(0);
+    expect(report.errors.join()).toMatch(/50MB/);
+  });
+});

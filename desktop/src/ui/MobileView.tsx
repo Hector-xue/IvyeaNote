@@ -11,6 +11,7 @@ import type { SearchDoc } from '../lib/searchIndex';
 import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
 import { PdfViewer } from './PdfViewer';
+import { BaseView } from './BaseView';
 import { InlineTitle } from './InlineTitle';
 import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
@@ -107,6 +108,11 @@ interface Props {
    * 此前安卓只有「交给系统应用打开」一条路（WebView 不内嵌 PDF），
    * 而应用内部存储的库连这条路都没有——点了什么都不发生。
    */
+  /** v0.11.10：`.base` 表格视图（手机上同样能开，不再只能"交给 Obsidian"） */
+  baseDoc?: { path: string; text: string } | null;
+  baseNotes?: { path: string; content: string }[];
+  onCloseBase?(): void;
+  onOpenBaseExternal?(path: string): void;
   pdfView?: string | null;
   pdfPath?: string | null;
   onClosePdf?(): void;
@@ -527,7 +533,23 @@ export function MobileView(props: Props) {
           hasError && <div className="m-error">⚠ {report!.errors[0]}</div>
         )}
 
-        {props.pdfView ? (
+        {props.baseDoc ? (
+          <BaseView
+            path={props.baseDoc.path}
+            text={props.baseDoc.text}
+            notes={props.baseNotes ?? []}
+            onOpenNote={(p) => {
+              props.onCloseBase?.();
+              props.onSelect(p);
+            }}
+            onClose={() => props.onCloseBase?.()}
+            onOpenExternal={
+              props.onOpenBaseExternal
+                ? () => props.onOpenBaseExternal?.(props.baseDoc!.path)
+                : undefined
+            }
+          />
+        ) : props.pdfView ? (
           <PdfViewer
             url={props.pdfView}
             path={props.pdfPath ?? ''}

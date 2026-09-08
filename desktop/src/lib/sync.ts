@@ -94,6 +94,42 @@ function isTextNote(path: string): boolean {
   return path.toLowerCase().endsWith('.md') || path.toLowerCase().endsWith('.markdown');
 }
 
+/**
+ * v0.11.10：**除笔记以外的文件也要同步**（PDF、图片、`.base`、任何附件）。
+ *
+ * 在此之前，`list()` 的结果被 `isTextNote` 一刀切掉，同步链路里只有 `.md`。
+ * 于是「桌面端把 PDF 放进库里，手机端永远看不到」——不是同步坏了，是它
+ * 压根没被列进要同步的东西里。协议这一层本来就是内容寻址的 blob，
+ * `PUT/GET /blobs/{hash}` 收发的是字节，与文本无关；缺的只有客户端这一段。
+ *
+ * 附件不做 3-way 合并（把两份 PDF 逐行合起来只会得到一份坏 PDF）：
+ * 同一路径两端都改 → 服务端版本落到原路径，本地那份留成冲突副本，人来裁决。
+ */
+function isAsset(path: string): boolean {
+  return !isTextNote(path);
+}
+
+/** 服务端单个 blob 上限 50MB（server/internal/api/server.go maxBlobSize），超了先说清楚 */
+const MAX_ASSET_BYTES = 50 << 20;
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** 冲突副本路径：保留原扩展名（`a.pdf` → `a.conflict-<ts>.pdf`） */
+function conflictPathFor(path: string, ts: string, forceMd: boolean): string {
+  const dot = path.lastIndexOf('.');
+  const slash = path.lastIndexOf('/');
+  if (forceMd) {
+    return dot > slash && dot > 0 ? `${path.slice(0, dot)}.conflict-${ts}.md` : `${path}.conflict-${ts}.md`;
+  }
+  return dot > slash && dot > 0
+    ? `${path.slice(0, dot)}.conflict-${ts}${path.slice(dot)}`
+    : `${path}.conflict-${ts}`;
+}
+
 /** 完整同步：先推送本地增量，再拉取远端变更（推送出错时不继续拉取）。 */
 export async function syncVault(
   client: SyncClient,
@@ -132,9 +168,13 @@ export async function pushOnly(
   if (notLinkedYet(meta, report)) return report;
 
   // ---------- 1. 扫描本地差异 ----------
-  const localFiles = new Set((await io.list(vaultPath)).filter(isTextNote));
+  const allFiles = await io.list(vaultPath);
+  const localFiles = new Set(allFiles.filter(isTextNote));
+  /** 库里现有的**全部**文件。删除意图要照着它算，否则附件会被当成"本地已删"反复推删除 */
+  const localAll = new Set(allFiles);
   const toPush: PushChange[] = [];
   const pushContents = new Map<string, string>(); // path -> 将要上传的内容
+  const pushAssets = new Map<string, string>(); // path -> 将要上传的 blob sha256
 
   for (const path of localFiles) {
     const content = await io.read(vaultPath, path);
@@ -167,9 +207,44 @@ export async function pushOnly(
     });
     pushContents.set(path, content);
   }
+  // ---------- 1b. 附件（非 .md）：内容寻址，不合并 ----------
+  for (const path of allFiles) {
+    if (!isAsset(path)) continue;
+    let bytes: Uint8Array;
+    try {
+      bytes = await io.readBinary(vaultPath, path);
+    } catch (e) {
+      report.errors.push(`${path} 读取失败：${msg(e)}`);
+      continue;
+    }
+    if (bytes.length > MAX_ASSET_BYTES) {
+      report.errors.push(
+        `${path} 超过 50MB，服务端不收（当前 ${(bytes.length / 1024 / 1024).toFixed(1)}MB）`
+      );
+      continue;
+    }
+    const hash = await sha256HexOf(bytes);
+    const known = meta.versions[path] !== undefined;
+    if (known && meta.assets?.[path] === hash) continue; // 没动过
+    try {
+      await client.putBlob(bytes);
+    } catch (e) {
+      report.errors.push(`${path} 上传失败：${msg(e)}`);
+      continue;
+    }
+    toPush.push({
+      client_change_id: uuid(),
+      path,
+      op: 'upsert',
+      blob_hash: hash,
+      base_version: known ? meta.versions[path] : 0,
+    });
+    pushAssets.set(path, hash);
+  }
+
   // 本地消失的已知文件 → 删除意图（墓碑已记录的跳过）
   for (const [path, ver] of Object.entries(meta.versions)) {
-    if (!localFiles.has(path) && meta.tombstones?.[path] !== ver) {
+    if (!localAll.has(path) && meta.tombstones?.[path] !== ver) {
       toPush.push({ client_change_id: uuid(), path, op: 'delete', base_version: ver });
     }
   }
@@ -187,6 +262,11 @@ export async function pushOnly(
             meta.versions[change.path] = r.version!;
             meta.tombstones = { ...(meta.tombstones ?? {}), [change.path]: r.version! };
             delete meta.bases[change.path];
+            if (meta.assets) delete meta.assets[change.path];
+          } else if (pushAssets.has(change.path)) {
+            meta.versions[change.path] = r.version!;
+            meta.assets = { ...(meta.assets ?? {}), [change.path]: pushAssets.get(change.path)! };
+            delete meta.tombstones?.[change.path];
           } else {
             meta.versions[change.path] = r.version!;
             meta.bases[change.path] = pushContents.get(change.path) ?? '';
@@ -269,6 +349,11 @@ async function applyRemote(
   const knownVer = meta.versions[ch.path];
   if (knownVer !== undefined && ch.version <= knownVer) return; // 过期变更，跳过
 
+  if (isAsset(ch.path)) {
+    await applyRemoteAsset(client, meta, io, vaultPath, ch, report);
+    return;
+  }
+
   if (ch.op === 'delete') {
     const exists = await io.exists(vaultPath, ch.path);
     if (exists) {
@@ -349,14 +434,123 @@ async function applyRemote(
     // 自动合并失败 → 写冲突副本，本地保留原样，base 前移到服务端版本；
     // 本地与 base 的差异会在下次推送时作为修改提交（最终一致，人工裁决副本）。
     const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const dot = ch.path.lastIndexOf('.');
-    const copyPath =
-      dot > 0 ? `${ch.path.slice(0, dot)}.conflict-${ts}.md` : `${ch.path}.conflict-${ts}.md`;
+    const copyPath = conflictPathFor(ch.path, ts, true);
     await io.write(vaultPath, copyPath, conflictCopy(ch.path, r, ts));
     meta.versions[ch.path] = ch.version;
     meta.bases[ch.path] = serverText;
     delete meta.tombstones?.[ch.path];
     report.conflicts.push(copyPath);
+  }
+}
+
+/**
+ * 应用一条远端**附件**变更（PDF / 图片 / .base / 任何非 .md 文件）。
+ *
+ * 与文本那条路的唯一区别是"两端都改了"怎么办：文本能 3-way 合并，字节流不能。
+ * 这里的规则是**服务端版本落到原路径、本地那份改名留下**——不静默覆盖任何一端
+ * （协议第三条原则：冲突必须可见、可选、可回滚）。
+ */
+async function applyRemoteAsset(
+  client: SyncClient,
+  meta: VaultMeta,
+  io: FileIO,
+  vaultPath: string,
+  ch: ServerChange,
+  report: SyncReport
+): Promise<void> {
+  const knownHash = meta.assets?.[ch.path];
+  const setHash = (h: string) => {
+    meta.assets = { ...(meta.assets ?? {}), [ch.path]: h };
+  };
+
+  if (ch.op === 'delete') {
+    if (await io.exists(vaultPath, ch.path)) {
+      const local = await io.readBinary(vaultPath, ch.path);
+      const localHash = await sha256HexOf(local);
+      if (knownHash !== undefined && localHash !== knownHash) {
+        // 本地改过却收到删除 → 修改胜出，把本地这份推回去
+        await pushUpsertBytes(client, meta, ch.path, local, localHash, ch.version, report);
+        return;
+      }
+      await io.remove(vaultPath, ch.path);
+    }
+    meta.versions[ch.path] = ch.version;
+    meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+    if (meta.assets) delete meta.assets[ch.path];
+    return;
+  }
+
+  const serverBytes = new Uint8Array(await client.getBlob(ch.blob_hash!));
+  const exists = await io.exists(vaultPath, ch.path);
+
+  if (!exists) {
+    await io.writeBinary(vaultPath, ch.path, serverBytes);
+    meta.versions[ch.path] = ch.version;
+    setHash(ch.blob_hash!);
+    delete meta.tombstones?.[ch.path];
+    report.pulled++;
+    return;
+  }
+
+  const local = await io.readBinary(vaultPath, ch.path);
+  if (bytesEqual(local, serverBytes)) {
+    meta.versions[ch.path] = ch.version;
+    setHash(ch.blob_hash!);
+    delete meta.tombstones?.[ch.path];
+    return;
+  }
+
+  const localHash = await sha256HexOf(local);
+  if (knownHash === undefined || localHash === knownHash) {
+    // 本地自上次同步后没动过 → 接受服务端版本
+    await io.writeBinary(vaultPath, ch.path, serverBytes);
+    meta.versions[ch.path] = ch.version;
+    setHash(ch.blob_hash!);
+    delete meta.tombstones?.[ch.path];
+    report.pulled++;
+    return;
+  }
+
+  /*
+   * 两端都改了：服务端版本进原路径，本地那份留成冲突副本（保留扩展名，双击还能打开）。
+   *
+   * 附件的冲突副本**故意不进冲突面板**（`syncStatus.isConflictCopy` 只认 `.md`）：
+   * 那个面板的「采用副本」是按文本读写的，拿它去处理一份 PDF 只会写出一个坏文件。
+   * 附件的冲突留给人在文件管理器里比对，同步报告里会列出副本路径。
+   */
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const copyPath = conflictPathFor(ch.path, ts, false);
+  await io.writeBinary(vaultPath, copyPath, local);
+  await io.writeBinary(vaultPath, ch.path, serverBytes);
+  meta.versions[ch.path] = ch.version;
+  setHash(ch.blob_hash!);
+  delete meta.tombstones?.[ch.path];
+  report.pulled++;
+  report.conflicts.push(copyPath);
+}
+
+/** 附件版的回推：字节流直传，不经过 TextEncoder */
+async function pushUpsertBytes(
+  client: SyncClient,
+  meta: VaultMeta,
+  path: string,
+  bytes: Uint8Array,
+  hash: string,
+  baseVersion: number,
+  report: SyncReport
+): Promise<void> {
+  await client.putBlob(bytes);
+  const { results } = await client.push(meta.id, [
+    { client_change_id: uuid(), path, op: 'upsert', blob_hash: hash, base_version: baseVersion },
+  ]);
+  const r = results[0];
+  if (r?.status === 'accepted') {
+    report.pushed++;
+    meta.versions[path] = r.version!;
+    meta.assets = { ...(meta.assets ?? {}), [path]: hash };
+    delete meta.tombstones?.[path];
+  } else if (r?.status === 'conflict') {
+    report.errors.push(`${path} 回推遇到新冲突，将在下轮同步重试`);
   }
 }
 

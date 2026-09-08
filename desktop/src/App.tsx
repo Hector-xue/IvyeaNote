@@ -20,7 +20,7 @@ import { baseNameOf, openWithSystem } from './lib/openExternal';
 import { TopBar } from './ui/TopBar';
 import type { MenuItem } from './ui/ContextMenu';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
-import { ApiError, SyncClient } from './lib/api';
+import { ApiError, SyncClient, sha256Hex } from './lib/api';
 import type { FileIO } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
 import { extractH1, replaceFirstH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
@@ -816,8 +816,28 @@ export default function App() {
    *   假装能打开再弹个错，比直接交出去更糟。
    */
   const [imageView, setImageView] = useState<{ path: string; url: string } | null>(null);
+  /** v0.11.10：正在看的 `.base` 表格视图（主区与编辑器 / PDF 互斥） */
+  const [baseDoc, setBaseDoc] = useState<{ path: string; text: string } | null>(null);
   const onOpenAttachment = useCallback(
     async (rel: string) => {
+      /*
+       * v0.11.10：`.base` 在应用里直接打开。
+       *
+       * 在此之前它走下面那条 `openWithSystemApp`——Windows 上没有程序关联
+       * `.base`，于是只能退回"在文件夹中定位"，用户看到的就是「打不开」。
+       * 它其实只是一份 YAML，描述"按条件筛库里的笔记，显示这几列"，
+       * 数据全在本地，没有任何理由非得让 Obsidian 来读。
+       */
+      if (/\.base$/i.test(rel)) {
+        try {
+          const text = await io.read(vault?.localPath ?? '', rel);
+          setBaseDoc({ path: rel, text });
+          onClosePdf();
+        } catch (e) {
+          toast(`打不开：${e instanceof Error ? e.message : String(e)}`, 'error');
+        }
+        return;
+      }
       if (/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(rel)) {
         const url = await resolveImage(rel);
         if (url) {
@@ -829,7 +849,7 @@ export default function App() {
       }
       await openWithSystemApp(rel);
     },
-    [resolveImage, openWithSystemApp, toast]
+    [resolveImage, openWithSystemApp, toast, io, vault, onClosePdf]
   );
 
   /** 图片查看层。**必须抽成变量**：桌面和移动是两棵树，只挂一边就是"点了没反应" */
@@ -1638,11 +1658,21 @@ export default function App() {
           // 读不出来的单篇跳过，不让整次统计失败
         }
       }
-      setSyncStatusList(classifyVault(contents, vault));
+      // 附件（PDF / 图片 / .base）比对的是哈希，不是全文
+      const assetHashes = new Map<string, string>();
+      for (const p of allFiles) {
+        if (/\.(md|markdown)$/i.test(p)) continue;
+        try {
+          assetHashes.set(p, await sha256Hex(await io.readBinary(root, p)));
+        } catch {
+          // 读不出来的单个附件跳过，不让整次统计失败
+        }
+      }
+      setSyncStatusList(classifyVault(contents, vault, assetHashes));
     } finally {
       setSyncStatusBusy(false);
     }
-  }, [vault, io, files]);
+  }, [vault, io, files, allFiles]);
 
   const openSyncStatus = useCallback(() => {
     setShowSyncStatus(true);
@@ -2081,6 +2111,10 @@ export default function App() {
           sortMode={sortMode}
           onSortChange={setSortMode}
           onOpenPdf={(p) => void onOpenPdf(p)}
+          baseDoc={baseDoc}
+          baseNotes={searchDocs}
+          onCloseBase={() => setBaseDoc(null)}
+          onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
           pdfView={pdfView}
           pdfPath={pdfPath}
           onClosePdf={onClosePdf}
@@ -2249,6 +2283,10 @@ export default function App() {
         sortMode={sortMode}
         onSortChange={setSortMode}
         onOpenPdf={(p) => void onOpenPdf(p)}
+        baseDoc={baseDoc}
+        baseNotes={searchDocs}
+        onCloseBase={() => setBaseDoc(null)}
+        onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
         pdfView={pdfView}
         pdfPath={pdfPath}
         onOpenPdfExternal={(p) => void openWithSystemApp(p)}

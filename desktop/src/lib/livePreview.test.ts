@@ -10,6 +10,7 @@ import {
   parseCallout,
   parseFootnoteDef,
   parseTaskLine,
+  scanFences,
 } from './livePreview';
 
 describe('parseTaskLine', () => {
@@ -218,5 +219,40 @@ describe('行内语法与样式的对应关系', () => {
     expect(which('==亮==')).toBe(3);
     expect(which('`码`')).toBe(4);
     expect(which('*斜*')).toBe(5);
+  });
+});
+
+// ---------- 围栏代码块（v0.11.10）----------
+describe('scanFences', () => {
+  it('三反引号围起来的整段都算代码块，首尾单独标出来', () => {
+    const m = scanFences(['正文', '```js', 'const a = 1;', '```', '后面'].values());
+    expect(m.get(1)).toBeUndefined();
+    expect(m.get(2)).toBe('open');
+    expect(m.get(3)).toBe('body');
+    expect(m.get(4)).toBe('close');
+    expect(m.get(5)).toBeUndefined();
+  });
+
+  it('代码块里的 Markdown 语法不算语法（# 与 --- 都在块内）', () => {
+    const m = scanFences(['```', '# 这不是标题', '---', '```'].values());
+    expect(m.get(2)).toBe('body');
+    expect(m.get(3)).toBe('body');
+  });
+
+  it('没闭合的围栏：一直算到文末（Obsidian 也是这样）', () => {
+    const m = scanFences(['```py', 'x = 1'].values());
+    expect(m.get(1)).toBe('open');
+    expect(m.get(2)).toBe('body');
+  });
+
+  it('波浪号围栏与更长的围栏都认；反引号不闭合波浪号', () => {
+    const m = scanFences(['~~~', 'code', '```', '~~~'].values());
+    expect(m.get(3)).toBe('body');
+    expect(m.get(4)).toBe('close');
+  });
+
+  it('行内代码不会被当成围栏', () => {
+    const m = scanFences(['这是 `code` 行内', '``双反引号``'].values());
+    expect(m.size).toBe(0);
   });
 });

@@ -9,6 +9,7 @@ import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
 import { PdfViewer } from './PdfViewer';
+import { BaseView } from './BaseView';
 import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
@@ -125,6 +126,16 @@ interface Props {
   onSortChange(m: SortMode): void;
   /** v0.3.4：打开 PDF */
   onOpenPdf(path: string): void;
+  /**
+   * v0.11.10：正在看的 `.base` 表格。与编辑器、PDF 三选一。
+   * 传进来的是内容本身而不是一个现成的 ReactNode——这个仓库栽过
+   * 「属性声明了却一次都没渲染」的跟头（v0.11.9 的 vaultSelector）。
+   */
+  baseDoc?: { path: string; text: string } | null;
+  /** 库里全部笔记（.base 求值要读 frontmatter / 标签 / 链接） */
+  baseNotes?: { path: string; content: string }[];
+  onCloseBase?(): void;
+  onOpenBaseExternal?(path: string): void;
   pdfView: string | null;
   /** v0.11.0：正在预览的 PDF 的库内路径（pdfView 是 blob URL，说明不了是哪个文件） */
   pdfPath?: string | null;
@@ -520,7 +531,23 @@ export function MainView(props: Props) {
             再写一遍就是重复。PDF 预览时仍需要一行来放「关闭预览」。 */}
         {/* v0.11.0：PDF 自己带工具条（页码/缩放/关闭），不再需要上面那行面包屑——
             它原本打印的还是 `blob:tauri://…` 那一长串，而不是文件名 */}
-        {props.pdfView ? (
+        {props.baseDoc ? (
+          <BaseView
+            path={props.baseDoc.path}
+            text={props.baseDoc.text}
+            notes={props.baseNotes ?? []}
+            onOpenNote={(p) => {
+              props.onCloseBase?.();
+              props.onSelect(p);
+            }}
+            onClose={() => props.onCloseBase?.()}
+            onOpenExternal={
+              props.onOpenBaseExternal
+                ? () => props.onOpenBaseExternal?.(props.baseDoc!.path)
+                : undefined
+            }
+          />
+        ) : props.pdfView ? (
           <PdfViewer
             url={props.pdfView}
             path={props.pdfPath ?? ''}

@@ -53,6 +53,41 @@ export const imageResolver = Facet.define<ImageApi | null, ImageApi | null>({
 /** 图片解析完成：让装饰重建一次。没有它，图片要等下一次敲键才出现 */
 export const imagesReadyEffect = StateEffect.define<null>();
 
+/**
+ * 扫出全文里每一行属于哪个围栏代码块。
+ *
+ * 必须整篇扫，不能只看可视区：`visibleRanges` 从文档中间开始，
+ * 单看一行永远判不出它在不在代码块里（这也是"只处理可见行"的装饰器
+ * 做不了跨行语法的原因）。
+ *
+ * @returns 行号（1 起）→ 该行角色。不在代码块里的行不出现在表里。
+ */
+export function scanFences(lines: Iterable<string>): Map<number, 'open' | 'body' | 'close'> {
+  const out = new Map<number, 'open' | 'body' | 'close'>();
+  let open: { char: string; len: number } | null = null;
+  let n = 0;
+  for (const text of lines) {
+    n++;
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+    if (!open) {
+      // 开围栏：``` 后面可以跟语言名；``` 里不允许再出现反引号
+      if (m && !(m[1][0] === '`' && m[2].includes('`'))) {
+        open = { char: m[1][0], len: m[1].length };
+        out.set(n, 'open');
+      }
+      continue;
+    }
+    // 闭围栏：同一种字符、不短于开围栏、后面没有别的内容
+    if (m && m[1][0] === open.char && m[1].length >= open.len && m[2].trim() === '') {
+      out.set(n, 'close');
+      open = null;
+      continue;
+    }
+    out.set(n, 'body');
+  }
+  return out;
+}
+
 export const livePreviewTheme = {
   '.cm-line': { lineHeight: '1.7' },
   '.cm-live-h1': { fontSize: '1.75em', fontWeight: '700', lineHeight: '1.3', marginTop: '0.4em' },
@@ -91,6 +126,39 @@ export const livePreviewTheme = {
     color: 'var(--muted, #888)',
     fontSize: '0.9em',
   },
+  /*
+   * 围栏代码块（v0.11.10）。
+   *
+   * 此前这个文件从头到尾**没有 fence 分支**：编辑态里 ``` 是三个字面量反引号，
+   * 中间的代码按正文排版，还会被行内规则接着装饰（代码里的 `*ptr` 被画成斜体）。
+   * 用户的原话是「我的代码块看不出来是代码块啊」——不是样式不好看，是压根没有。
+   *
+   * 底色铺在整行（Decoration.line）而不是包一层元素：CodeMirror 的行是虚拟滚动的，
+   * 包元素会在滚动时被反复拆建。首行/末行单独给圆角，中间行不给，视觉上才是一块。
+   */
+  '.cm-live-fence': {
+    fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace)',
+    fontSize: '0.9em',
+    background: 'var(--code-bg, rgba(127,127,127,0.10))',
+    borderLeft: '1px solid var(--border, rgba(127,127,127,0.25))',
+    borderRight: '1px solid var(--border, rgba(127,127,127,0.25))',
+    paddingLeft: '10px',
+    paddingRight: '10px',
+  },
+  '.cm-live-fence-open': {
+    borderTop: '1px solid var(--border, rgba(127,127,127,0.25))',
+    borderTopLeftRadius: 'var(--r-2, 8px)',
+    borderTopRightRadius: 'var(--r-2, 8px)',
+    paddingTop: '4px',
+  },
+  '.cm-live-fence-close': {
+    borderBottom: '1px solid var(--border, rgba(127,127,127,0.25))',
+    borderBottomLeftRadius: 'var(--r-2, 8px)',
+    borderBottomRightRadius: 'var(--r-2, 8px)',
+    paddingBottom: '4px',
+  },
+  // 围栏那两行本身是语法不是内容：淡下去，但**不隐藏**——隐藏了就没法删它
+  '.cm-live-fence-mark': { opacity: '0.45', fontSize: '0.85em' },
   '.cm-live-code': {
     fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
     fontSize: '0.9em',
@@ -415,11 +483,31 @@ export const livePreview = ViewPlugin.fromClass(
       const sel = view.state.selection;
       const focused = view.hasFocus;
       const imgApi = view.state.facet(imageResolver);
+      const fences = scanFences(view.state.doc.iterLines());
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
           const line = view.state.doc.lineAt(pos);
           const t = line.text;
+
+          // ---- 围栏代码块（v0.11.10）----
+          // 放在最前面：代码块里的 `#`、`*ptr`、`|` 都是代码，不是 Markdown 语法。
+          const fence = fences.get(line.number);
+          if (fence) {
+            const edge = fence === 'open' || fence === 'close';
+            decos.push(
+              Decoration.line({
+                class: `cm-live-fence${
+                  fence === 'open' ? ' cm-live-fence-open' : fence === 'close' ? ' cm-live-fence-close' : ''
+                }`,
+              }).range(line.from)
+            );
+            if (edge && line.to > line.from) {
+              decos.push(Decoration.mark({ class: 'cm-live-fence-mark' }).range(line.from, line.to));
+            }
+            pos = line.to + 1;
+            continue;
+          }
 
           // ---- 分隔线（E4）----
           if (isHorizontalRule(t)) {

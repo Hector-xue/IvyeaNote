@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { decorateCallouts, renderMarkdown, shouldApplyExternalDoc } from './MarkdownEditor';
+import {
+  decorateCallouts,
+  renderMarkdown,
+  shouldApplyExternalDoc,
+  splitFrontmatter,
+} from './MarkdownEditor';
 
 describe('renderMarkdown（阅读模式渲染）', () => {
   it('标题/加粗/列表渲染为 HTML', () => {
@@ -88,5 +93,57 @@ describe('外部改动回灌（v0.9.1 P0 回归）', () => {
 
   it('外部把内容清空也算改动', () => {
     expect(shouldApplyExternalDoc('', '原来有内容', '原来有内容')).toBe(true);
+  });
+});
+
+// ---------- v0.11.10：代码块卡片 + frontmatter 属性区 ----------
+describe('decorateCodeBlocks', () => {
+  it('给代码块套上卡片：语言名 + 复制按钮', () => {
+    const html = renderMarkdown('```js\nconst a = 1;\n```\n');
+    expect(html).toContain('class="code-block"');
+    expect(html).toContain('>js<');
+    expect(html).toContain('class="code-copy"');
+    expect(html).toContain('const a = 1;');
+  });
+
+  it('没写语言也照样是卡片（语言名留空）', () => {
+    const html = renderMarkdown('```\nplain\n```\n');
+    expect(html).toContain('class="code-block"');
+    expect(html).toContain('class="code-copy"');
+  });
+
+  it('行内代码不会被套卡片', () => {
+    expect(renderMarkdown('这是 `x` 行内')).not.toContain('code-block');
+  });
+});
+
+describe('splitFrontmatter', () => {
+  it('把 frontmatter 摘出来，正文里不再留下它', () => {
+    const r = splitFrontmatter('---\nstatus: doing\ntags:\n  - a\n  - b\n---\n\n正文\n');
+    expect(r.props).toEqual([
+      ['status', 'doing'],
+      ['tags', 'a, b'],
+    ]);
+    expect(r.body.trim()).toBe('正文');
+  });
+
+  it('没有 frontmatter 就原样返回', () => {
+    const r = splitFrontmatter('# 标题\n');
+    expect(r.props).toEqual([]);
+    expect(r.body).toBe('# 标题\n');
+  });
+
+  it('阅读态渲染成属性区，而不是分隔线 + 二级标题', () => {
+    const html = renderMarkdown('---\nstatus: doing\n---\n\n正文\n');
+    expect(html).toContain('md-props');
+    expect(html).toContain('status');
+    expect(html).not.toContain('<hr');
+    expect(html).not.toMatch(/<h2[^>]*>status/);
+  });
+
+  it('属性值里的尖括号被转义（不许把它当 HTML 塞回去）', () => {
+    const html = renderMarkdown('---\nx: <img src=1 onerror=alert(1)>\n---\n正文\n');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('&lt;img');
   });
 });

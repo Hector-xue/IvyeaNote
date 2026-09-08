@@ -176,6 +176,57 @@ body {
   border-radius: var(--r-1);
   padding: 0.1em 0.35em;
 }
+/*
+ * 代码块（v0.11.10 起是一张卡片：语言名 + 复制按钮）。
+ *
+ * 之前只有一块灰底，正文里一段代码和一段引用几乎分不出来——用户的原话是
+ * 「我的代码块看不出来是代码块」。描边比加深底色更有效：底色一深，
+ * 深色主题下反而糊成一片。
+ */
+.md-preview .code-block {
+  margin: 0.85em 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.md-preview .code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: 4px 6px 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel-2) 60%, var(--bg));
+  min-height: 26px;
+}
+.md-preview .code-lang {
+  font-family: var(--font-mono);
+  font-size: 0.72em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.md-preview .code-copy {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.75em;
+  padding: 2px 8px;
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+.md-preview .code-copy:hover {
+  color: var(--n-8);
+  border-color: var(--border);
+  background: var(--bg);
+}
+.md-preview .code-block pre {
+  margin: 0;
+  background: transparent;
+  border-radius: 0;
+  overflow-x: auto;
+}
 .md-preview pre {
   background: var(--panel-2);
   border-radius: var(--r-2);
@@ -320,4 +371,35 @@ body {
   display: block;
   font-weight: var(--fw-bold);
   margin-bottom: 0.25em;
+}
+
+/* ---- 阅读态的属性区（frontmatter，v0.11.10）---- */
+/*
+ * Obsidian 把 frontmatter 显示成文档顶部的属性面板；我们此前把它当正文，
+ * 于是 `---` 成了分隔线、`status: doing` 成了二级标题。
+ * 这里只做只读展示：键灰、值正常、整块与正文之间一条细线。
+ */
+.md-preview .md-props {
+  margin: 0 0 1em;
+  padding-bottom: 0.6em;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.md-preview .md-prop {
+  display: flex;
+  gap: 10px;
+  font-size: 0.86em;
+  line-height: 1.7;
+}
+.md-preview .md-prop-key {
+  flex: 0 0 auto;
+  min-width: 88px;
+  color: var(--muted);
+}
+.md-preview .md-prop-val {
+  min-width: 0;
+  color: var(--n-8);
+  word-break: break-word;
 }
