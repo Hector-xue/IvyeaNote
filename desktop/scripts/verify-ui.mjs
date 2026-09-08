@@ -367,6 +367,12 @@ const pdfNode = await evaluate(`(() => {
   const el = document.querySelector('.ft-root .ft-file-name[title="手册.pdf"]');
   if (!el) return null;
   const row = el.closest('.ft-file');
+  /*
+   * 先滚进视口再取坐标：浏览器的 OPFS 库是跨轮累积的（每跑一次就多几篇），
+   * 文件树迟早会把这一行挤到窗口外面，那时纵坐标会大于窗口高度，点击落空，
+   * 表现成"PDF 五条突然全红"——是验证台自己的问题，不是产物坏了。
+   */
+  row.scrollIntoView({ block: 'center' });
   const r = row.getBoundingClientRect();
   return { badge: row.querySelector('.ft-badge')?.textContent ?? null, x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) };
 })()`);
@@ -504,6 +510,7 @@ const topBar = await evaluate(`(() => {
     top: Math.round(r.top), height: Math.round(r.height),
     fullWidth: Math.round(r.width) === Math.round(window.innerWidth),
     crumb: bar.querySelector('.tb-crumb')?.textContent?.trim() ?? null,
+    tabs: bar.querySelectorAll('.tb-tab').length,
     // 整条可拖：容器与面包屑上都要有 data-tauri-drag-region
     dragRegions: bar.querySelectorAll('[data-tauri-drag-region]').length,
     barIsDrag: bar.hasAttribute('data-tauri-drag-region'),
@@ -512,7 +519,8 @@ const topBar = await evaluate(`(() => {
 })()`);
 check('顶栏在窗口最上方、通栏，且 .app 紧接其下', topBar && topBar.top === 0 &&
   topBar.fullWidth && topBar.appTop === topBar.height, topBar);
-check('顶栏里有内容（面包屑），不是一条空白横带', !!topBar && (topBar.crumb ?? '').length > 0, topBar?.crumb);
+check('顶栏里有内容（标签页 / 面包屑），不是一条空白横带',
+  !!topBar && ((topBar.crumb ?? '').length > 0 || topBar.tabs > 0), topBar);
 check('整条顶栏可拖窗口（v0.11.3 就是丢了这个，用户点哪都拖不动）',
   !!topBar && topBar.barIsDrag && topBar.dragRegions >= 2, topBar && { barIsDrag: topBar.barIsDrag, n: topBar.dragRegions });
 
@@ -688,6 +696,414 @@ await new Promise((r) => setTimeout(r, 2600));
   })()`));
 }
 
+// ---------- 7.5b 右栏大纲（v0.11.11）----------
+/*
+ * 用户报「右侧的查看大纲按钮点了之后没有显示大纲，而是直接消失不见了」。
+ * 右栏是可折叠的：折起来只剩一条竖轨，展开才有「大纲 / 反向链接」两个标签。
+ * 这里把这两个状态都点一遍，量它到底给了什么。
+ */
+{
+  // 先造一篇**有标题**的笔记：大纲的输入就是标题，没标题时它本来就该显示空状态
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('大纲用.md', { create: true });
+      const w = await fh.createWritable();
+      const NL = String.fromCharCode(10);
+      await w.write(new TextEncoder().encode(
+        ['# 一级标题', '', '正文', '', '## 二级标题', '', '正文', '', '### 三级标题', ''].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('大纲用'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const state = await evaluate(`(() => ({
+    panel: !!document.querySelector('.right-panel'),
+    rail: !!document.querySelector('.right-rail'),
+    outlineItems: document.querySelectorAll('.rp-outline a, .rp-outline button, .rp-outline li').length,
+    tabs: [...document.querySelectorAll('.rp-tab')].map(x => x.textContent.trim()),
+  }))()`);
+  console.log('  · 右栏初始 =', JSON.stringify(state));
+
+  // 折起来的话先点竖轨上的按钮展开
+  if (!state.panel) {
+    await evaluate(`(() => { document.querySelector('.right-rail button')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  const opened = await evaluate(`(() => {
+    const p = document.querySelector('.right-panel');
+    if (!p) return null;
+    const tabs = [...p.querySelectorAll('.rp-tab')];
+    tabs.find(t => t.textContent.includes('大纲'))?.click();
+    return true;
+  })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const outline = await evaluate(`(() => {
+    const p = document.querySelector('.right-panel');
+    if (!p) return null;
+    const nav = p.querySelector('.rp-outline');
+    return {
+      hasPanel: true,
+      hasNav: !!nav,
+      items: nav ? nav.children.length : 0,
+      text: nav ? nav.textContent.slice(0, 40) : (p.textContent ?? '').slice(0, 60),
+    };
+  })()`);
+  check('点「大纲」标签能看到当前笔记的标题列表（不是把整个右栏收掉）',
+    !!opened && !!outline && outline.hasNav && outline.items > 0, outline);
+  await shot('outline.png');
+
+  /*
+   * 窄窗口（用户那台是约 960px）：右栏原来被 `@media(max-width:1080px){display:none}`
+   * 藏掉——点展开之后竖轨变成面板、面板又被藏，整条右栏凭空消失。
+   * 这里把窗口缩到 1000px 再点一遍，量它是不是真的看得见。
+   */
+  await send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 760, deviceScaleFactor: 1, mobile: false });
+  await new Promise((r) => setTimeout(r, 500));
+  await evaluate(`(() => { document.querySelector('.right-panel .rp-head .icon-btn')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await evaluate(`(() => { document.querySelector('.right-rail button')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const narrow = await evaluate(`(() => {
+    const p = document.querySelector('.right-panel');
+    if (!p) return { present: false };
+    const cs = getComputedStyle(p);
+    const r = p.getBoundingClientRect();
+    return {
+      present: true,
+      display: cs.display,
+      width: Math.round(r.width),
+      onScreen: r.right <= window.innerWidth + 1 && r.width > 40,
+      items: p.querySelectorAll('.rp-outline .rp-h').length,
+    };
+  })()`);
+  check('窄窗口（1000px）下展开右栏是真的能看见大纲，而不是整块消失',
+    narrow.present && narrow.display !== 'none' && narrow.onScreen && narrow.items > 0, narrow);
+  await shot('outline-narrow.png');
+  await send('Emulation.clearDeviceMetricsOverride');
+  await new Promise((r) => setTimeout(r, 300));
+}
+
+// ---------- 7.55 清单正文的颜色与复选框（v0.11.11）----------
+/*
+ * 用户原话：「任务列表打勾无法点击，点一下就变成中括号了，前面还有一个 -，
+ * 且右侧文案没有缩进，而且我的这些字颜色特别浅」。
+ * 这几条全是运行时算出来的，只有量真实产物的 computed 值才作数。
+ */
+{
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('乙'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const cb = await evaluate(`(() => { const c = document.querySelector('.cm-content'); if (!c) return null;
+    const r = c.getBoundingClientRect(); return { x: Math.round(r.left + 40), y: Math.round(r.bottom - 12) } })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: cb.x, y: cb.y, button: 'left', clickCount: 1, buttons: 1 });
+  }
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35 });
+  for (const line of ['', '- [ ] 待办一二三四五六七八九十', '- 普通列表项']) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    if (line) await send('Input.insertText', { text: line });
+  }
+  await new Promise((r) => setTimeout(r, 900));
+
+  const colors = await evaluate(`(() => {
+    const norm = (c) => c.replace(/\\s/g, '');
+    const body = norm(getComputedStyle(document.querySelector('.cm-content')).color);
+    const muted = norm(getComputedStyle(document.documentElement).getPropertyValue('--muted').trim() || '#000');
+    // 清单那一行里承载文字的那个 span（CodeMirror 给它挂的是高亮 class）
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.textContent.includes('普通列表项'));
+    const spans = line ? [...line.querySelectorAll('span')].filter(s => s.textContent.includes('普通列表项')) : [];
+    return {
+      body,
+      muted,
+      listText: spans.length ? norm(getComputedStyle(spans[spans.length - 1]).color) : body,
+      taskLineIndent: (() => {
+        const t = [...document.querySelectorAll('.cm-live-task')];
+        if (!t.length) return null;
+        const cs = getComputedStyle(t[t.length - 1]);
+        return { padLeft: cs.paddingLeft, indent: cs.textIndent };
+      })(),
+    };
+  })()`);
+  check('清单正文用的是正文墨色，不是次要文字色（满屏清单不该整页发灰）',
+    colors.listText === colors.body, colors);
+  check('任务行是悬挂缩进（折行的文字对齐第一行文本，不顶到复选框下面）',
+    !!colors.taskLineIndent && parseFloat(colors.taskLineIndent.padLeft) > 8 &&
+    parseFloat(colors.taskLineIndent.indent) < 0, colors.taskLineIndent);
+
+  // 光标就在这一行：复选框必须还在（原来会当场退回 `- [ ]`）
+  const boxWithCursor = await evaluate(`document.querySelectorAll('.cm-task-checkbox').length`);
+  check('光标停在任务行时复选框仍然渲染（此前点一下就退回 `- [ ]`）', boxWithCursor >= 1, boxWithCursor);
+
+  // 点一下复选框：要真的勾上，而且勾完还是复选框
+  const before = await evaluate(`document.querySelector('.cm-content').innerText.includes('[x]')`);
+  await evaluate(`(() => { const b = document.querySelector('.cm-task-checkbox'); if (!b) return false;
+    const r = b.getBoundingClientRect(); window.__box = { x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) }; return true })()`);
+  const boxPt = await evaluate(`window.__box`);
+  if (boxPt) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: boxPt.x, y: boxPt.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 600));
+  }
+  // 真相要去磁盘上取：编辑区里显示的是复选框，`innerText` 当然读不到 `[x]`
+  await new Promise((r) => setTimeout(r, 1400)); // 等防抖落盘
+  const onDisk = await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      try {
+        const fh = await handle.getFileHandle('乙.md');
+        return await (await fh.getFile()).text();
+      } catch (e) { /* 换下一个库目录 */ }
+    }
+    return null;
+  })()`);
+  const after = await evaluate(`(() => ({
+    src: false,
+    boxes: document.querySelectorAll('.cm-task-checkbox').length,
+    checked: document.querySelectorAll('.cm-task-checked').length,
+    dashLeft: [...document.querySelectorAll('.cm-line')].some(l => /^\\s*-\\s+\\[/.test(l.textContent)),
+    text: document.querySelector('.cm-content').innerText.split('\\n').slice(-4).join(' | '),
+    focused: document.querySelector('.cm-editor')?.classList.contains('cm-focused') ?? false,
+  }))()`);
+  check('点复选框真的勾上了（磁盘上的源码变成 `[x]`），且勾完仍是复选框、前面不再露出 `-`',
+    /- \[x\] 待办/.test(onDisk ?? '') && after.boxes >= 1 && after.checked >= 1 && !after.dashLeft,
+    { before, after, onDisk: (onDisk ?? '').split('\n').slice(-3).join(' | ') });
+  await shot('task-list.png');
+}
+
+// ---------- 7.7 重开回到上次那篇 + 标题不重复（v0.11.11）----------
+{
+  // 打开一篇有 H1 的笔记，刷新（等于重开应用），看还在不在这一篇上
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('大纲用'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  const restored = await evaluate(`(() => ({
+    crumb: document.querySelector('.top-bar .crumb, .crumb')?.textContent ?? '',
+    hasEditor: !!document.querySelector('.cm-content'),
+    body: (document.querySelector('.cm-content')?.innerText ?? '').slice(0, 20),
+  }))()`);
+  check('重开之后回到退出前那篇笔记（不再是空白欢迎页）',
+    restored.hasEditor && /一级标题/.test(restored.body), restored);
+
+  // 文件名与 H1 **不同**时两行都要在（它们携带不同信息）
+  const differing = await evaluate(`(() => ({
+    inline: document.querySelectorAll('.inline-title').length,
+    firstLine: (document.querySelector('.cm-content')?.innerText ?? '').split(String.fromCharCode(10))[0],
+  }))()`);
+  check('文件名与正文 H1 不同时，内联标题照常显示（两行说的是两件事）',
+    differing.inline === 1, differing);
+
+  /*
+   * 文件名与 H1 **是同一个**时，不该再顶一行一模一样的标题——用户报的
+   * 「文件本来就是这个名字，还非要再命名一次，然后就显示了两个名字」。
+   * 判定按清洗后比较：H1 里可以有 `/`，文件名里不能，直接比字符串永远不相等。
+   */
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('同名 标题.md', { create: true });
+      const w = await fh.createWritable();
+      const NL = String.fromCharCode(10);
+      await w.write(new TextEncoder().encode(['# 同名 / 标题', '', '正文', ''].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('同名'));
+    el?.closest('.ft-file')?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const same = await evaluate(`(() => ({
+    inline: document.querySelectorAll('.inline-title').length,
+    firstLine: (document.querySelector('.cm-content')?.innerText ?? '').split(String.fromCharCode(10))[0],
+  }))()`);
+  check('文件名与正文 H1 是同一个标题（差别只在 `/` 这种文件名非法字符）时，不再重复顶一行',
+    same.inline === 0 && /同名/.test(same.firstLine ?? ''), same);
+  await shot('restore.png');
+}
+
+// ---------- 7.8 正文配色与顶栏标签（v0.11.11）----------
+{
+  // 造一篇把"该有颜色的地方"都写全的笔记
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      // 反引号不能直接写进这段字符串：它整段是模板字面量，写进去就把它截断了
+      const FENCE = String.fromCharCode(96, 96, 96);
+      const put = async (n, lines) => {
+        const fh = await handle.getFileHandle(n, { create: true });
+        const w = await fh.createWritable();
+        await w.write(new TextEncoder().encode(lines.join(NL)));
+        await w.close();
+      };
+      await put('配色样张.md', [
+        '# 配色样张', '',
+        '正文里有 ' + String.fromCharCode(96) + '行内代码' + String.fromCharCode(96) +
+          '、==高亮== 和 [链接](https://example.com)。', '',
+        '> 引用一行', '',
+        '- 列表项', '- [x] 已完成的任务', '',
+        '| 表头 | 值 |', '| --- | --- |', '| a | b |', '',
+        FENCE + 'js', 'const a = 1;', FENCE, '',
+      ]);
+      await put('第二篇.md', ['# 第二篇', '', '用来验标签切换。', '']);
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2500));
+
+  // --- 标签页：打开两篇，切换、关闭 ---
+  const openTwo = await evaluate(`(() => {
+    const names = [...document.querySelectorAll('.ft-file-name')];
+    const a = names.find(x => x.textContent.includes('配色样张'));
+    const b = names.find(x => x.textContent.includes('第二篇'));
+    a?.closest('.ft-file')?.click();
+    return !!a && !!b;
+  })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('第二篇'));
+    b?.closest('.ft-file')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const tabs = await evaluate(`(() => {
+    const els = [...document.querySelectorAll('.tb-tab')];
+    return {
+      count: els.length,
+      labels: els.map(e => e.querySelector('.tb-tab-name')?.textContent ?? ''),
+      active: els.find(e => e.classList.contains('on'))?.querySelector('.tb-tab-name')?.textContent ?? null,
+      inTopBar: !!document.querySelector('.top-bar .tb-tabs'),
+      hasNew: !!document.querySelector('.tb-tab-new'),
+    };
+  })()`);
+  check('顶栏里出现标签页，两篇都在，当前那篇是高亮的（不新增一整行）',
+    openTwo && tabs.inTopBar && tabs.hasNew && tabs.active === '第二篇' &&
+    tabs.labels.includes('配色样张') && tabs.labels.includes('第二篇'), tabs);
+
+  // 点回第一个标签要真的切过去
+  await evaluate(`(() => {
+    const t = [...document.querySelectorAll('.tb-tab')].find(e => e.textContent.includes('配色样张'));
+    t?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const switched = await evaluate(`(() => ({
+    active: document.querySelector('.tb-tab.on .tb-tab-name')?.textContent ?? null,
+    body: (document.querySelector('.cm-content')?.innerText ?? '').slice(0, 12),
+  }))()`);
+  check('点标签能切回那一篇（正文跟着换）',
+    switched.active === '配色样张' && /配色样张/.test(switched.body), switched);
+
+  // 关掉当前标签：应当切到剩下那个，而不是空白
+  await evaluate(`(() => { document.querySelector('.tb-tab.on .tb-tab-x')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const afterClose = await evaluate(`(() => ({
+    count: document.querySelectorAll('.tb-tab').length,
+    active: document.querySelector('.tb-tab.on .tb-tab-name')?.textContent ?? null,
+    hasEditor: !!document.querySelector('.cm-content'),
+  }))()`);
+  check('关掉当前标签后落到相邻那一篇上（不是掉回空白页）',
+    afterClose.active !== null && afterClose.hasEditor, afterClose);
+  await shot('tabs.png');
+
+  // --- 正文配色：量 computed 值，别靠眼睛 ---
+  await evaluate(`(() => {
+    const t = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('配色样张'));
+    t?.closest('.ft-file')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  // 切到阅读视图
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('阅读'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const colors = await evaluate(`(() => {
+    const norm = (c) => (c || '').replace(/ /g, '');
+    const accent = norm(getComputedStyle(document.documentElement).getPropertyValue('--accent').trim());
+    const q = document.querySelector('.md-preview blockquote');
+    const code = document.querySelector('.md-preview p code');
+    const link = document.querySelector('.md-preview a');
+    const mark = document.querySelector('.md-preview mark');
+    const li = document.querySelector('.md-preview li');
+    const cb = document.querySelector('.md-preview input[type=checkbox]');
+    const lang = document.querySelector('.md-preview .code-lang');
+    const body = document.querySelector('.md-preview p');
+    const toHex = (rgb) => rgb;
+    return {
+      accent,
+      quoteBorder: q ? toHex(getComputedStyle(q).borderLeftColor) : null,
+      codeColor: code ? getComputedStyle(code).color : null,
+      linkColor: link ? getComputedStyle(link).color : null,
+      markBg: mark ? getComputedStyle(mark).backgroundColor : null,
+      markerColor: li ? getComputedStyle(li, '::marker').color : null,
+      checkboxAccent: cb ? getComputedStyle(cb).accentColor : null,
+      langColor: lang ? getComputedStyle(lang).color : null,
+      bodyColor: body ? getComputedStyle(body).color : null,
+    };
+  })()`);
+  /*
+   * 深浅主题的品牌绿不是同一支（浅 #3f6b45 / 深 #7fb56e），所以**不能写死色值**：
+   * 上一轮跑完停在深色主题，写死就会红一片，而产物其实没问题。
+   * 这里拿页面里真实的 --accent 解析成 rgb 再比。
+   */
+  const accentRgb = await evaluate(`(() => {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const d = document.createElement('div');
+    d.style.color = v;
+    document.body.appendChild(d);
+    const rgb = getComputedStyle(d).color;
+    d.remove();
+    return rgb.replace(/ /g, '');
+  })()`);
+  const isGreen = (c) => (c ?? '').replace(/ /g, '') === accentRgb;
+  check('阅读态：引用左线 / 链接 / 语言名 / 列表符号 / 复选框都用品牌绿，正文仍是墨色',
+    isGreen(colors.quoteBorder) && isGreen(colors.linkColor) && isGreen(colors.langColor) &&
+    isGreen(colors.markerColor) && isGreen(colors.checkboxAccent) &&
+    !isGreen(colors.bodyColor) && colors.codeColor !== colors.bodyColor, colors);
+  await shot('colors-read.png');
+
+  // 编辑态同一套
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('编辑'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  await evaluate(`(() => { document.querySelector('.cm-content')?.blur(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const edit = await evaluate(`(() => {
+    const q = document.querySelector('.cm-live-quote');
+    const code = document.querySelector('.cm-live-code');
+    const box = document.querySelector('.cm-task-checked');
+    const fence = document.querySelector('.cm-live-fence-mark');
+    return {
+      quoteBorder: q ? getComputedStyle(q).borderLeftColor : null,
+      codeColor: code ? getComputedStyle(code).color : null,
+      checkedBg: box ? getComputedStyle(box).backgroundColor : null,
+      fenceColor: fence ? getComputedStyle(fence).color : null,
+    };
+  })()`);
+  check('编辑态与阅读态同一套颜色（引用线 / 勾选 / 围栏语言都是品牌绿）',
+    isGreen(edit.quoteBorder) && isGreen(edit.checkedBg) && isGreen(edit.fenceColor), edit);
+  await shot('colors-edit.png');
+}
+
 // ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------
 /*
  * 用户报的是「侧边栏展开的直角改为 R 角」「按钮弹窗也不好看」。
@@ -728,8 +1144,10 @@ await new Promise((r) => setTimeout(r, 2600));
 
   // 抽屉里长按一个文件 → 底部菜单
   const row = await evaluate(`(() => {
-    const el = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('甲'));
+    const names = [...document.querySelectorAll('.m-tree-name')];
+    const el = names.find(x => /\\.md$|甲|乙/.test(x.textContent)) ?? names[0];
     if (!el) return null;
+    el.scrollIntoView({ block: 'center' });
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) };
   })()`);
@@ -758,6 +1176,13 @@ await new Promise((r) => setTimeout(r, 2600));
       icons: g.querySelectorAll('.m-sheet2-ico svg').length,
     };
   })()`);
+  if (!sheet) {
+    console.log('  · 菜单没弹出来，现场 =', JSON.stringify(await evaluate(`(() => ({
+      names: [...document.querySelectorAll('.m-tree-name')].map(x => x.textContent).slice(0, 8),
+      mask: !!document.querySelector('.m-sheet-mask'),
+      row: ${JSON.stringify(row)},
+    }))()`)));
+  }
   check('底部菜单是分组圆角卡片，行高够按，分隔线从文字处起画（不横穿图标栏）',
     !!sheet && parseFloat(sheet.radius) >= 12 && sheet.shadow && (sheet.itemH ?? 0) >= 48 &&
     parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);

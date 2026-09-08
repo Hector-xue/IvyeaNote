@@ -420,9 +420,29 @@
   border-left: 1px solid var(--border);
 }
 
-/* 窄窗口下右栏让位给正文 */
+/*
+ * 窄窗口下右栏让位给正文——但**不能直接 display:none**。
+ *
+ * v0.11.11 用户报「右侧的查看大纲按钮点了之后没有显示大纲，而是直接消失不见了」：
+ * 他的窗口约 960px 宽，点竖轨上的展开按钮后，组件从"竖轨"切成"面板"，
+ * 而面板正好被这条规则藏掉——于是整条右栏凭空消失，连回去的入口都没了。
+ * 这是最坏的一种失败：**用户点了一下，界面少了一块，还没有任何解释。**
+ *
+ * 现在窄窗口下改成浮在正文之上（Obsidian 窄窗口时的侧栏也是这么处理的）：
+ * 点开真的能看见大纲，点「收起」回到竖轨。
+ */
 @media (max-width: 1080px) {
   .right-panel {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+    background: var(--panel);
+    box-shadow: var(--shadow-pop);
+  }
+  /* 浮层模式下那条拖宽把手没有意义，还会挡住正文 */
+  .panel-resizer:last-of-type {
     display: none;
   }
 }

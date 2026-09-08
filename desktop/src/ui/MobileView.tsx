@@ -570,7 +570,7 @@ export function MobileView(props: Props) {
           </div>
         ) : (
           <>
-            <InlineTitle path={props.currentPath} onRename={props.onRenameFile} />
+            <InlineTitle path={props.currentPath} doc={props.doc} onRename={props.onRenameFile} />
             <MarkdownEditor
               mobile
               doc={props.doc ?? ''}

@@ -242,19 +242,36 @@ export class SyncClient {
     return this.req(`/sync/changes?vault_id=${vaultId}&cursor=${cursor}&limit=${limit}`);
   }
 
-  getBlob(hash: string): Promise<ArrayBuffer> {
-    return this.raw(`/blobs/${hash}`).then(async (res) => {
-      if (!res.ok) throw new ApiError(res.status, 'blob_error', `拉取附件失败 HTTP ${res.status}`);
-      return res.arrayBuffer();
-    });
+  /*
+   * blob 的收发**必须和其它请求一样会刷新登录态**。
+   *
+   * 这两个方法原来直接用 `raw`，绕开了 `req` 里的「401 → refresh → 重试一次」。
+   * access token 只有 15 分钟：应用开着放一会儿，笔记正文（走 push/pull，会刷新）
+   * 一切正常，而 blob 一律 401 —— 用户看到的就是那条红条
+   * 「上传附件失败 HTTP 401」，而且**永远不会自己好**，因为谁也没去刷新。
+   * v0.11.10 让附件也走 blob 之后，这条老路径从"偶尔"变成了"每次"。
+   */
+  // v0.11.11 修
+  async getBlob(hash: string, retried = false): Promise<ArrayBuffer> {
+    const res = await this.raw(`/blobs/${hash}`);
+    if (res.status === 401 && !retried && this.tokens.refresh) {
+      await this.ensureRefreshed();
+      return this.getBlob(hash, true);
+    }
+    if (!res.ok) throw new ApiError(res.status, 'blob_error', `拉取附件失败 HTTP ${res.status}`);
+    return res.arrayBuffer();
   }
 
-  async putBlob(bytes: Uint8Array): Promise<void> {
+  async putBlob(bytes: Uint8Array, retried = false): Promise<void> {
     const hash = await sha256Hex(bytes);
     const res = await this.raw(`/blobs/${hash}`, {
       method: 'PUT',
       body: bytes as unknown as BodyInit,
     });
+    if (res.status === 401 && !retried && this.tokens.refresh) {
+      await this.ensureRefreshed();
+      return this.putBlob(bytes, true);
+    }
     if (!res.ok) throw new ApiError(res.status, 'blob_error', `上传附件失败 HTTP ${res.status}`);
   }
 }

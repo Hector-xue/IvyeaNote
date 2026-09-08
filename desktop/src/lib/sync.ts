@@ -112,6 +112,24 @@ function isAsset(path: string): boolean {
 /** 服务端单个 blob 上限 50MB（server/internal/api/server.go maxBlobSize），超了先说清楚 */
 const MAX_ASSET_BYTES = 50 << 20;
 
+/**
+ * **本机私有目录，一个字节都不许上传。**
+ *
+ * `io.list()` 故意保留 `.ivyea/` 与 `.trash/`（索引快照要读、回收站面板要读，
+ * 界面层再用 `HIDDEN_PREFIXES` 挡掉）。v0.11.10 把"非 .md 也同步"接上之后，
+ * 这个"故意保留"直接变成了 `.ivyea/cache/content.json 上传失败 HTTP 401`——
+ * 应用自己的索引缓存被当成用户附件推上了云。
+ *
+ * - `.ivyea/`：派生缓存，随时可重建，还很大，跨设备毫无意义；
+ * - `.trash/`：本机回收站。同步它等于"在这台电脑删掉的东西跑到那台电脑的回收站里"。
+ */
+// v0.11.11 修
+const LOCAL_ONLY_PREFIXES = ['.ivyea/', '.trash/'];
+
+function isLocalOnly(path: string): boolean {
+  return LOCAL_ONLY_PREFIXES.some((p) => path.startsWith(p));
+}
+
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -139,7 +157,15 @@ export async function syncVault(
   vaultPath: string
 ): Promise<SyncReport> {
   const a = await pushOnly(client, meta, io, deviceId, vaultPath);
-  if (a.errors.length > 0) return a;
+  /*
+   * **只有"整条链路断了"才停下，单个文件传不上去不算。**
+   *
+   * 原来是 `if (a.errors.length > 0) return a`：任何一条错误都会跳过拉取。
+   * 于是一个 50MB 的附件、一份读不出来的文件，就能让"桌面端改的笔记手机端看不到"
+   * ——用户报的正是这个（"连我在桌面端的文档修改手机端都不同步了"）。
+   * 推不上去的那几个下一轮还会再试，不该连累其余全部。
+   */
+  if (a.unlinked || a.authExpired || a.errors.some((e) => e.startsWith('推送失败：'))) return a;
   const b = await pullOnly(client, meta, io, deviceId, vaultPath);
   return {
     pushed: a.pushed + b.pushed,
@@ -168,7 +194,7 @@ export async function pushOnly(
   if (notLinkedYet(meta, report)) return report;
 
   // ---------- 1. 扫描本地差异 ----------
-  const allFiles = await io.list(vaultPath);
+  const allFiles = (await io.list(vaultPath)).filter((p) => !isLocalOnly(p));
   const localFiles = new Set(allFiles.filter(isTextNote));
   /** 库里现有的**全部**文件。删除意图要照着它算，否则附件会被当成"本地已删"反复推删除 */
   const localAll = new Set(allFiles);
@@ -348,6 +374,16 @@ async function applyRemote(
 ): Promise<void> {
   const knownVer = meta.versions[ch.path];
   if (knownVer !== undefined && ch.version <= knownVer) return; // 过期变更，跳过
+
+  /*
+   * 云端已经有的 `.ivyea/` / `.trash/`（v0.11.10 那一版推上去的）不要再落回本地：
+   * 拉下来会覆盖这台机器自己的索引缓存，而它和这台机器的库并不对应。
+   * 只把游标推过去，当它不存在。
+   */
+  if (isLocalOnly(ch.path)) {
+    meta.versions[ch.path] = ch.version;
+    return;
+  }
 
   if (isAsset(ch.path)) {
     await applyRemoteAsset(client, meta, io, vaultPath, ch, report);

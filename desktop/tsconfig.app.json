@@ -22,5 +22,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // 这一份跑在 node 里（真服务端端到端），归 tsconfig.node.json 管
+  "exclude": ["src/**/*.e2e.test.ts"]
 }

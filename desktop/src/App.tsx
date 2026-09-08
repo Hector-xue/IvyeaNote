@@ -5,7 +5,7 @@ import { MainView } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
-import { useOpenNote } from './hooks/useOpenNote';
+import { useTabs } from './hooks/useTabs';
 import { useCommands } from './hooks/useCommands';
 import { useAttachments } from './hooks/useAttachments';
 import { useObsidianImport } from './hooks/useObsidianImport';
@@ -42,6 +42,7 @@ import { SettingsView } from './ui/SettingsView';
 import { SyncStatusPanel } from './ui/SyncStatusPanel';
 import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
+import { loadLastOpen, pickRestore, saveLastOpen } from './lib/lastOpen';
 import { invertMoveOps, planMove, remapPath } from './lib/movePath';
 import { noteCandidates } from './lib/links';
 import { isSafPath, pickVaultFolder, safIO } from './lib/saf';
@@ -615,6 +616,27 @@ export default function App() {
     void refreshFiles();
   }, [vault, refreshFiles]);
 
+  /*
+   * v0.11.11：启动后回到退出前那篇笔记。
+   *
+   * 放在"文件列表就绪之后"而不是"库就绪之后"：记下的路径可能已经被删/改名，
+   * 必须拿真实文件列表校验过再打开，否则会打开一个不存在的路径然后弹报错。
+   * 只在 currentPath 还空着时做——用户已经点开别的了就不要抢。
+   */
+  const restoredFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!vault || files.length === 0) return;
+    if (restoredFor.current === vault.id) return;
+    restoredFor.current = vault.id;
+    // 库里已经没有的标签先清掉（换库、外部删除都会留下死标签）
+    pruneTabs(files);
+    const target = pickRestore(loadLastOpen(vault.id), files, currentPath);
+    // 走 openFileInTab 而不是 openFile：还原的那篇也该出现在标签栏里
+    if (target) void openFileInTab(target);
+    // openFile / currentPath 故意不进依赖：这一次还原只该发生一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vault, files]);
+
   // 选了「跟随系统」时，系统深浅色一变就要跟着换
   useEffect(() => {
     if (appearance.theme !== 'system') return;
@@ -754,7 +776,17 @@ export default function App() {
       try {
         const text = await io.read(vault.localPath ?? '', path);
         onClosePdf();
+        /*
+         * v0.11.11：打开笔记时把 `.base` 表格收起来。
+         *
+         * 主区是三选一（表格 / PDF / 编辑器），而 `setBaseDoc` 只在"关闭"按钮里清过。
+         * 于是从表里点一篇笔记之外的任何入口（侧栏、搜索、快速切换）都表现成
+         * "点了没反应"——其实笔记已经打开了，只是被表格盖着。用户报的就是这个：
+         * 「点击个人空间之后再点击别的文档不会跳转过去，需要手动点右上角的关闭才行」。
+         */
+        setBaseDoc(null);
         setCurrentPath(path);
+        saveLastOpen(vault.id, path); // 下次启动直接回到这一篇
         setDoc(text);
         setRecent((cur) => {
           const next = pushRecent(cur, path);
@@ -804,8 +836,17 @@ export default function App() {
     });
   }, []);
 
-  /** 当前打开的笔记（v0.10.7：顶部标签栏删掉后，useTabs 收成 useOpenNote） */
-  const { open: openFileInTab, remap: remapTabs } = useOpenNote({ openFile });
+  /**
+   * 顶栏标签页（v0.11.11 重新引入；v0.10.7 删掉的是"单独一整行的空栏"，不是标签本身）。
+   * `openFileInTab` 这个名字沿用下来：所有"打开一篇笔记"的入口都走它。
+   */
+  const {
+    tabs: openTabs,
+    open: openFileInTab,
+    close: closeTab,
+    remap: remapTabs,
+    prune: pruneTabs,
+  } = useTabs({ openFile });
 
   /**
    * v0.11.1：点开文件树里既不是笔记也不是 PDF 的东西。
@@ -1969,6 +2010,19 @@ export default function App() {
    */
   const topBarEl = (
     <TopBar
+      tabs={openTabs}
+      onSelectTab={(p) => void openFileInTab(p)}
+      onCloseTab={(p) => {
+        const next = closeTab(p);
+        if (p === currentPath) {
+          if (next) void openFileInTab(next);
+          else {
+            setCurrentPath(null);
+            setDoc(null);
+          }
+        }
+      }}
+      onNewTab={() => void onCreateNote('')}
       currentPath={pdfPath ?? currentPath}
       mode={pdfView || !currentPath ? null : viewMode}
       onToggleMode={() => setViewMode((m) => (m === 'edit' ? 'read' : 'edit'))}
@@ -2110,7 +2164,10 @@ export default function App() {
           syncDisabled={!state.account}
           sortMode={sortMode}
           onSortChange={setSortMode}
-          onOpenPdf={(p) => void onOpenPdf(p)}
+          onOpenPdf={(p) => {
+            setBaseDoc(null); // 主区三选一：打开 PDF 同样要把 .base 表格收起来
+            void onOpenPdf(p);
+          }}
           baseDoc={baseDoc}
           baseNotes={searchDocs}
           onCloseBase={() => setBaseDoc(null)}
@@ -2282,7 +2339,10 @@ export default function App() {
         syncDisabled={!state.account}
         sortMode={sortMode}
         onSortChange={setSortMode}
-        onOpenPdf={(p) => void onOpenPdf(p)}
+        onOpenPdf={(p) => {
+            setBaseDoc(null); // 主区三选一：打开 PDF 同样要把 .base 表格收起来
+            void onOpenPdf(p);
+          }}
         baseDoc={baseDoc}
         baseNotes={searchDocs}
         onCloseBase={() => setBaseDoc(null)}

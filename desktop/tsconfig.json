@@ -18,5 +18,9 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* e2e 跑在 node 里（真服务端），它用 node 内建；给整个 src 打开 node 全局的话，
+     应用代码里误用 process/fs 也会通过类型检查，到浏览器里才炸。
+     它由 tsconfig.node.json 单独检（npm run typecheck:e2e）。 */
+  "exclude": ["src/**/*.e2e.test.ts"]
 }

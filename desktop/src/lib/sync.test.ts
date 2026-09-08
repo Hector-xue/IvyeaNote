@@ -508,3 +508,52 @@ describe('附件同步（PDF / 图片 / .base）', () => {
     expect(report.errors.join()).toMatch(/50MB/);
   });
 });
+
+describe('本机私有目录不进同步（v0.11.11 修的回归）', () => {
+  it('A7 .ivyea/ 与 .trash/ 一个字节都不上传', async () => {
+    const local = new Map<string, Uint8Array>([
+      ['n.md', new TextEncoder().encode('正文')],
+      ['.ivyea/cache/content.json', new TextEncoder().encode('{"index":1}')],
+      ['.trash/删了的.md', new TextEncoder().encode('旧内容')],
+    ]);
+    const blobs = new Map<string, Uint8Array>();
+    const changes: ServerChangeRow[] = [];
+    const meta = newVaultMeta(1, 'v');
+    const report = await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(report.errors).toEqual([]);
+    expect(changes.map((c) => c.path)).toEqual(['n.md']);
+    expect(meta.versions['.ivyea/cache/content.json']).toBeUndefined();
+  });
+
+  it('A8 云端已有的 .ivyea/ 不会落回本地（旧版本推上去的那些）', async () => {
+    const local = new Map<string, Uint8Array>();
+    const blobs = new Map<string, Uint8Array>();
+    const h = await sha256(new TextEncoder().encode('别人的索引缓存'));
+    blobs.set(h, new TextEncoder().encode('别人的索引缓存'));
+    const changes: ServerChangeRow[] = [
+      { seq: 1, path: '.ivyea/cache/content.json', op: 'upsert', version: 1, device_id: 'other', blob_hash: h },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(local.has('.ivyea/cache/content.json')).toBe(false);
+  });
+
+  it('A9 一个附件失败不该让整轮同步停摆（拉取照跑）', async () => {
+    // 本地有一个超大的附件（推不上去），服务端有一篇别人写的笔记（必须拉下来）
+    const local = new Map<string, Uint8Array>([['big.zip', new Uint8Array((50 << 20) + 1)]]);
+    const blobs = new Map<string, Uint8Array>();
+    const h = await sha256(new TextEncoder().encode('远端的正文'));
+    blobs.set(h, new TextEncoder().encode('远端的正文'));
+    const changes: ServerChangeRow[] = [
+      { seq: 1, path: '远端.md', op: 'upsert', version: 1, device_id: 'other', blob_hash: h },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    const report = await run(meta, memBytesIO(local), mockBytesServer(changes, blobs));
+
+    expect(report.errors.join()).toMatch(/50MB/); // 那一个仍然要说清楚
+    expect(new TextDecoder().decode(local.get('远端.md')!)).toBe('远端的正文'); // 其余照常
+    expect(report.pulled).toBe(1);
+  });
+});

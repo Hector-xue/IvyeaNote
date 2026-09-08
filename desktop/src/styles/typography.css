@@ -403,3 +403,73 @@ body {
   color: var(--n-8);
   word-break: break-word;
 }
+
+/* ---- 正文里的颜色（v0.11.11）----
+ *
+ * 用户原话：「我的文档里面只有黑白啊，能不能像 obsidian 那样，该加颜色的地方
+ * 加点颜色，就用我的品牌绿」。
+ *
+ * 上色的位置照 Obsidian 挑，**只给"不是正文"的那些东西**：链接、引用、行内代码、
+ * 高亮、任务勾、列表符号、表头线、分隔线。正文、加粗、标题一律保持墨色——
+ * 满屏绿字会比满屏黑字更难读，那是把"有颜色"当成了目的。
+ *
+ * 颜色一律走 --accent（品牌绿，深色主题里自动换成提亮过的那支），不写死色值。
+ */
+
+/* 引用：左边那道线是品牌绿，字仍是次要墨色 */
+.md-preview blockquote {
+  border-left-color: var(--accent);
+}
+
+/* 行内代码：绿字 + 极淡绿底。整块代码块不上色（那里面有语法高亮的位置） */
+.md-preview code {
+  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.md-preview .code-block pre code {
+  color: var(--n-8); /* 代码块里恢复正常墨色，避免整块绿 */
+  background: transparent;
+}
+/* 代码块头上的语言名用品牌绿：它是标识，不是内容 */
+.md-preview .code-lang {
+  color: var(--accent);
+}
+
+/* ==高亮== 用品牌绿的淡底，而不是浏览器默认那块荧光黄 */
+.md-preview mark {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+/* 任务复选框：勾上之后是品牌绿（浏览器原生控件靠 accent-color） */
+.md-preview input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  margin-right: 6px;
+}
+
+/* 列表符号：Obsidian 的项目符号也是主题色，正文才是墨色 */
+.md-preview li::marker {
+  color: var(--accent);
+}
+
+/* 表头下那条线与分隔线：淡一档的品牌绿，替掉原来的中性灰 */
+.md-preview thead th {
+  border-bottom-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.md-preview hr {
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+/* 内链与外链：本来就是 accent，这里只把下划线也统一到品牌绿 */
+.md-preview a {
+  border-bottom-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.md-preview a.wikilink {
+  color: var(--accent);
+}

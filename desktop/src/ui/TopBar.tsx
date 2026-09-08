@@ -40,6 +40,24 @@ export interface TopBarProps {
    * 空数组 = 不显示这个按钮，绝不摆一个点开是空的菜单。
    */
   noteMenu?: MenuItem[];
+  /**
+   * v0.11.11：标签页。
+   *
+   * v0.10.7 删掉的是**单独占一整行、空荡荡的那条标签栏**，不是"标签"本身；
+   * 用户这次要的是 Obsidian 的形状——标签就长在顶栏里，顺便把这条本来
+   * 有点空的栏填满。所以它占的是原来放面包屑的那块位置，不新增一行。
+   *
+   * 不传 `tabs` 时退回面包屑（移动端与没有标签的场景）。
+   */
+  tabs?: string[];
+  onSelectTab?(path: string): void;
+  onCloseTab?(path: string): void;
+  onNewTab?(): void;
+}
+
+/** 标签上显示的名字：只留文件名、去扩展名（完整路径在 title 里） */
+export function tabLabel(path: string): string {
+  return (path.split('/').pop() ?? path).replace(/\.(md|markdown)$/i, '');
 }
 
 /** `亚马逊/201规划.md` → ['亚马逊', '201规划']；隐藏 .md 后缀 */
@@ -159,20 +177,63 @@ export function TopBar(props: TopBarProps) {
           <RibbonIcon name="sidebar" size={16} />
         </button>
       )}
-      <div className="tb-crumb" data-tauri-drag-region>
-        {parts.length === 0 ? (
-          <span className="tb-empty" data-tauri-drag-region>
-            Ivyea Note
-          </span>
-        ) : (
-          parts.map((p, i) => (
-            <span key={i} className={i === parts.length - 1 ? 'tb-name' : 'tb-dir'} data-tauri-drag-region>
-              {p}
-              {i < parts.length - 1 && <span className="tb-sep">/</span>}
+      {props.tabs && props.tabs.length > 0 ? (
+        /* 标签之间的缝隙、以及右侧余白都要能拖窗口：v0.11.3 丢过一次"顶栏不能拖"，
+           那次用户的原话是「点哪都拖不动」。标签本身是子元素，不受影响。 */
+        <div className="tb-tabs" role="tablist" aria-label="打开的笔记" data-tauri-drag-region>
+          {props.tabs.map((path) => (
+            <div
+              key={path}
+              role="tab"
+              aria-selected={path === props.currentPath}
+              className={`tb-tab ${path === props.currentPath ? 'on' : ''}`}
+              title={path}
+              onMouseDown={(e) => {
+                // 中键关闭：浏览器/编辑器通用手势
+                if (e.button === 1) {
+                  e.preventDefault();
+                  props.onCloseTab?.(path);
+                }
+              }}
+              onClick={() => props.onSelectTab?.(path)}
+            >
+              <span className="tb-tab-name">{tabLabel(path)}</span>
+              <button
+                className="tb-tab-x"
+                aria-label={`关闭 ${tabLabel(path)}`}
+                title="关闭"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onCloseTab?.(path);
+                }}
+              >
+                <RibbonIcon name="close" size={12} />
+              </button>
+            </div>
+          ))}
+          {props.onNewTab && (
+            <button className="tb-tab-new" title="新建笔记" aria-label="新建笔记" onClick={props.onNewTab}>
+              <RibbonIcon name="plus" size={14} />
+            </button>
+          )}
+          <span className="tb-drag" data-tauri-drag-region />
+        </div>
+      ) : (
+        <div className="tb-crumb" data-tauri-drag-region>
+          {parts.length === 0 ? (
+            <span className="tb-empty" data-tauri-drag-region>
+              Ivyea Note
             </span>
-          ))
-        )}
-      </div>
+          ) : (
+            parts.map((p, i) => (
+              <span key={i} className={i === parts.length - 1 ? 'tb-name' : 'tb-dir'} data-tauri-drag-region>
+                {p}
+                {i < parts.length - 1 && <span className="tb-sep">/</span>}
+              </span>
+            ))
+          )}
+        </div>
+      )}
       <div className="tb-actions">
         {props.mode && props.onToggleMode && (
           <button
