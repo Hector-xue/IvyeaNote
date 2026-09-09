@@ -8,10 +8,8 @@
  * 换名字等于把「反链到底有没有真的渲染出来」那条用例弄哑。搬位置不该动契约。
  */
 import { RibbonIcon } from './Icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { extractHeadings } from '../lib/headings';
-import { GraphView } from './GraphView';
-import type { SearchDoc } from '../lib/searchIndex';
 
 const COLLAPSE_KEY = 'ivnote.rightPanel.collapsed';
 
@@ -34,19 +32,6 @@ interface Props {
   /** 由 usePanelWidth 给的宽度（方案 §4.4 可调宽） */
   width?: number;
   onToggle(): void;
-  /**
-   * v0.11.16：**图谱是右栏的第三个标签**，不再是一个整屏的新页面。
-   *
-   * 用户原话：「图谱为什么是一个新的页面？不应该也是在右侧窗口吗」。
-   * 看图谱基本都是为了跳到某一篇，整屏那一版每次都要先退出去才回得到正文。
-   */
-  docs?: SearchDoc[];
-  currentPath?: string | null;
-  onOpenNote?(path: string): void;
-  /** 点「全屏打开」：整屏那一版仍然留着，铺开看全库时它才够用 */
-  onExpandGraph?(): void;
-  /** 外部（ribbon 那颗图谱按钮）要求切到图谱标签；变一次切一次 */
-  graphRequest?: number;
 }
 
 function titleOf(path: string): string {
@@ -57,13 +42,12 @@ export function RightPanel(props: Props) {
   const headings = useMemo(() => extractHeadings(props.doc ?? ''), [props.doc]);
   const out = props.wikiOut ?? [];
   const back = props.wikiBack ?? [];
-  const [tab, setTab] = useState<'outline' | 'links' | 'graph'>('outline');
-
-  // ribbon 上那颗图谱按钮：展开右栏并切到图谱标签
-  const req = props.graphRequest ?? 0;
-  useEffect(() => {
-    if (req > 0) setTab('graph');
-  }, [req]);
+  /*
+   * v0.11.16 一度把图谱做成了这里的第三个标签——**位置理解错了**。
+   * 用户说的"右侧窗口"是侧边栏右边那块中间区域（正文那块），不是最右边这条
+   * 大纲栏。图谱现在开在主区（见 ui/MainView），这里回到大纲/反链两个标签。
+   */
+  const [tab, setTab] = useState<'outline' | 'links'>('outline');
 
   if (props.collapsed) {
     return (
@@ -103,33 +87,13 @@ export function RightPanel(props: Props) {
           >
             反向链接{back.length > 0 ? `（${back.length}）` : ''}
           </button>
-          {props.docs && (
-            <button
-              role="tab"
-              aria-selected={tab === 'graph'}
-              className={`rp-tab ${tab === 'graph' ? 'on' : ''}`}
-              onClick={() => setTab('graph')}
-            >
-              图谱
-            </button>
-          )}
         </div>
         <button className="icon-btn" title="收起" onClick={props.onToggle}>
           <RibbonIcon name="chevron-right" size={16} />
         </button>
       </div>
 
-      <div className={`rp-body ${tab === 'graph' ? 'rp-body-graph' : ''}`}>
-        {tab === 'graph' && props.docs && (
-          <GraphView
-            compact
-            docs={props.docs}
-            currentPath={props.currentPath ?? null}
-            onOpenNote={(p) => props.onOpenNote?.(p)}
-            onClose={() => setTab('outline')}
-            onExpand={props.onExpandGraph}
-          />
-        )}
+      <div className="rp-body">
         {tab === 'outline' &&
           (headings.length === 0 ? (
           <p className="rp-empty">这篇还没有标题</p>

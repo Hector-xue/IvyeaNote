@@ -480,36 +480,39 @@ console.log('  · 图谱前状态 =', JSON.stringify(await evaluate(`(() => ({
   bodyText: (document.body.innerText || '').slice(0, 220),
 }))()`)));
 /*
- * v0.11.16：ribbon 那颗按钮现在把图谱开在**右栏**，整屏那一版退到面板里的
- * 「全屏打开」。这条老用例守的东西没变——铺开之后要有面积、有搜索——
- * 只是入口多了一跳。
+ * v0.11.16（修正）：图谱开在**主区**——用户纠正过一次：「我说的图谱放在右侧窗口
+ * 不是最右侧大纲这啊，是侧边栏的右侧，也就是中间空白的这里」。
+ * 所以它既不该是盖住整个窗口的新页面，也不该挤在 248px 的大纲栏里。
  */
 await evaluate(`(() => {
   const b = [...document.querySelectorAll('.ribbon .ribbon-btn')].find(x => x.getAttribute('aria-label') === '图谱');
   b?.click(); return !!b;
 })()`);
-await new Promise((r) => setTimeout(r, 900));
-await evaluate(`(() => {
-  const b = document.querySelector('.right-panel [aria-label="全屏打开"]');
-  b?.click(); return !!b;
-})()`);
 await new Promise((r) => setTimeout(r, 1500));
 const graph = await evaluate(`(() => {
-  const g = document.querySelector('.graph-full');
-  if (!g) return null;
+  const g = document.querySelector('.graph-pane');
+  if (!g) return { present: false, full: !!document.querySelector('.graph-full') };
   const r = g.getBoundingClientRect();
+  const pane = document.querySelector('.editor-pane').getBoundingClientRect();
+  const side = document.querySelector('.sidebar').getBoundingClientRect();
   return {
-    fullWidth: Math.round(r.width), fullHeight: Math.round(r.height),
+    present: true,
+    width: Math.round(r.width),
+    // 左边界要落在侧栏右边（= 主区那块），而不是 0（整屏）
+    left: Math.round(r.left),
+    sideRight: Math.round(side.right),
+    inPane: Math.abs(r.left - pane.left) <= 2 && Math.abs(r.width - pane.width) <= 2,
+    sidebarVisible: side.width > 100,
+    inRightPanel: !!document.querySelector('.right-panel .graph-pane'),
     nodes: g.querySelectorAll('.graph-node').length,
     hasSearch: !!g.querySelector('.graph-search'),
-    hasEmpty: !!g.querySelector('.graph-empty'),
-    hint: g.querySelector('.graph-hint')?.textContent ?? null,
   };
 })()`);
-check('从右栏点「全屏打开」，图谱铺满窗口且有搜索（不再是 720px 弹窗）',
-  graph && graph.fullWidth >= 1300 && graph.hasSearch, graph);
+check('图谱开在主区（侧栏右边那块），既不盖住整屏、也不挤进最右边的大纲栏',
+  graph.present && graph.inPane && graph.sidebarVisible && !graph.inRightPanel &&
+  graph.left > graph.sideRight - 4 && graph.width >= 600 && graph.hasSearch, graph);
 await shot('graph.png');
-await evaluate(`(() => { const b=[...document.querySelectorAll('.graph-toolbar button')].pop(); b?.click(); return true })()`);
+await evaluate(`(() => { const b = document.querySelector('.graph-toolbar [aria-label="关闭"]'); b?.click(); return true })()`);
 await new Promise((r) => setTimeout(r, 500));
 
 // ---------- 7. 自绘边框：非 Tauri 环境必须不渲染 ----------
@@ -1150,20 +1153,23 @@ await new Promise((r) => setTimeout(r, 2600));
   await send('Page.reload');
   await new Promise((r) => setTimeout(r, 2500));
 
-  // --- 标签页：打开两篇，切换、关闭 ---
-  const openTwo = await evaluate(`(() => {
-    const names = [...document.querySelectorAll('.ft-file-name')];
-    const a = names.find(x => x.textContent.includes('配色样张'));
-    const b = names.find(x => x.textContent.includes('第二篇'));
-    a?.closest('.ft-file')?.click();
-    return !!a && !!b;
-  })()`);
-  await new Promise((r) => setTimeout(r, 800));
-  await evaluate(`(() => {
-    const b = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('第二篇'));
-    b?.closest('.ft-file')?.click(); return true })()`);
-  await new Promise((r) => setTimeout(r, 800));
-  const tabs = await evaluate(`(() => {
+  /*
+   * v0.11.16：**从侧栏点文件不再越点越多标签**（Obsidian 语义）。
+   * 用户原话：「每点开一个文件就自动多一个标签，点开的多了就挤满了……obsidian 的
+   * 在同一个标签下面从侧边栏切换文件就不新增标签，只有点顶部标签旁边的 + 号才会
+   * 新增标签页，但是我这个 + 号是新建文件」。
+   */
+  const clickFile = async (name, ctrl = false) => {
+    await evaluate(`(() => {
+      const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes(${JSON.stringify(name)}));
+      const row = el?.closest('.ft-file');
+      row?.scrollIntoView({ block: 'center' });
+      row?.dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: ${ctrl} }));
+      return !!row;
+    })()`);
+    await new Promise((r) => setTimeout(r, 800));
+  };
+  const tabState = () => evaluate(`(() => {
     const els = [...document.querySelectorAll('.tb-tab')];
     return {
       count: els.length,
@@ -1173,11 +1179,63 @@ await new Promise((r) => setTimeout(r, 2600));
       hasNew: !!document.querySelector('.tb-tab-new'),
     };
   })()`);
-  check('顶栏里出现标签页，两篇都在，当前那篇是高亮的（不新增一整行）',
-    openTwo && tabs.inTopBar && tabs.hasNew && tabs.active === '第二篇' &&
-    tabs.labels.includes('配色样张') && tabs.labels.includes('第二篇'), tabs);
 
-  // 点回第一个标签要真的切过去
+  await clickFile('配色样张');
+  const oneTab = await tabState();
+  await clickFile('第二篇');
+  const stillOne = await tabState();
+  check('从侧栏连点两篇：标签**没有**变多，当前标签换成了新的那篇',
+    stillOne.count === oneTab.count && stillOne.active === '第二篇' &&
+    !stillOne.labels.includes('配色样张'), { oneTab, stillOne });
+
+  // Ctrl+点 = 另起一个标签（中键同理，见 FileTree 的 onAuxClick）
+  await clickFile('配色样张', true);
+  const twoTabs = await tabState();
+  check('Ctrl 点侧栏才另起一个标签（两篇都在，当前是刚点的那篇）',
+    twoTabs.count === stillOne.count + 1 && twoTabs.active === '配色样张' &&
+    twoTabs.labels.includes('第二篇'), twoTabs);
+
+  // 顶栏的 + 号：新标签页，不是新建文件
+  const beforeNew = await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [n, h] of root.entries()) {
+      if (h.kind !== 'directory' || !n.startsWith('vault-')) continue;
+      let c = 0;
+      for await (const [f] of h.entries()) c++;
+      return c;
+    }
+    return -1;
+  })()`);
+  await evaluate(`(() => { document.querySelector('.tb-tab-new')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const afterNew = await tabState();
+  const filesAfterNew = await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [n, h] of root.entries()) {
+      if (h.kind !== 'directory' || !n.startsWith('vault-')) continue;
+      let c = 0;
+      for await (const [f] of h.entries()) c++;
+      return c;
+    }
+    return -1;
+  })()`);
+  check('顶栏的 + 是"新标签页"：多一个空白标签、且**没有**顺手建出一个文件',
+    afterNew.count === twoTabs.count + 1 && afterNew.active === '新标签页' &&
+    filesAfterNew === beforeNew, { afterNew, beforeNew, filesAfterNew });
+
+  /*
+   * 在空白标签里打开一篇**还没开着**的笔记：就地装进去，不再多一个。
+   * 点一篇"已经开着"的会切到它那个标签（和 Obsidian 一致），那不是这条要验的事。
+   */
+  await clickFile('大纲用');
+  const filled = await tabState();
+  check('空白标签里点一篇没开过的笔记：就地装进去，标签数不变',
+    filled.count === afterNew.count && filled.active === '大纲用' &&
+    !filled.labels.includes('新标签页'), filled);
+  const tabs = filled;
+  const openTwo = true;
+
+  // 点回另一个标签要真的切过去
   await evaluate(`(() => {
     const t = [...document.querySelectorAll('.tb-tab')].find(e => e.textContent.includes('配色样张'));
     t?.click(); return true })()`);
@@ -1200,6 +1258,36 @@ await new Promise((r) => setTimeout(r, 2600));
   check('关掉当前标签后落到相邻那一篇上（不是掉回空白页）',
     afterClose.active !== null && afterClose.hasEditor, afterClose);
   await shot('tabs.png');
+
+  /*
+   * v0.11.16：**删掉的文件要自己从标签栏消失。**
+   * 用户原话：「已经删除的文件为什么依然存在没有自动从顶部标签栏移除？点击的时候
+   * 才有提示」。此前 pruneTabs 每个库只在启动时跑一次，此后不管谁删的都留着。
+   */
+  await clickFile('第二篇', true);
+  const beforeDel = await tabState();
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('第二篇'));
+    const row = el?.closest('.ft-file');
+    row?.scrollIntoView({ block: 'center' });
+    row?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 60, clientY: 200 }));
+    return !!row;
+  })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  await evaluate(`(() => {
+    const item = [...document.querySelectorAll('.ctx-item')].find(b => b.querySelector('.ctx-label')?.textContent === '删除');
+    item?.click(); return !!item })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  await evaluate(`(() => {
+    const ok = [...document.querySelectorAll('.dlg-mask button')].find(b => (b.textContent ?? '').includes('删除'));
+    ok?.click(); return !!ok })()`);
+  await new Promise((r) => setTimeout(r, 1600));
+  const afterDel = await tabState();
+  check('删掉一篇笔记，它的标签自己就没了（不用等点开才报错）',
+    beforeDel.labels.includes('第二篇') && !afterDel.labels.includes('第二篇'),
+    { beforeDel, afterDel });
+  // 删的正好是当前那篇：把状态恢复成"开着一篇"，后面几条量的是标签与页面的对齐
+  await clickFile('配色样张');
 
   /*
    * v0.11.14：**标签要和它底下那一页连在一起**（用户点名"参考浏览器和 obsidian"）。
@@ -1403,21 +1491,6 @@ await new Promise((r) => setTimeout(r, 2600));
   check('「回收站」也是左栏面板：有计数/清空的头部，空的时候说人话',
     trash.inSidebar && !trash.modal && (trash.rows > 0 || (trash.empty ?? '').includes('回收站')), trash);
   await shot('pane-trash.png');
-
-  // --- 图谱：右栏的一个标签，不是整屏新页面 ---
-  await clickRibbon('图谱');
-  const graph = await evaluate(`(() => ({
-    full: !!document.querySelector('.graph-full'),
-    inRight: !!document.querySelector('.right-panel .graph-panel'),
-    tabs: [...document.querySelectorAll('.rp-tab')].map(x => x.textContent.trim()),
-    active: document.querySelector('.rp-tab.on')?.textContent?.trim() ?? null,
-    canvasW: Math.round(document.querySelector('.right-panel .graph-canvas')?.getBoundingClientRect().width ?? 0),
-    hasExpand: !!document.querySelector('.right-panel [aria-label="全屏打开"]'),
-  }))()`);
-  check('图谱在右栏里（不再是盖住整个窗口的新页面），并留一颗「全屏打开」',
-    !graph.full && graph.inRight && graph.active === '图谱' && graph.canvasW > 80 && graph.hasExpand,
-    graph);
-  await shot('pane-graph.png');
 
   // --- 日记：点一下就该有今天那一篇 ---
   await clickRibbon('今日日记');

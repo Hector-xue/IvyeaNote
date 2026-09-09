@@ -5,7 +5,7 @@ import { MainView, type SidebarTab } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
-import { useTabs } from './hooks/useTabs';
+import { useTabs, NEW_TAB } from './hooks/useTabs';
 import { useCommands } from './hooks/useCommands';
 import { useAttachments } from './hooks/useAttachments';
 import { useObsidianImport } from './hooks/useObsidianImport';
@@ -28,7 +28,6 @@ import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette } from './ui/Palette';
 import { TagPanel } from './ui/TagPanel';
 import { MoveDialog } from './ui/MoveDialog';
-import { GraphView } from './ui/GraphView';
 import { useNoteIndex } from './lib/noteIndex';
 import {
   applyAppearance,
@@ -860,6 +859,7 @@ export default function App() {
          * 「点击个人空间之后再点击别的文档不会跳转过去，需要手动点右上角的关闭才行」。
          */
         setBaseDoc(null);
+        setShowGraph(false); // 主区四选一：从图谱里点一篇笔记，图谱就该让位
         setCurrentPath(path);
         saveLastOpen(vault.id, path); // 下次启动直接回到这一篇
         setDoc(text);
@@ -869,11 +869,31 @@ export default function App() {
           return next;
         });
       } catch (e) {
-        toast(`打开失败：${errText(e)}`, 'error');
+        /*
+         * v0.11.16：**打不开就把这个标签摘掉**，别让它继续挂在顶栏上。
+         *
+         * 用户原话：「已经删除的文件为什么依然存在没有自动从顶部标签栏移除？
+         * 点击的时候才有提示」。文件可能是在别处删的（Obsidian、另一台设备同步下来
+         * 的删除），那种情况下面那条 effect 会兜住；这里管的是"点了才发现没了"——
+         * 报一次原因，同时把它清掉，而不是每点一次报一次。
+         */
+        const gone = !(await io.exists(vault.localPath ?? '', path).catch(() => true));
+        if (gone) {
+          pruneTabsRef.current?.(path);
+          toast(`「${titleOfPath(path)}」已经不在库里了，已从标签栏移除`, 'error');
+        } else {
+          toast(`打开失败：${errText(e)}`, 'error');
+        }
       }
     },
     [vault, io, toast, onClosePdf]
   );
+
+  /*
+   * `openFile` 定义在 useTabs 之前（useTabs 要拿它当依赖），所以"关掉某个标签"
+   * 只能通过 ref 回填。直接把 closeTab 提到上面会绕成循环依赖。
+   */
+  const pruneTabsRef = useRef<((path: string) => void) | null>(null);
 
   /** E9：在右侧窗格打开一篇笔记（不传则复制当前这篇，即「同文档双视图」） */
   const openSplit = useCallback(
@@ -918,10 +938,33 @@ export default function App() {
   const {
     tabs: openTabs,
     open: openFileInTab,
+    openBlank: openBlankTab,
+    activeNote: activeTab,
     close: closeTab,
     remap: remapTabs,
     prune: pruneTabs,
   } = useTabs({ openFile });
+
+  /*
+   * v0.11.16：**标签栏跟着文件列表走。**
+   *
+   * 启动时那次 `pruneTabs` 每个库只跑一次（restoredFor 守卫），所以此后不管是
+   * 自己删的、别处删的、还是同步拉下来的删除，标签都会一直挂着，直到点它才报错。
+   * 这里让它跟着每一次文件刷新对账。
+   *
+   * `allFiles.length === 0` 时**什么都不做**：换库/初次加载的一瞬间列表是空的，
+   * 照着清会把所有标签一次抹掉——那是比留一个死标签严重得多的事故。
+   */
+  useEffect(() => {
+    if (!vault || allFiles.length === 0) return;
+    pruneTabs(allFiles);
+  }, [vault, allFiles, pruneTabs]);
+
+  useEffect(() => {
+    pruneTabsRef.current = (path: string) => {
+      closeTab(path);
+    };
+  }, [closeTab]);
 
   /**
    * v0.11.1：点开文件树里既不是笔记也不是 PDF 的东西。
@@ -1450,8 +1493,6 @@ export default function App() {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files');
   /** 点标签面板里的标签 → 灌进侧栏搜索框（带序号，连点两次也要重搜） */
   const [sideSearchSeed, setSideSearchSeed] = useState<{ text: string; n: number } | null>(null);
-  /** ribbon 那颗图谱按钮：加一次，右栏就展开并切到图谱标签 */
-  const [graphRequest, setGraphRequest] = useState(0);
 
   /**
    * v0.10.5：内置同步服务端。
@@ -2206,18 +2247,34 @@ export default function App() {
     <TopBar
       quick={quickActions}
       tabs={openTabs}
-      onSelectTab={(p) => void openFileInTab(p)}
+      /* 高亮哪一个标签由 useTabs 说了算：空白标签页没有路径，用 currentPath 认不出它 */
+      activeTab={activeTab}
+      onSelectTab={(p) => {
+        // 空白标签页没有文件可读：只是把主区清空（显示"新标签页"那一屏）
+        if (p === NEW_TAB) {
+          setCurrentPath(null);
+          setDoc(null);
+          openBlankTab();
+          return;
+        }
+        void openFileInTab(p);
+      }}
       onCloseTab={(p) => {
         const next = closeTab(p);
-        if (p === currentPath) {
-          if (next) void openFileInTab(next);
+        if (p === currentPath || (p === NEW_TAB && currentPath === null)) {
+          if (next && next !== NEW_TAB) void openFileInTab(next);
           else {
             setCurrentPath(null);
             setDoc(null);
           }
         }
       }}
-      onNewTab={() => void onCreateNote('')}
+      /*
+       * v0.11.16：`+` 是**新标签页**，不是新建文件（用户点名：「obsidian 的
+       * 只有点顶部标签旁边的 + 号才会新增标签页，但是我这个 + 号是新建文件」）。
+       * 新建笔记在左上角那一格里，另有其人。
+       */
+      onNewTab={openBlankTab}
       currentPath={pdfPath ?? currentPath}
       mode={pdfView || !currentPath ? null : viewMode}
       onToggleMode={() => setViewMode((m) => (m === 'edit' ? 'read' : 'edit'))}
@@ -2376,6 +2433,10 @@ export default function App() {
           onOpenPath={onOpenLinkPath}
           onOpenSettings={() => setShowSettings(true)}
           onOpenDaily={() => void openDailyNote()}
+          trashList={trash.list}
+          onOpenTrash={() => void trash.reload()}
+          onTrashRestore={(p) => void trash.restore(p)}
+          onTrashPurge={(p) => void trash.purge(p)}
         />
         {/* 标签面板原本整段写在桌面分支之后，手机上根本不渲染——补入口就得连它一起搬 */}
         {showTagPanel && (
@@ -2521,7 +2582,7 @@ export default function App() {
         doc={doc}
         syncing={syncing}
         lastReport={lastReport}
-        onSelect={(p) => void openFileInTab(p)}
+        onSelect={(p, newTab) => void openFileInTab(p, { newTab })}
         onEdit={onEdit}
         onCreateNote={() => void onCreateNote('')}
         onNewFolderNote={(folder) => void onCreateNote(folder)}
@@ -2588,11 +2649,10 @@ export default function App() {
         onOpenSettings={() => setShowSettings(true)}
         searchDocs={searchDocs}
         onPasteImage={onPasteImage}
-        /* 图谱改到右栏：这颗按钮只负责把右栏展开并切过去（见 ui/RightPanel） */
-        graphOpen={graphRequest > 0}
-        onOpenGraph={() => setGraphRequest((n) => n + 1)}
-        graphRequest={graphRequest}
-        onExpandGraph={() => setShowGraph(true)}
+        /* 图谱开在主区（和 PDF/.base 同一块地方）；ribbon 那颗按钮是开关 */
+        graphOpen={showGraph}
+        onOpenGraph={() => setShowGraph((v) => !v)}
+        onCloseGraph={() => setShowGraph(false)}
         onOpenWiki={(t) => void onOpenWiki(t)}
         onOpenPath={onOpenLinkPath}
         wikiOut={wikiLinks.out}
@@ -2630,17 +2690,7 @@ export default function App() {
           onClose={closePalette}
         />
       )}
-      {showGraph && (
-        <GraphView
-          docs={searchDocs}
-          currentPath={currentPath}
-          onOpenNote={(p) => {
-            setShowGraph(false);
-            void onOpenWiki(p.replace(/\.md$/i, ''));
-          }}
-          onClose={() => setShowGraph(false)}
-        />
-      )}
+      {/* 图谱不再是盖住全屏的一层：它开在主区里（见 ui/MainView 的 graphOpen） */}
       {/* 标签同样搬进了左栏面板；手机端那张 TagPanel 弹层保留（抽屉里没有 ribbon） */}
       {pairEl}
       {conflictEl}

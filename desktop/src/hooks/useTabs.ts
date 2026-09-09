@@ -20,7 +20,7 @@
  * 3. **关掉当前标签之后该激活谁**：Obsidian 是激活右边那个，没有右边就左边。
  *    随便挑一个的话，用户每关一次都要重新找位置。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const TABS_KEY = 'ivnote.tabs';
 const ACTIVE_KEY = 'ivnote.activeTab';
@@ -32,13 +32,30 @@ export interface TabsDeps {
   openFile(path: string): Promise<void>;
 }
 
+/**
+ * **空白标签页**的哨兵（v0.11.16）。
+ *
+ * 用户原话：「obsidian 的在同一个标签下面从侧边栏切换文件就不新增标签，只有点顶部
+ * 标签旁边的 + 号才会新增标签页，但是我这个 + 号是新建文件」。
+ * 所以要有"开着一个还没装东西的标签"这个状态；空串不可能是任何一篇笔记的路径，
+ * 拿它当哨兵最省事，也不会和真实路径撞车。
+ */
+export const NEW_TAB = '';
+
 export interface Tabs {
-  /** 打开着的笔记路径，按打开顺序 */
+  /** 打开着的笔记路径，按打开顺序；空串表示一个还没装东西的新标签页 */
   tabs: string[];
   /** 当前这篇；null＝没开 */
   activeNote: string | null;
-  /** 打开（已开着就只是切过去） */
-  open(path: string): Promise<void>;
+  /**
+   * 打开一篇笔记。
+   *
+   * **默认在当前标签里换掉**（Obsidian 就是这样：从侧栏点一篇篇看，标签栏不会
+   * 越点越长）。要另起一个标签得显式要求——顶栏的 `+`、Ctrl/中键点侧栏。
+   */
+  open(path: string, opts?: { newTab?: boolean }): Promise<void>;
+  /** 开一个空白标签页并切过去（顶栏那个 `+`） */
+  openBlank(): void;
   /** 关掉一个标签；返回关完之后该激活谁（null＝一个都不剩） */
   close(path: string): string | null;
   /** 路径变了（移动/重命名）→ 同步更新，避免记着一个不存在的文件 */
@@ -77,6 +94,12 @@ export function useTabs(deps: TabsDeps): Tabs {
   const [activeNote, setActiveNote] = useState<string | null>(() =>
     localStorage.getItem(ACTIVE_KEY)
   );
+  /*
+   * `open` 要知道"现在激活的是哪个标签"（替换它），但不能把 activeNote 放进依赖：
+   * 那样每切一次笔记 `open` 就换一个引用，凡是把它放进依赖的 effect 都会重跑。
+   */
+  const activeRef = useRef(activeNote);
+  activeRef.current = activeNote;
 
   useEffect(() => {
     try {
@@ -89,13 +112,32 @@ export function useTabs(deps: TabsDeps): Tabs {
   }, [tabs, activeNote]);
 
   const open = useCallback(
-    async (path: string) => {
-      setTabs((cur) => (cur.includes(path) ? cur : [...cur, path].slice(-MAX_TABS)));
+    async (path: string, opts?: { newTab?: boolean }) => {
+      const newTab = opts?.newTab ?? false;
+      setTabs((cur) => {
+        if (cur.includes(path)) return cur; // 已经开着：只是切过去
+        if (newTab || cur.length === 0) return [...cur, path].slice(-MAX_TABS);
+        /*
+         * 默认**替换当前那个标签**。找不到当前标签（比如刚启动还没激活过）就追加，
+         * 否则会出现"点了一篇，标签栏里却没有它"。
+         */
+        const i = activeRef.current === null ? -1 : cur.indexOf(activeRef.current);
+        if (i < 0) return [...cur, path].slice(-MAX_TABS);
+        const next = [...cur];
+        next[i] = path;
+        return next;
+      });
       setActiveNote(path);
       await openFile(path);
     },
     [openFile]
   );
+
+  /** 顶栏的 `+`：开一个空白标签页。已经有一个空白页就切过去，不摞第二个 */
+  const openBlank = useCallback(() => {
+    setTabs((cur) => (cur.includes(NEW_TAB) ? cur : [...cur, NEW_TAB].slice(-MAX_TABS)));
+    setActiveNote(NEW_TAB);
+  }, []);
 
   const close = useCallback(
     (path: string): string | null => {
@@ -124,9 +166,11 @@ export function useTabs(deps: TabsDeps): Tabs {
 
   const prune = useCallback((existing: readonly string[]) => {
     const alive = new Set(existing);
-    setTabs((cur) => (cur.every((p) => alive.has(p)) ? cur : cur.filter((p) => alive.has(p))));
-    setActiveNote((cur) => (cur && !alive.has(cur) ? null : cur));
+    // 空白标签页不对应任何文件，别把它一起清掉
+    const keep = (p: string) => p === NEW_TAB || alive.has(p);
+    setTabs((cur) => (cur.every(keep) ? cur : cur.filter(keep)));
+    setActiveNote((cur) => (cur !== null && !keep(cur) ? null : cur));
   }, []);
 
-  return { tabs, activeNote, open, close, remap, prune };
+  return { tabs, activeNote, open, openBlank, close, remap, prune };
 }

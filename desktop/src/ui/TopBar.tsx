@@ -50,6 +50,11 @@ export interface TopBarProps {
    * 不传 `tabs` 时退回面包屑（移动端与没有标签的场景）。
    */
   tabs?: string[];
+  /**
+   * 当前高亮哪个标签。默认跟着 `currentPath`，但**空白标签页没有路径**
+   * （v0.11.16 的 `+` 开出来的那种），所以要单独给一个。
+   */
+  activeTab?: string | null;
   onSelectTab?(path: string): void;
   onCloseTab?(path: string): void;
   onNewTab?(): void;
@@ -226,13 +231,16 @@ export function TopBar(props: TopBarProps) {
         /* 标签之间的缝隙、以及右侧余白都要能拖窗口：v0.11.3 丢过一次"顶栏不能拖"，
            那次用户的原话是「点哪都拖不动」。标签本身是子元素，不受影响。 */
         <div className="tb-tabs" role="tablist" aria-label="打开的笔记" data-tauri-drag-region>
-          {props.tabs.map((path) => (
+          {props.tabs.map((path) => {
+            const active = (props.activeTab ?? props.currentPath) === path;
+            const label = path === '' ? '新标签页' : tabLabel(path);
+            return (
             <div
               key={path}
               role="tab"
-              aria-selected={path === props.currentPath}
-              className={`tb-tab ${path === props.currentPath ? 'on' : ''}`}
-              title={path}
+              aria-selected={active}
+              className={`tb-tab ${active ? 'on' : ''}`}
+              title={path || '新标签页'}
               onMouseDown={(e) => {
                 // 中键关闭：浏览器/编辑器通用手势
                 if (e.button === 1) {
@@ -242,10 +250,10 @@ export function TopBar(props: TopBarProps) {
               }}
               onClick={() => props.onSelectTab?.(path)}
             >
-              <span className="tb-tab-name">{tabLabel(path)}</span>
+              <span className="tb-tab-name">{label}</span>
               <button
                 className="tb-tab-x"
-                aria-label={`关闭 ${tabLabel(path)}`}
+                aria-label={`关闭 ${label}`}
                 title="关闭"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -255,9 +263,10 @@ export function TopBar(props: TopBarProps) {
                 <RibbonIcon name="close" size={12} />
               </button>
             </div>
-          ))}
+            );
+          })}
           {props.onNewTab && (
-            <button className="tb-tab-new" title="新建笔记" aria-label="新建笔记" onClick={props.onNewTab}>
+            <button className="tb-tab-new" title="新标签页" aria-label="新标签页" onClick={props.onNewTab}>
               <RibbonIcon name="plus" size={14} />
             </button>
           )}

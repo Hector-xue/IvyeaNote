@@ -103,7 +103,12 @@ interface Props {
   currentPath: string | null;
   collapsed: Set<string>;
   onToggleDir(dir: string): void;
-  onSelectFile(path: string): void;
+  /**
+   * 打开一个文件。
+   * `newTab` 为真表示用户要求**另起一个标签**（Ctrl/⌘ 点击、中键点击）——
+   * 与 Obsidian 一致：普通单击在当前标签里换，不会越点标签越多。
+   */
+  onSelectFile(path: string, newTab?: boolean): void;
   onNewNoteIn(folder: string): void;
   onNewFolderIn(folder: string): void;
   onDeleteFile(path: string): void;
@@ -284,7 +289,13 @@ export function FileTree(props: Props) {
         draggable={canDrag}
         onDragStart={(e) => startDrag(e, node.path, false)}
         onDragEnd={endDrag}
-        onClick={() => props.onSelectFile(node.path)}
+        onClick={(e) => props.onSelectFile(node.path, e.ctrlKey || e.metaKey)}
+        onAuxClick={(e) => {
+          // 中键：浏览器/编辑器通用的"在新标签打开"
+          if (e.button !== 1) return;
+          e.preventDefault();
+          props.onSelectFile(node.path, true);
+        }}
         onContextMenu={(e) => {
           if (!props.onContextMenu) return;
           e.preventDefault();

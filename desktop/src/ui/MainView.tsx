@@ -8,6 +8,7 @@ import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './
 import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
+import { GraphView } from './GraphView';
 import { TagPane, TrashPane } from './SidePanes';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
@@ -89,7 +90,8 @@ interface Props {
   doc: string | null;
   syncing: boolean;
   lastReport: SyncReport | null;
-  onSelect(path: string): void;
+  /** 打开一篇笔记。newTab=true 表示另起一个标签（Ctrl/中键点侧栏、右键"在新标签打开"） */
+  onSelect(path: string, newTab?: boolean): void;
   onEdit(path: string, text: string): void;
   onCreateNote(): void;
   onNewFolderNote(folder: string): void;
@@ -189,10 +191,8 @@ interface Props {
   searchSeed?: { text: string; n: number } | null;
   /** v0.11.16：图谱现在在右栏；ribbon 那颗按钮只负责把它叫出来 */
   graphOpen?: boolean;
-  /** 序号，加一次右栏就切到图谱标签（转发给 RightPanel） */
-  graphRequest?: number;
-  /** 图谱面板里的「全屏打开」——整屏那一版仍然留着 */
-  onExpandGraph?(): void;
+  /** 关掉图谱，回到刚才那篇笔记 */
+  onCloseGraph?(): void;
   /** v0.11.16：今日日记。能力早就有（lib/daily + useTemplates），此前只有命令面板能到 */
   onOpenDaily?(): void;
   /** v0.6.1 H6: add-device pairing */
@@ -231,8 +231,8 @@ export function MainView(props: Props) {
    * 侧栏、右键菜单的「打开」都走它——两处各写一份就会长歪（这个仓库的老毛病）。
    */
   const openTreeFile = useCallback(
-    (path: string) => {
-      if (/\.(md|markdown)$/i.test(path)) props.onSelect(path);
+    (path: string, newTab?: boolean) => {
+      if (/\.(md|markdown)$/i.test(path)) props.onSelect(path, newTab);
       else if (/\.pdf$/i.test(path)) props.onOpenPdf(path);
       else props.onOpenAttachment?.(path);
     },
@@ -304,21 +304,6 @@ export function MainView(props: Props) {
    * 持有、还能拖，除了一个 CSS 变量没有别的办法把它交出去。
    * 收起时写 0：那一格连同里面的按钮一起消失，正是用户要的"一起收起来"。
    */
-  /*
-   * ribbon 那颗图谱按钮：右栏收着的时候要先把它展开，否则"点了没反应"——
-   * 这正是把图谱从整屏搬进右栏最容易漏掉的一步。
-   */
-  const graphReq = props.graphRequest ?? 0;
-  useEffect(() => {
-    if (graphReq > 0 && rightCollapsed) {
-      setRightCollapsed(false);
-      saveRightPanelCollapsed(false);
-    }
-    // rightCollapsed 故意不进依赖：只在"又点了一次图谱"时才展开，
-    // 否则用户手动收起右栏会被这条 effect 立刻顶回去
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [graphReq]);
-
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
@@ -365,6 +350,7 @@ export function MainView(props: Props) {
           ]
         : [
             { id: 'open', label: '打开', icon: 'file', run: () => openTreeFile(node.path) },
+            { id: 'open-tab', label: '在新标签打开', icon: 'plus', run: () => openTreeFile(node.path, true) },
             ...(props.onOpenSplit
               ? ([{ id: 'split', label: '在右侧打开', icon: 'sidebar', run: () => props.onOpenSplit?.(node.path) }] as MenuAnchor['items'])
               : []),
@@ -603,7 +589,20 @@ export function MainView(props: Props) {
             再写一遍就是重复。PDF 预览时仍需要一行来放「关闭预览」。 */}
         {/* v0.11.0：PDF 自己带工具条（页码/缩放/关闭），不再需要上面那行面包屑——
             它原本打印的还是 `blob:tauri://…` 那一长串，而不是文件名 */}
-        {props.baseDoc ? (
+        {/*
+          v0.11.16：**图谱开在主区**，和 PDF / `.base` 一样占据编辑区那块。
+          上一版把它放进了最右边那条大纲栏——用户纠正：「我说的图谱放在右侧窗口
+          不是最右侧大纲这啊，是侧边栏的右侧，也就是中间空白的这里」。
+          主区本来就是"当前在看什么"的位置，图谱是其中一种。
+        */}
+        {props.graphOpen ? (
+          <GraphView
+            docs={props.searchDocs ?? []}
+            currentPath={props.currentPath}
+            onOpenNote={(p) => props.onSelect(p)}
+            onClose={() => props.onCloseGraph?.()}
+          />
+        ) : props.baseDoc ? (
           <BaseView
             path={props.baseDoc.path}
             text={props.baseDoc.text}
@@ -811,11 +810,6 @@ export function MainView(props: Props) {
       <RightPanel
         width={rightW.width}
         doc={props.doc}
-        docs={props.searchDocs}
-        currentPath={props.currentPath}
-        onOpenNote={(p) => props.onSelect(p)}
-        graphRequest={props.graphRequest}
-        onExpandGraph={props.onExpandGraph}
         wikiOut={props.wikiOut}
         wikiBack={props.wikiBack}
         onOpenWiki={props.onOpenWiki}
