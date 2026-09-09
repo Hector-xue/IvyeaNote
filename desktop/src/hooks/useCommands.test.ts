@@ -28,6 +28,8 @@ function makeActions(over: Partial<CommandActions> = {}): CommandActions {
     onAddDevice: null,
     onOpenTrash: null,
     onOpenTags: null,
+    onTidy: null,
+    onAi: null,
     ...over,
   };
 }

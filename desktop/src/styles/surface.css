@@ -1883,11 +1883,7 @@ button.st-item:hover {
   min-height: 44px;
   gap: 0;
 }
-/* 「大纲」这两个字要在把手正下方居中，不然它会孤零零挂在卡片外的左上角 */
-.m-outline2 .m-sheet2-title {
-  text-align: center;
-  padding-bottom: 10px;
-}
+/* v0.11.18：标题一律在把手正下方居中——四张弹层同一套头部，不再一张居中一张靠左 */
 /*
  * 分隔线从内容处起画。底部菜单缩进 50px 是为了避开左边那栏图标，
  * 而大纲没有图标——照抄那个数值会让线看起来无缘无故往里缩一块。
@@ -2387,4 +2383,243 @@ button.st-item:hover {
 }
 .m-bottom-wrap {
   padding-bottom: max(4px, calc(env(safe-area-inset-bottom) / 2));
+}
+
+/* ============================================================ v0.11.18
+   手机端底部弹层：去掉所有分隔线，分组交给留白。 */
+/*
+ * 用户原话：「这种弹窗为什么这么多横线还长短不一，好难看」。数一下截图：
+ * 组内那条从文字处起画的缩进线、组间那条通栏线、大纲下面那条——一屏三种长度。
+ *
+ * 根子在于**让线去做分组的活**：线一旦长短不一就碎，长度统一了又把一张纸
+ * 切成好几段。iOS 的 context menu、Obsidian 移动端菜单都是一根线不画，
+ * 靠间距分组——52px 的行高加上对齐的图标栏，本来就读得清"这是两行"。
+ */
+.m-sheet2-item + .m-sheet2-item::before {
+  content: none;
+}
+.m-sheet2-group + .m-sheet2-group {
+  border-top: none;
+  margin-top: 14px;
+  padding-top: 0;
+}
+/* 危险动作与常规动作再拉开一点：删除和"移动到…"之间不该是等距的 */
+.m-sheet2-group + .m-sheet2-group:last-child {
+  margin-top: 16px;
+}
+
+/* ---- 头部：把手 + 上下文标题 ---- */
+/*
+ * 手势挂在这一块上（见 ui/mobile/BottomSheet）：所以它要吃满宽度、
+ * 并且 touch-action:none —— 否则浏览器会把下滑解释成"滚动内容"，
+ * 手指按在把手上拖，纸一动不动。
+ */
+.m-sheet2-head {
+  flex: 0 0 auto;
+  touch-action: none;
+  cursor: grab;
+}
+.m-sheet2 {
+  /* 跟手拖动之后松手要弹回去：这条过渡由内联 style 在拖动中临时关掉 */
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.m-sheet2-title {
+  /* 标题是"这张单子作用在谁身上"，不是主角：弱化、居中、单行、超长省略 */
+  padding: 2px 16px 10px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 重命名那张里的输入框：它是内容不是行，单独给内边距 */
+.m-sheet2-field {
+  padding: 4px 12px 2px;
+}
+/*
+ * 最后一行不该贴着屏幕底边。安全区在有手势条的机器上够用，在没有的机器上是 0——
+ * 那时"删除"就紧贴屏幕最下沿，既难按又显得没做完。给一个 10px 的下限。
+ */
+.m-app .m-sheet2 {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 10px);
+}
+
+/* ---- 应用内 HTML 查看器（v0.11.18）---- */
+/*
+ * 与 PDF 阅读器同一套形状：一条工具条 + 一块内容区，吃满主区。
+ * iframe 给白底：库里的 HTML 多半自带浅色样式，套在深色主题上会花。
+ */
+.html-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--panel);
+}
+.html-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.html-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 缺资源时说出来：静默裂图会让人以为是软件坏了 */
+.html-note {
+  color: #b26a3c;
+  font-size: 12px;
+}
+.html-gap {
+  flex: 1;
+}
+.html-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* ---- AI 结果面板（v0.11.18）---- */
+/*
+ * 贴在编辑区下方、状态栏之上：它是"这次操作的结果"，不是一个要盖住正文的弹窗——
+ * 用户要一边看原文一边判断改得对不对。高度给上限，长文自己滚。
+ */
+.ai-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.ai-head,
+.ai-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.ai-foot {
+  border-top: 1px solid var(--border);
+}
+.ai-title {
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 进行中的那颗点：流式回来时它在呼吸，用户知道不是卡住了 */
+.ai-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: m-pulse 1.1s ease-in-out infinite;
+}
+.ai-scope,
+.ai-count,
+.ai-hint {
+  font-size: 12px;
+}
+.ai-count {
+  color: var(--accent);
+}
+.ai-gap {
+  flex: 1;
+}
+.ai-tabs {
+  display: flex;
+  gap: 2px;
+}
+.ai-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ai-tab.on {
+  background: var(--panel);
+  color: var(--text);
+}
+.ai-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 8px;
+}
+.ai-error {
+  margin: 8px 12px;
+  color: #d95a4a;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ai-result {
+  margin: 0;
+  padding: 6px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+/* 对照：只给行底色，不画边框——一行一行看的时候边框全是噪声 */
+.ai-diff {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ai-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-row.add {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ai-row.del {
+  background: color-mix(in srgb, #d95a4a 12%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, #d95a4a 55%, transparent);
+}
+.ai-sign {
+  flex: 0 0 auto;
+  width: 10px;
+  color: var(--muted);
+  user-select: none;
+}
+.ai-text {
+  flex: 1;
+  min-width: 0;
+}
+/* 设置页里连通性测试的结果 */
+.set-hint.ok {
+  color: var(--accent);
+}
+.set-hint.bad {
+  color: #d95a4a;
+}
+.set-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
 }

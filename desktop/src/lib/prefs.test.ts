@@ -52,6 +52,8 @@ describe('读写与容错', () => {
       titleSync: false,
       autoSync: false,
       attachMode: 'vault',
+      autoDensity: true,
+      ai: { baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' },
     });
     expect(loadPrefs()).toEqual({
       defaultView: 'read',
@@ -59,6 +61,8 @@ describe('读写与容错', () => {
       titleSync: false,
       autoSync: false,
       attachMode: 'vault',
+      autoDensity: true,
+      ai: { baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' },
     });
   });
 

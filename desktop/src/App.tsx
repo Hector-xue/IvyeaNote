@@ -2,7 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
 import { MainView, type SidebarTab } from './ui/MainView';
-import { renderMarkdown, resolveImagesIn } from './ui/MarkdownEditor';
+import { renderMarkdown, resolveImagesIn, type SelectionApi } from './ui/MarkdownEditor';
+import { AiPanel } from './ui/AiPanel';
+import {
+  AI_ACTIONS,
+  buildMessages,
+  cleanReply,
+  isLlmConfigured,
+  streamChat,
+  type AiActionSpec,
+} from './lib/llm';
+import { tidyMarkdown, describeTidy } from './lib/tidy';
+import { pickDensity } from './lib/density';
 import { isSameTitle } from './ui/InlineTitle';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
@@ -901,7 +912,8 @@ export default function App() {
          * 「点击个人空间之后再点击别的文档不会跳转过去，需要手动点右上角的关闭才行」。
          */
         setBaseDoc(null);
-        setShowGraph(false); // 主区四选一：从图谱里点一篇笔记，图谱就该让位
+        setHtmlDoc(null);
+        setShowGraph(false); // 主区五选一：从图谱里点一篇笔记，图谱就该让位
         setCurrentPath(path);
         saveLastOpen(vault.id, path); // 下次启动直接回到这一篇
         setDoc(text);
@@ -1019,6 +1031,13 @@ export default function App() {
   const [imageView, setImageView] = useState<{ path: string; url: string } | null>(null);
   /** v0.11.10：正在看的 `.base` 表格视图（主区与编辑器 / PDF 互斥） */
   const [baseDoc, setBaseDoc] = useState<{ path: string; text: string } | null>(null);
+  /**
+   * v0.11.18：正在看的 `.html`。
+   *
+   * 此前 `.html` 走 `openWithSystemApp`——点开就跳出应用去浏览器（用户点名）。
+   * 现在在主区渲染（沙箱 iframe，不跑脚本），跳浏览器降级成工具条上的一个出口。
+   */
+  const [htmlDoc, setHtmlDoc] = useState<{ path: string; html: string } | null>(null);
   const onOpenAttachment = useCallback(
     async (rel: string) => {
       /*
@@ -1034,6 +1053,18 @@ export default function App() {
           const text = await io.read(vault?.localPath ?? '', rel);
           setBaseDoc({ path: rel, text });
           onClosePdf();
+        } catch (e) {
+          toast(`打不开：${e instanceof Error ? e.message : String(e)}`, 'error');
+        }
+        return;
+      }
+      if (/\.html?$/i.test(rel)) {
+        try {
+          const text = await io.read(vault?.localPath ?? '', rel);
+          setHtmlDoc({ path: rel, html: text });
+          onClosePdf();
+          setBaseDoc(null);
+          setShowGraph(false);
         } catch (e) {
           toast(`打不开：${e instanceof Error ? e.message : String(e)}`, 'error');
         }
@@ -1154,6 +1185,161 @@ export default function App() {
     },
     [vault, files, io, refreshFiles, openFileInTab, doSync]
   );
+
+  /* ---------- v0.11.18：AI 与排版整理 ---------- */
+  /*
+   * 排版整理复用 AI 那套预览面板，所以给它一个同形状的"动作"描述。
+   * 它不走网络、不花钱：这一点在面板的提示里就写着，免得用户以为整理也在调模型。
+   */
+  const TIDY_SPEC: AiActionSpec = {
+    id: 'structure',
+    label: '排版整理',
+    hint: '纯本地规则，不联网、不花钱：中英文空格 / 标点 / 列表符号 / 标题层级 / 多余空行',
+    mode: 'replace',
+    system: '',
+  };
+
+  /**
+   * AI 的三条铁律，写在这儿免得后面越界：
+   * ① **只发该发的那点内容**——替换类动作要求先选中文字，绝不默认整篇上传；
+   * ② **结果不落盘**，先进面板给 diff，用户点「应用」才写；
+   * ③ 替换走编辑器的 dispatch，进得了撤销栈——Ctrl+Z 能把 AI 的改动退回去。
+   */
+  const [aiState, setAiState] = useState<{
+    spec: AiActionSpec | null;
+    source: string;
+    result: string;
+    busy: boolean;
+    error: string | null;
+    scope: string;
+    /** 替换类动作要还原到哪一段；整篇替换时为 null */
+    range: { from: number; to: number } | null;
+  }>({ spec: null, source: '', result: '', busy: false, error: null, scope: '', range: null });
+  const aiAbort = useRef<AbortController | null>(null);
+  const selectionApi = useRef<SelectionApi | null>(null);
+  const exposeSelection = useCallback((api: SelectionApi | null) => {
+    selectionApi.current = api;
+  }, []);
+
+  const runAi = useCallback(
+    async (spec: AiActionSpec, text: string, scope: string, range: { from: number; to: number } | null) => {
+      const cfg = { ...prefs.ai, temperature: spec.id === 'proofread' ? 0 : 0.3 };
+      if (!isLlmConfigured(cfg)) {
+        toast('还没配置大模型：设置 → AI，填接口地址与模型名', 'error');
+        setShowSettings(true);
+        return;
+      }
+      aiAbort.current?.abort();
+      const ac = new AbortController();
+      aiAbort.current = ac;
+      setAiState({ spec, source: text, result: '', busy: true, error: null, scope, range });
+      try {
+        const full = await streamChat(
+          cfg,
+          buildMessages(spec, text),
+          (delta) => setAiState((st) => (st.spec === spec ? { ...st, result: st.result + delta } : st)),
+          ac.signal
+        );
+        setAiState((st) => (st.spec === spec ? { ...st, result: cleanReply(full), busy: false } : st));
+      } catch (e) {
+        if (ac.signal.aborted) return;
+        setAiState((st) =>
+          st.spec === spec ? { ...st, busy: false, error: e instanceof Error ? e.message : String(e) } : st
+        );
+      }
+    },
+    [prefs.ai, toast]
+  );
+
+  /** 从编辑器取要处理的文本：替换类必须有选区，产出类没选区就用整篇 */
+  const startAi = useCallback(
+    (spec: AiActionSpec) => {
+      const sel = selectionApi.current?.get() ?? null;
+      if (spec.mode === 'replace') {
+        if (!sel || !sel.text.trim()) {
+          toast(`「${spec.label}」要先选中一段文字——默认不会把整篇笔记发出去`, 'error');
+          return;
+        }
+        void runAi(spec, sel.text, `选中的 ${sel.text.length} 字`, { from: sel.from, to: sel.to });
+        return;
+      }
+      const text = sel?.text.trim() ? sel.text : (doc ?? '');
+      if (!text.trim()) {
+        toast('这篇还是空的', 'error');
+        return;
+      }
+      void runAi(spec, text, sel?.text.trim() ? `选中的 ${sel.text.length} 字` : '整篇笔记', null);
+    },
+    [doc, runAi, toast]
+  );
+
+  /** 应用：替换类换掉那一段（走撤销栈），产出类追加到文末 */
+  const applyAi = useCallback(() => {
+    const st = aiState;
+    if (!st.spec || !st.result.trim() || !currentPath) return;
+    if (st.spec.mode === 'replace' && st.range) {
+      const ok = selectionApi.current?.replace(st.range.from, st.range.to, st.result);
+      if (!ok) {
+        toast('原文已经变了，没有替换。请重新选中再试一次', 'error');
+        return;
+      }
+      toast(`已应用「${st.spec.label}」（Ctrl+Z 可撤销）`, 'ok');
+    } else {
+      const next = `${doc ?? ''}\n\n${st.result.trim()}\n`;
+      setDoc(next);
+      onEdit(currentPath, next);
+      toast(`已插入「${st.spec.label}」的结果到文末`, 'ok');
+    }
+    setAiState((s) => ({ ...s, spec: null }));
+  }, [aiState, currentPath, doc, onEdit, toast]);
+
+  /**
+   * 排版整理：**纯本地规则**，不花钱、不联网、每次结果一样（见 lib/tidy）。
+   * 同样走预览面板——它虽然只动空白和符号，但那也是用户的文件。
+   */
+  const tidyNote = useCallback(() => {
+    if (!currentPath || doc === null) return;
+    const r = tidyMarkdown(doc);
+    if (!r.changed) {
+      toast('排版已经很规范，没有要改的', 'ok');
+      return;
+    }
+    setAiState({
+      spec: TIDY_SPEC,
+      source: doc,
+      result: r.text,
+      busy: false,
+      error: null,
+      scope: describeTidy(r.report) ?? '整篇笔记',
+      range: null,
+    });
+  }, [currentPath, doc, toast]);
+
+  /* 整理的"应用"要覆盖整篇：它不是 AI 动作，单独走一条 */
+  const applyTidy = useCallback(() => {
+    if (!currentPath || !aiState.result) return;
+    setDoc(aiState.result);
+    onEdit(currentPath, aiState.result);
+    setAiState((s) => ({ ...s, spec: null }));
+    toast('排版已整理', 'ok');
+  }, [currentPath, aiState.result, onEdit, toast]);
+
+  /**
+   * v0.11.18：按内容自动选阅读密度（字号 / 行宽 / 行高）。
+   * 纯函数选档，不问模型——同一篇任何时候都是同一个结果。关掉这项就完全不介入。
+   */
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!prefs.autoDensity || doc === null) {
+      root.style.removeProperty('--auto-density');
+      return;
+    }
+    const d = pickDensity(doc);
+    root.style.setProperty('--fs-body', `${d.fontSize}px`);
+    root.style.setProperty('--measure', `${d.measure}px`);
+    root.style.setProperty('--lh-body', String(d.lineHeight));
+    root.style.setProperty('--auto-density', d.tier);
+  }, [prefs.autoDensity, doc]);
 
   /** v0.5.0 U3：文件夹折叠状态（持久化） */
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => loadCollapsed());
@@ -1976,6 +2162,13 @@ export default function App() {
           }
         : null,
       onOpenTags: vault ? () => setSidebarTab('tags') : null,
+      onTidy: currentPath ? tidyNote : null,
+      onAi: currentPath
+        ? (id: 'proofread' | 'polish' | 'summarize') => {
+            const spec = AI_ACTIONS.find((a) => a.id === id);
+            if (spec) startAi(spec);
+          }
+        : null,
     }),
     [
       onCreateNote,
@@ -1993,6 +2186,9 @@ export default function App() {
       trash,
       state.account,
       vault,
+      currentPath,
+      tidyNote,
+      startAi,
     ]
   );
   const { paletteMode, closePalette, commands } = useCommands({
@@ -2331,6 +2527,21 @@ export default function App() {
         currentPath && !pdfView
           ? [
               { id: 'export-pdf', label: '导出为 PDF…', icon: 'file', run: () => void exportPdf() },
+              { id: 'tidy', label: '整理排版（本地规则）', icon: 'text-format', run: tidyNote },
+              {
+                id: 'ai',
+                label: 'AI 助手',
+                icon: 'graph',
+                /*
+                 * 二级菜单：替换类动作要求先选中文字（面板里会说清），
+                 * 产出类（摘要 / 起标题）没选区就按整篇来，也会在面板上标明范围。
+                 */
+                submenu: AI_ACTIONS.map((a) => ({
+                  id: `ai-${a.id}`,
+                  label: `${a.label}　${a.hint}`,
+                  run: () => startAi(a),
+                })),
+              },
               { type: 'sep', id: 's-1' },
               { id: 'rename', label: '重命名…', icon: 'edit', run: () => void requestRename(currentPath) },
               { id: 'move', label: '移动到…', icon: 'move', run: () => setMoving({ path: currentPath, isDir: false }) },
@@ -2466,6 +2677,11 @@ export default function App() {
           baseNotes={baseFiles}
           onCloseBase={() => setBaseDoc(null)}
           onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
+          htmlDoc={htmlDoc}
+          onCloseHtml={() => setHtmlDoc(null)}
+          onOpenHtmlExternal={(p) => void openWithSystemApp(p)}
+          resolveAsset={resolveImage}
+          readVaultText={(rel) => io.read(vault?.localPath ?? '', rel)}
           pdfView={pdfView}
           pdfPath={pdfPath}
           onClosePdf={onClosePdf}
@@ -2657,6 +2873,11 @@ export default function App() {
         baseNotes={baseFiles}
         onCloseBase={() => setBaseDoc(null)}
         onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
+        htmlDoc={htmlDoc}
+        onCloseHtml={() => setHtmlDoc(null)}
+        onOpenHtmlExternal={(p) => void openWithSystemApp(p)}
+        resolveAsset={resolveImage}
+        readVaultText={(rel) => io.read(vault?.localPath ?? '', rel)}
         pdfView={pdfView}
         pdfPath={pdfPath}
         onOpenPdfExternal={(p) => void openWithSystemApp(p)}
@@ -2684,6 +2905,28 @@ export default function App() {
         }}
         searchSeed={sideSearchSeed}
         onOpenDaily={() => void openDailyNote()}
+        exposeSelection={exposeSelection}
+        aiPanel={
+          aiState.spec ? (
+            <AiPanel
+              spec={aiState.spec}
+              source={aiState.source}
+              result={aiState.result}
+              busy={aiState.busy}
+              error={aiState.error}
+              scope={aiState.scope}
+              onApply={aiState.spec === TIDY_SPEC ? applyTidy : applyAi}
+              onRetry={() => {
+                if (aiState.spec === TIDY_SPEC) tidyNote();
+                else if (aiState.spec) void runAi(aiState.spec, aiState.source, aiState.scope, aiState.range);
+              }}
+              onClose={() => {
+                aiAbort.current?.abort();
+                setAiState((st) => ({ ...st, spec: null, busy: false }));
+              }}
+            />
+          ) : null
+        }
         collapsedDirs={collapsedDirs}
         onToggleDir={toggleDir}
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}

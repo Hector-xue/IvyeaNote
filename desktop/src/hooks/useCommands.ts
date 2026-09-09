@@ -33,6 +33,10 @@ export interface CommandActions {
   onOpenTrash: (() => void) | null;
   /** v0.11.16：标签面板（左栏）。没有笔记库时为 null */
   onOpenTags: (() => void) | null;
+  /** v0.11.18：整理排版（纯本地规则）。没有打开笔记时为 null */
+  onTidy: (() => void) | null;
+  /** v0.11.18：AI 动作（按 id 触发）。没有打开笔记时为 null */
+  onAi: ((id: 'proofread' | 'polish' | 'summarize') => void) | null;
 }
 
 export interface CommandsDeps {
@@ -122,6 +126,14 @@ export function useCommands(deps: CommandsDeps): Commands {
           ? { id: 'trash', label: '打开回收站', run: actions.onOpenTrash }
           : null,
         actions.onOpenTags ? { id: 'tags', label: '打开标签面板', run: actions.onOpenTags } : null,
+        actions.onTidy ? { id: 'tidy', label: '整理排版（本地规则，不联网）', run: actions.onTidy } : null,
+        actions.onAi
+          ? { id: 'ai-proofread', label: 'AI 校对选中的文字', run: () => actions.onAi?.('proofread') }
+          : null,
+        actions.onAi
+          ? { id: 'ai-polish', label: 'AI 润色选中的文字', run: () => actions.onAi?.('polish') }
+          : null,
+        actions.onAi ? { id: 'ai-summary', label: 'AI 写摘要', run: () => actions.onAi?.('summarize') } : null,
         // v0.7.2：应用内更新入口（手动检查）
         { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: actions.onCheckUpdate },
       ].filter((c): c is CommandItem => c !== null),
