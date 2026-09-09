@@ -2328,36 +2328,63 @@ button.st-item:hover {
 }
 
 /*
- * 右栏里的图谱。整屏那一版是 fixed + inset:0，嵌进面板要改成"吃满这一栏"。
- * 工具条在窄栏里会换行，所以让它自己 wrap，不要横向溢出。
+ * 主区里的图谱。整屏那一版是 fixed + inset:0（会盖住侧栏和顶栏）；
+ * 现在它是主区的一种视图，吃满 `.editor-pane` 就行。
  */
-.graph-panel {
+.graph-pane {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 0;
+  background: var(--panel);
 }
-.graph-panel .graph-toolbar {
+.graph-pane .graph-toolbar {
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 8px;
 }
-.graph-panel .graph-search {
-  flex: 1 1 100%;
-  min-width: 0;
-}
-.graph-panel .graph-canvas {
+.graph-pane .graph-canvas {
   flex: 1;
   min-height: 0;
 }
-/* 那行操作提示（滚轮缩放 · 拖空白平移…）在 248px 宽的栏里会被截断，
-   而它本来就是给第一次铺开看全库的人准备的——窄栏里不显示 */
-.graph-panel .graph-hint {
-  display: none;
+
+/* 手机端回收站弹层：复用底部纸张，里面装桌面那套 TrashPane */
+.m-trash2 .side-pane {
+  max-height: 62vh;
 }
-/* 图谱那一页要把整栏交出去：默认 rp-body 有内边距，图谱贴边才有面积 */
-.rp-body-graph {
-  padding: 0;
-  display: flex;
-  min-height: 0;
+.m-trash2 .sp-row {
+  padding: 10px 14px;
+  font-size: 15px;
+}
+/* 手机上没有 hover，动作必须常显——否则等于没有 */
+.m-trash2 .sp-actions {
+  opacity: 1;
+}
+.m-trash2 .sp-act {
+  width: 34px;
+  height: 34px;
+}
+
+/* ---- 手机端：去掉顶栏/底栏那两条横线，底部按钮下沉（v0.11.17）---- */
+/*
+ * 用户对着 Obsidian 的截图说：「顶部和底部的那两条横线，把他删掉，底部的几个按钮
+ * 距离屏幕底部也有点太高了，可以再往下移动一点」。
+ *
+ * Obsidian 移动端的顶栏与底栏都不画分隔线——层次靠留白和字重，不靠线。
+ * 一条通栏的横线在手机上尤其重，它把一屏切成三段。
+ */
+.m-app .m-top {
+  border-bottom: none;
+}
+.m-app .m-bottom-wrap {
+  border-top: none;
+}
+/*
+ * 底部按钮再往下压一点：原来是 52px 行高 + 整个安全区内边距，
+ * 手势导航的机器上安全区本身就有 20 多 px，两者叠起来图标就浮在半空。
+ * 行高收到 46，安全区只让出一半（最少 4px，保证不压在手势条上）。
+ */
+.m-app {
+  --m-bottom-h: 46px;
+}
+.m-bottom-wrap {
+  padding-bottom: max(4px, calc(env(safe-area-inset-bottom) / 2));
 }

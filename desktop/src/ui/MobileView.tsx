@@ -18,6 +18,7 @@ import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
 import { Drawer } from './mobile/Drawer';
 import { Sheet, type SheetItem } from './mobile/Sheet';
+import { TrashPane } from './SidePanes';
 import { extractHeadings } from '../lib/headings';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
@@ -89,6 +90,15 @@ interface Props {
   onOpenSettings?(): void;
   /** v0.11.16：今日日记（桌面在 ribbon 上，手机放进「⋯」这张单子） */
   onOpenDaily?(): void;
+  /**
+   * v0.11.16：**回收站**。用户原话：「手机端为什么没有回收站的入口」。
+   * 桌面是左栏的一个面板，手机没有 ribbon，所以放进「⋯」→ 一张底部弹层。
+   * 删掉的东西在手机上此前既看不见也恢复不了——而手机恰恰是最容易误删的那一端。
+   */
+  trashList?: readonly string[];
+  onOpenTrash?(): void;
+  onTrashRestore?(path: string): void;
+  onTrashPurge?(path: string): void;
   /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
   onOpenPath?(relPath: string): void;
   onToggleTheme(): void;
@@ -185,6 +195,7 @@ export function MobileView(props: Props) {
     }
   });
   const [showOutline, setShowOutline] = useState(false); // P6 大纲浮层
+  const [showTrash, setShowTrash] = useState(false); // v0.11.16 回收站弹层
   /*
    * v0.11.15：**手点同步要有回执。**
    *
@@ -258,6 +269,17 @@ export function MobileView(props: Props) {
       const second: SheetItem[] = [];
       if (props.onOpenSettings) {
         second.push({ key: 'settings', icon: 'settings', label: '设置', onClick: props.onOpenSettings });
+      }
+      if (props.onOpenTrash) {
+        second.push({
+          key: 'trash',
+          icon: 'trash',
+          label: `回收站${(props.trashList?.length ?? 0) > 0 ? `（${props.trashList!.length}）` : ''}`,
+          onClick: () => {
+            props.onOpenTrash?.();
+            setShowTrash(true);
+          },
+        });
       }
       if (props.onCheckUpdate) second.push({ key: 'update', icon: 'sync', label: '检查更新', onClick: props.onCheckUpdate });
       second.push(
@@ -404,6 +426,7 @@ export function MobileView(props: Props) {
   const layersOpen = [
     drawerOpen && 'drawer',
     showOutline && 'outline',
+    showTrash && 'trash',
     !!sheet && 'sheet',
     !!renaming && 'rename',
   ].filter(Boolean) as string[];
@@ -412,11 +435,12 @@ export function MobileView(props: Props) {
     const target = layersOpen.length > 0 ? `#${layersOpen[layersOpen.length - 1]}` : '';
     if (location.hash !== target) history.pushState(null, '', target || location.pathname);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawerOpen, showOutline, sheet, renaming]);
+  }, [drawerOpen, showOutline, showTrash, sheet, renaming]);
 
   useEffect(() => {
     const onPop = () => {
       setSheet(null);
+      setShowTrash(false);
       setShowOutline(false);
       setRenaming(null);
       setDrawerOpen(false);
@@ -775,6 +799,28 @@ export function MobileView(props: Props) {
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v0.11.16：回收站弹层。列表与动作复用桌面那套 TrashPane，不另写一份 */}
+      {showTrash && (
+        <div className="m-sheet-mask" onClick={() => setShowTrash(false)}>
+          <div
+            className="m-sheet2 m-trash2"
+            role="dialog"
+            aria-label="回收站"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="m-sheet2-grip" aria-hidden="true" />
+            <div className="m-sheet2-title">回收站</div>
+            <div className="m-sheet2-scroll">
+              <TrashPane
+                list={props.trashList ?? []}
+                onRestore={(p) => props.onTrashRestore?.(p)}
+                onPurge={(p) => props.onTrashPurge?.(p)}
+              />
             </div>
           </div>
         </div>

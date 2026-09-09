@@ -2689,11 +2689,44 @@ button {
  * 打印时把界面全部藏掉，只留阅读视图的正文，并解掉滚动容器的高度限制——
  * 不解的话打出来只有一屏（滚动区的可视部分）。
  */
+/*
+ * 导出用的那份独立文档：屏幕上永远不显示，只在打印时顶替整个应用。
+ * 它由 App 的 exportPdf 临时插进 body，打完就删（见那边的注释）。
+ */
+#print-doc {
+  display: none;
+}
+
 @media print {
+  /* 打印时只留这一份干净的正文，整个应用外壳都藏掉——
+     应用外壳里那些 flex 容器、虚拟滚动的编辑器、固定高度的 html/body，
+     每一样都能把分页搞坏（v0.11.16 的 PDF 78 页里 77 页空白就是这么来的） */
+  html.printing #root {
+    display: none !important;
+  }
+  html.printing #print-doc {
+    display: block !important;
+    max-width: none !important;
+    padding: 0 !important;
+    color: #000;
+  }
+
+  /*
+   * **`height: 100%` 在打印里必须解开。**
+   *
+   * 文件开头那条 `html, body, #root { height: 100% }` 是给屏幕布局用的
+   * （满屏三栏）。到了打印，100% 就是"一页纸那么高"——正文再长也只有第一页
+   * 参与排版，后面全部溢出到分页之外：页数按内容高度算出来了，字却只画了一页。
+   * 用户报的「导出的 PDF 只有第一页，而且总页数多出那么多」有一半出在这里
+   * （另一半是下面那条 .editor-host）。
+   */
   html,
   body {
     background: #fff !important;
     padding: 0 !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
   }
   .ribbon,
   .sidebar,
@@ -2713,14 +2746,46 @@ button {
     border-radius: 0 !important;
     overflow: visible !important;
   }
+  /*
+   * **正文到 body 之间不能留任何 flex 容器。**
+   *
+   * Chromium 分页时**不会把 flex item 拆到下一页**：一个比一页高的 flex item
+   * 只画第一页，剩下的高度照样计入总页数——于是"页数一大堆、字只有第一页"。
+   * 这条链是 .md-preview → .md-body → .md-editor → .editor-col → .editor-split，
+   * 全都是 flex，少解一层都不行（这是拿 CDP 真的打印出 PDF、逐页数字数试出来的，
+   * 不是看代码想出来的）。
+   */
+  .md-editor,
+  .md-body,
+  .editor-split,
+  .editor-col,
   .app,
   .editor-pane,
-  .editor-host,
   .md-preview {
     display: block !important;
     height: auto !important;
     max-height: none !important;
     overflow: visible !important;
+  }
+  /*
+   * ⚠️ **`.editor-host` 不能写 `display: block !important`。**
+   *
+   * 阅读模式是靠 inline `style="display:none"` 把编辑器藏起来的，而 `!important`
+   * 压得过 inline 样式——于是这条规则在打印时**把 CodeMirror 又拽了回来**。
+   * CodeMirror 是虚拟滚动的：DOM 里只有视口那一屏的行，高度却是整篇的。
+   * 结果就是用户报的「导出的 PDF 只有第一页，而且总页数多出那么多」——
+   * 实测他那份 78 页里 77 页是空白，第 1 页正好是一屏的量。
+   *
+   * 所以这里只解高度限制（编辑模式下直接 Ctrl+P 时它仍要能打），
+   * 显示与否交回给 inline 样式；再加一条：**阅读视图在场就绝不打印编辑器**。
+   */
+  .editor-host {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  .editor-pane:has(.md-preview) .editor-host {
+    display: none !important;
   }
   .md-preview {
     max-width: none !important;
