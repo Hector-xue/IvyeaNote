@@ -39,12 +39,15 @@
  * 缩小（overview mode），而 iframe 只有屏幕那么宽，于是作者按 1000px 写的两栏
  * 被硬塞进 390px。
  *
- * 两条路，我们都给，默认按页面自己有没有为手机做过适配来选：
- * - **重排**（窄屏默认）：注入一张覆盖样式，把 flex/grid/浮动/固定定位统统拍平成
- *   自上而下的块，宽度一律跟着视口。字号保持作者的原值，所以**读得清**。
+ * 两条路，我们都给，**先按原样渲染，量一眼再决定**（见 needsReflow）：
+ * - **重排**：注入一张覆盖样式，把 flex/grid/浮动/固定定位统统拍平成自上而下的块，
+ *   宽度一律跟着视口。字号保持作者的原值，所以**读得清**。
  *   代价是设计感会丢一部分——但读不了的排版没有设计可言。
- * - **原样**：一个字不动。页面自己声明了 `viewport width=device-width`（说明作者
- *   做过手机适配）时默认走这条，工具条上也随时能切回来。
+ * - **原样**：一个字不动。量下来确实读得了（正文栏够宽、不横向溢出）就走这条，
+ *   工具条上也随时能来回切。
+ *
+ * ⚠️ v0.11.20 第一版是按 `<meta name="viewport">` **声明**来判的，判错了：
+ * 现在但凡由工具生成的 HTML 都带这条 meta，版式该是两栏还是两栏。声明不是事实。
  *
  * 为什么不做"按比例缩小"：iframe 里缩到 0.4 倍，16px 的正文只剩 6px，
  * 而沙箱 iframe 里双指放大会连整个应用一起放大。缩小等于把不能读换成看不清。
@@ -84,14 +87,38 @@ function baseName(path: string): string {
 }
 
 /**
- * 页面有没有为手机做过适配：认 `<meta name="viewport" content="...width=device-width...">`。
- * 这是作者的**声明**，不是猜测——声明过就照他的来，没声明的才轮到我们重排。
+ * 这一页在这么窄的屏幕上**读不读得了**——不是猜，是量。
+ *
+ * ⚠️ v0.11.20 第一版用的是 `<meta name="viewport" content="width=device-width">`：
+ * 有这条就认为作者做过手机适配，原样显示。**判错了**，用户的手册正是这种页面——
+ * 现在但凡由工具生成的 HTML 都会带上这条 meta，可版式该是 1000px 两栏还是两栏。
+ * 声明是**意图**，不是事实。
+ *
+ * 所以改成量真实的布局，两条判据（命中任意一条就该重排）：
+ *
+ * 1. **横着超出屏幕**——要左右拖才能看全，那是最直白的读不了；
+ * 2. **正文被挤成细条**——这条才是用户截图里的样子：左侧目录 + 右侧正文并排塞进
+ *    390px，谁都没有溢出（flex 会把两栏一起压扁），但每行只剩两三个字。
+ *    量的是"最宽的那个文字块有多宽"：连它都不到屏幕的六成，这一页就没法读。
+ *
+ * 只在页面**按原样渲染完**之后量一次；量完自己决定，之后听用户的。
  */
-export function declaresMobileViewport(html: string): boolean {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  const meta = doc.querySelector('meta[name="viewport" i]');
-  const content = meta?.getAttribute('content') ?? '';
-  return /width\s*=\s*device-width/i.test(content);
+export function needsReflow(doc: Document | null, viewportWidth: number): boolean {
+  if (!doc || !doc.body) return false;
+  const root = doc.documentElement;
+  if (root.scrollWidth > root.clientWidth + 4) return true;
+
+  // 直接盛着文字的块，取最宽的那个当"正文栏宽"
+  let widest = 0;
+  const blocks = doc.body.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, blockquote, pre');
+  for (const el of Array.from(blocks)) {
+    if ((el.textContent ?? '').trim().length < 16) continue;
+    const w = (el as HTMLElement).getBoundingClientRect().width;
+    if (w > widest) widest = w;
+  }
+  // 一个够宽的文字块都找不到（页面还没内容/全是图），别乱动
+  if (widest === 0) return false;
+  return widest < viewportWidth * 0.6;
 }
 
 /**
@@ -136,15 +163,29 @@ export function HtmlViewer(props: Props) {
   const [note, setNote] = useState<string | null>(null);
   const urls = useRef<string[]>([]);
   /**
-   * 默认值只在打开新文件时定一次：作者声明过手机适配就原样，否则重排。
-   * 之后用户在工具条上怎么切就是怎么切——不能每次重渲染又把他的选择顶回去。
+   * 重排开关。**先按原样渲染，量完再决定**（见 needsReflow）——
+   * 判过一次就不再自动判：之后用户在工具条上怎么切就是怎么切，
+   * 不能每次 iframe 重载又把他的选择顶回去。
    */
   const [reflow, setReflow] = useState(false);
+  const decided = useRef(false);
+  const frame = useRef<HTMLIFrameElement>(null);
   useEffect(() => {
-    const narrow = window.innerWidth < 700;
-    setReflow(narrow && !declaresMobileViewport(props.html));
+    decided.current = false;
+    setReflow(false);
   }, [props.path, props.html]);
   const srcDoc = useMemo(() => withReflow(doc, reflow), [doc, reflow]);
+
+  /** iframe 加载完 → 量一次 → 该重排就重排。窄屏才管，桌面上一律照作者的来 */
+  const onFrameLoad = () => {
+    if (decided.current || window.innerWidth >= 700) return;
+    decided.current = true;
+    try {
+      if (needsReflow(frame.current?.contentDocument ?? null, window.innerWidth)) setReflow(true);
+    } catch {
+      // 读不到 contentDocument（理论上同源读得到）就别猜，保持原样
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -234,7 +275,10 @@ export function HtmlViewer(props: Props) {
           title={reflow ? '当前：重排以适应屏幕（点这里看原始排版）' : '当前：原始排版（点这里重排以适应屏幕）'}
           aria-pressed={reflow}
           aria-label="重排以适应屏幕"
-          onClick={() => setReflow((v) => !v)}
+          onClick={() => {
+            decided.current = true; // 用户表过态，之后不再自动判
+            setReflow((v) => !v);
+          }}
         >
           <RibbonIcon name={reflow ? 'list-ul' : 'table'} size={15} />
         </button>
@@ -248,6 +292,8 @@ export function HtmlViewer(props: Props) {
         </button>
       </div>
       <iframe
+        ref={frame}
+        onLoad={onFrameLoad}
         className="html-frame"
         title={baseName(props.path)}
         /*

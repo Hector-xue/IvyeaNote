@@ -2687,25 +2687,44 @@ await new Promise((r) => setTimeout(r, 2600));
 
   /*
    * v0.11.20：**给电脑设计的 HTML 在手机上要读得了**。
+   *
    * 用户发来的截图：一份左目录 + 右正文的手册，手机上目录占掉一半，正文每行两三个字。
-   * 这条用的正是那种页面——固定侧栏 + min-width:1000px、且**没有** viewport 声明。
+   * ⚠️ 第一版按 `<meta name="viewport">` **声明**来判"作者做没做过手机适配"，
+   * 结果对着用户那份文件**判错了**——现在但凡由工具生成的 HTML 都带这条 meta，
+   * 版式该是两栏还是两栏。所以这里的样张**故意带上那条 meta**，
+   * 而且**不横向溢出**（flex 会把两栏一起压扁，谁都不溢出），
+   * 逼着判定去量真实的正文栏宽，而不是读作者的意图。
    */
   await evaluate(`(async () => {
     const root = await navigator.storage.getDirectory();
     for await (const [name, h] of root.entries()) {
       if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
       const web = await h.getDirectoryHandle('网页', { create: true });
-      const fh = await web.getFileHandle('重排样张.html', { create: true });
-      const w = await fh.createWritable();
+      const w = await (await web.getFileHandle('重排样张.html', { create: true })).createWritable();
       await w.write(new TextEncoder().encode(
-        '<html><head><meta charset="utf-8"><style>' +
-        'body{margin:0}.wrap{display:flex;min-width:1000px}' +
-        '.side{width:320px;flex:0 0 320px;position:fixed;left:0;top:0;bottom:0;background:#eee}' +
-        '.main{margin-left:320px;width:680px;font-size:16px}' +
-        '</style></head><body><div class="wrap"><aside class="side">目录</aside>' +
-        '<main class="main"><h1>手册标题</h1><p>正文一二三四五六七八九十</p></main></div></body></html>'
+        '<html><head><meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<style>body{margin:0;overflow-x:hidden}.wrap{display:flex}' +
+        '.side{flex:0 0 55%;background:#eee}' +
+        '.main{flex:1;min-width:0;font-size:16px}' +
+        '</style></head><body><div class="wrap">' +
+        '<aside class="side"><p>目录：核心框架 / 沟通原则 / 模板库 / 进阶技巧</p></aside>' +
+        '<main class="main"><h1>手册标题</h1><p>正文一二三四五六七八九十，这一段要够长才量得出栏宽。</p></main>' +
+        '</div></body></html>'
       ));
       await w.close();
+      // 对照组：**真的**为手机做过适配的页面，一个字都不该被我们改
+      const w2 = await (await web.getFileHandle('自适应样张.html', { create: true })).createWritable();
+      await w2.write(new TextEncoder().encode(
+        '<html><head><meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<style>body{margin:0;padding:12px;font-size:16px}' +
+        '.wrap{display:flex;flex-wrap:wrap;gap:8px}.col{flex:1 1 100%}' +
+        '</style></head><body><div class="wrap">' +
+        '<div class="col"><h1>自适应标题</h1><p>这一页本来就是一栏到底，正文铺满屏幕，不该被重排碰。</p></div>' +
+        '</div></body></html>'
+      ));
+      await w2.close();
       return 'ok';
     }
     return 'no-vault';
@@ -2736,37 +2755,86 @@ await new Promise((r) => setTimeout(r, 2600));
     const fr = document.querySelector('iframe.html-frame');
     const d = fr && fr.contentDocument;
     if (!d || !d.body) return null;
+    const main = d.querySelector('.main p');
     const side = d.querySelector('.side');
-    const main = d.querySelector('.main');
+    const mr = main ? main.getBoundingClientRect() : null;
+    const sr = side ? side.getBoundingClientRect() : null;
     return {
-      // 内容不该比屏幕宽——横向滚动条就是"读不了"的另一种写法
-      scrollW: d.documentElement.scrollWidth,
       winW: window.innerWidth,
-      sidePos: side ? getComputedStyle(side).position : null,
-      mainLeft: main ? getComputedStyle(main).marginLeft : null,
+      // 正文栏铺开了没有：这才是"读得了"的判据（那份页面本来就不横向溢出）
+      mainW: mr ? Math.round(mr.width) : null,
+      // 两栏拍成上下：目录的顶不再和正文平齐
+      sideTop: sr ? Math.round(sr.top) : null,
+      mainTop: mr ? Math.round(mr.top) : null,
+      reflowStyle: !!d.querySelector('style[data-ivnote="reflow"]'),
+      scrollW: d.documentElement.scrollWidth,
       // 字号一个像素都没动：重排是拍平布局，不是把页面缩小
       bodyFont: main ? getComputedStyle(main).fontSize : null,
-      text: (d.body.innerText || '').slice(0, 20),
+      pressed: document.querySelector('.html-bar [aria-label="重排以适应屏幕"]')?.getAttribute('aria-pressed'),
     };
   })()`);
-  check('手机上打开给电脑做的 HTML：内容不再比屏幕宽（固定侧栏拍平、不留横向滚动）',
-    !!htmlFit && htmlFit.scrollW <= htmlFit.winW + 2 && htmlFit.sidePos === 'static' &&
-    htmlFit.mainLeft === '0px', htmlFit);
+  check('手机上打开给电脑做的 HTML：正文铺满屏幕，两栏拍成上下（判据是量出来的栏宽，不是作者声明的 viewport）',
+    !!htmlFit && htmlFit.reflowStyle && htmlFit.mainW >= htmlFit.winW * 0.8 &&
+    htmlFit.mainTop > htmlFit.sideTop && htmlFit.scrollW <= htmlFit.winW + 2, htmlFit);
   check('重排只动布局，不动字号（缩小等于把"读不了"换成"看不清"）',
     !!htmlFit && htmlFit.bodyFont === '16px', htmlFit?.bodyFont);
   await shot('mobile-html.png');
   // 工具条上那颗键要真的能切回原样，否则"重排"就是不可撤销的
   await evaluate(`(() => { document.querySelector('.html-bar [aria-label="重排以适应屏幕"]')?.click(); return true })()`);
-  await new Promise((r) => setTimeout(r, 800));
+  await new Promise((r) => setTimeout(r, 900));
   const htmlRaw = await evaluate(`(() => {
     const fr = document.querySelector('iframe.html-frame');
     const d = fr && fr.contentDocument;
     if (!d || !d.body) return null;
-    return { scrollW: d.documentElement.scrollWidth, winW: window.innerWidth,
-      sidePos: d.querySelector('.side') ? getComputedStyle(d.querySelector('.side')).position : null };
+    const main = d.querySelector('.main p');
+    return {
+      reflowStyle: !!d.querySelector('style[data-ivnote="reflow"]'),
+      mainW: main ? Math.round(main.getBoundingClientRect().width) : null,
+      winW: window.innerWidth,
+    };
   })()`);
-  check('工具条上能切回原始排版（作者的设计不是被我们永久改掉）',
-    !!htmlRaw && htmlRaw.sidePos === 'fixed' && htmlRaw.scrollW > htmlRaw.winW, htmlRaw);
+  check('工具条上能切回原始排版（作者的设计不是被我们永久改掉），而且不会又被自动改回去',
+    !!htmlRaw && !htmlRaw.reflowStyle && htmlRaw.mainW < htmlRaw.winW * 0.6, htmlRaw);
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
+
+  /*
+   * 对照组：**真的**为手机做过适配的页面，我们一个字都不该改。
+   * 少了这条，"窄屏一律重排"这种偷懒实现也能让上面那条变绿。
+   */
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  await evaluate(`(async () => {
+    const find = () => [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('自适应样张'));
+    for (let i = 0; i < 2 && !find(); i++) {
+      const dir = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent === '网页');
+      (dir?.closest('.m-tree-row') ?? dir)?.click();
+      await new Promise(r => setTimeout(r, 500));
+    }
+    const el = find();
+    const row = el?.closest('.m-tree-row') ?? el;
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return !!row;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1600));
+  const htmlResponsive = await evaluate(`(() => {
+    const fr = document.querySelector('iframe.html-frame');
+    const d = fr && fr.contentDocument;
+    if (!d || !d.body) return null;
+    const p = d.querySelector('.col p');
+    return {
+      reflowStyle: !!d.querySelector('style[data-ivnote="reflow"]'),
+      pW: p ? Math.round(p.getBoundingClientRect().width) : null,
+      winW: window.innerWidth,
+      pressed: document.querySelector('.html-bar [aria-label="重排以适应屏幕"]')?.getAttribute('aria-pressed'),
+    };
+  })()`);
+  check('本来就适配手机的页面不动它（否则"窄屏一律重排"这种偷懒实现也能骗过上面那条）',
+    !!htmlResponsive && !htmlResponsive.reflowStyle && htmlResponsive.pressed === 'false' &&
+    htmlResponsive.pW >= htmlResponsive.winW * 0.7, htmlResponsive);
   await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
   await new Promise((r) => setTimeout(r, 400));
 
