@@ -46,6 +46,14 @@ interface Props {
   /** v0.11.13：立即同步 + 同步中状态 */
   onSync(): void;
   syncing: boolean;
+  /**
+   * v0.11.15：本地模式（没登录）——这颗键仍然要能点，但它做的事是"去登录"。
+   *
+   * 此前不管有没有账号都直接调 `onSync`，而没有账号时同步引擎第一行就 return，
+   * 于是**点了完全没有反应、也没有任何提示**（用户原话：「手机端底部的最右边的
+   * 按钮是干什么的？点了之后看不到反应啊，也没个动效，也没有反应」）。
+   */
+  syncDisabled?: boolean;
   /** 还有没推上去的改动：给同步键点一个小圆点 */
   dirty?: boolean;
 }
@@ -88,7 +96,8 @@ export function BottomBar(props: Props) {
         <button
           className={`m-nav-btn ${props.syncing ? 'spin' : ''} ${props.dirty ? 'dot' : ''}`}
           onClick={props.onSync}
-          aria-label="立即同步"
+          title={props.syncDisabled ? '本地模式：点此登录后多端同步' : '立即同步'}
+          aria-label={props.syncDisabled ? '登录后同步' : props.syncing ? '同步中' : '立即同步'}
         >
           <RibbonIcon name="sync" size={21} />
         </button>

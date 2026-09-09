@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
+import type { BaseNote } from '../lib/bases';
 import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
 import { PdfViewer } from './PdfViewer';
@@ -110,7 +111,11 @@ interface Props {
    */
   /** v0.11.10：`.base` 表格视图（手机上同样能开，不再只能"交给 Obsidian"） */
   baseDoc?: { path: string; text: string } | null;
-  baseNotes?: { path: string; content: string }[];
+  /**
+   * v0.11.15：喂给 `.base` 的是**库里的全部文件**（含图片 / PDF / 别的 .base），
+   * 不再只是笔记——非笔记的 content 是空串，靠 file.* 那组属性参与筛选。
+   */
+  baseNotes?: BaseNote[];
   onCloseBase?(): void;
   onOpenBaseExternal?(path: string): void;
   pdfView?: string | null;
@@ -178,6 +183,19 @@ export function MobileView(props: Props) {
     }
   });
   const [showOutline, setShowOutline] = useState(false); // P6 大纲浮层
+  /*
+   * v0.11.15：**手点同步要有回执。**
+   *
+   * 用户原话：「手机端底部的最右边的按钮是干什么的？点了之后看不到反应啊，
+   * 也没个动效，也没有反应」。三件事都缺：
+   *   ① 没登录时同步引擎第一行就 return（现在改成去登录，见下面 onSync）；
+   *   ② 转圈的 class 早就写了，但 `.m-nav-btn.spin` 在 CSS 里**根本不存在**；
+   *   ③ 同步完只有"有变更"才弹 toast——多数时候确实没变更，于是安静得像坏了。
+   * 这里补第三件：只对**人点的那一次**给回执，自动同步照旧安静。
+   */
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const syncTapped = useRef(false);
+  const wasSyncing = useRef(false);
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null); // P1 内联重命名
   const mainRef = useRef<HTMLElement | null>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
@@ -427,6 +445,23 @@ export function MobileView(props: Props) {
     setDrawerOpen(true);
   }, [seedN, seedText]);
 
+  useEffect(() => {
+    if (props.syncing) {
+      wasSyncing.current = true;
+      return;
+    }
+    if (!wasSyncing.current) return;
+    wasSyncing.current = false;
+    if (!syncTapped.current) return; // 自动同步不打扰
+    syncTapped.current = false;
+    const r = props.lastReport;
+    if (r && r.errors.length > 0) return; // 错误有自己的红条，别再叠一层
+    const moved = r ? r.pushed + r.pulled : 0;
+    setSyncNote(moved > 0 ? `已同步 ↑${r!.pushed} ↓${r!.pulled}` : r?.offline ? '离线，联网后自动同步' : '已是最新');
+    const t = window.setTimeout(() => setSyncNote(null), 2200);
+    return () => window.clearTimeout(t);
+  }, [props.syncing, props.lastReport]);
+
   // ---- P6：大纲数据 ----
   const headings = useMemo(() => extractHeadings(props.doc ?? ''), [props.doc]);
 
@@ -590,9 +625,15 @@ export function MobileView(props: Props) {
             path={props.baseDoc.path}
             text={props.baseDoc.text}
             notes={props.baseNotes ?? []}
+            /*
+             * 表里现在有图片和 PDF：一律走 onSelect 会拿文本通道去读一张 PNG，
+             * 直接抛错。按类型分流，和文件树点开它们时走的是同一条路。
+             */
             onOpenNote={(p) => {
               props.onCloseBase?.();
-              props.onSelect(p);
+              if (/\.md$/i.test(p)) props.onSelect(p);
+              else if (/\.pdf$/i.test(p)) props.onOpenPdf(p);
+              else props.onOpenAttachment?.(p);
             }}
             onClose={() => props.onCloseBase?.()}
             onOpenExternal={
@@ -641,11 +682,15 @@ export function MobileView(props: Props) {
           </>
         )}
 
-        {report && !hasError && (report.pushed > 0 || report.pulled > 0) && (
-          <div className="m-toast">
-            ↑{report.pushed} ↓{report.pulled}
-            {report.conflicts.length > 0 && ` · 冲突${report.conflicts.length}`}
-          </div>
+        {syncNote ? (
+          <div className="m-toast">{syncNote}</div>
+        ) : (
+          report && !hasError && (report.pushed > 0 || report.pulled > 0) && (
+            <div className="m-toast">
+              ↑{report.pushed} ↓{report.pulled}
+              {report.conflicts.length > 0 && ` · 冲突${report.conflicts.length}`}
+            </div>
+          )
         )}
       </main>
 
@@ -661,8 +706,17 @@ export function MobileView(props: Props) {
         onCreate={props.onCreateNote}
         onOutline={() => setShowOutline(true)}
         outlineAvailable={headings.length > 0}
-        onSync={props.onSync}
+        onSync={() => {
+          // 没登录时这颗键的意思是"去登录"——它此前调的是一个第一行就 return 的函数
+          if (props.syncDisabled) {
+            props.onOpenLogin();
+            return;
+          }
+          syncTapped.current = true;
+          props.onSync();
+        }}
         syncing={props.syncing}
+        syncDisabled={props.syncDisabled}
       />
 
       <Sheet

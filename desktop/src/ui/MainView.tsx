@@ -15,6 +15,7 @@ import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
 import type { SearchDoc } from '../lib/searchIndex';
+import type { BaseNote } from '../lib/bases';
 
 export interface FileNode {
   path: string;
@@ -135,7 +136,11 @@ interface Props {
    */
   baseDoc?: { path: string; text: string } | null;
   /** 库里全部笔记（.base 求值要读 frontmatter / 标签 / 链接） */
-  baseNotes?: { path: string; content: string }[];
+  /**
+   * v0.11.15：喂给 `.base` 的是**库里的全部文件**（含图片 / PDF / 别的 .base），
+   * 不再只是笔记——非笔记的 content 是空串，靠 file.* 那组属性参与筛选。
+   */
+  baseNotes?: BaseNote[];
   onCloseBase?(): void;
   onOpenBaseExternal?(path: string): void;
   pdfView: string | null;
@@ -534,9 +539,15 @@ export function MainView(props: Props) {
             path={props.baseDoc.path}
             text={props.baseDoc.text}
             notes={props.baseNotes ?? []}
+            /*
+             * 表里现在有图片和 PDF：一律走 onSelect 会拿文本通道去读一张 PNG，
+             * 直接抛错。按类型分流，和文件树点开它们时走的是同一条路。
+             */
             onOpenNote={(p) => {
               props.onCloseBase?.();
-              props.onSelect(p);
+              if (/\.md$/i.test(p)) props.onSelect(p);
+              else if (/\.pdf$/i.test(p)) props.onOpenPdf(p);
+              else props.onOpenAttachment?.(p);
             }}
             onClose={() => props.onCloseBase?.()}
             onOpenExternal={

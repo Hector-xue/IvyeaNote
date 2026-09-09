@@ -325,6 +325,7 @@ export default function App() {
     mdStamps,
     emptyDirs,
     allPaths,
+    metaOf,
     sortMode,
     setSortMode,
     refresh: refreshFiles,
@@ -343,6 +344,26 @@ export default function App() {
    */
   const noteIndex = useNoteIndex(io, vault?.localPath ?? '', mdStamps);
   const searchDocs = noteIndex.docs;
+
+  /**
+   * v0.11.15：**`.base` 视图要看到库里的全部文件，不只是笔记。**
+   *
+   * 此前喂给它的是 `searchDocs`——那是**正文索引**，只含 `.md`。于是一张按文件夹
+   * 筛选的表里，图片、PDF、乃至这个 `.base` 文件自己全都不见（用户原话：
+   * 「个人空间统计不完全啊，图片，pdf，个人空间本身的 .base 文件都没有在个人
+   * 空间里面体现」）。Obsidian 的 Bases 数据源是"库里的文件"，不是"库里的笔记"。
+   *
+   * 非笔记没有正文，`content` 给空串即可：`buildCtx` 由此得到空的 frontmatter
+   * 与空的标签/链接，而 `file.name / ext / folder / mtime / size` 照常可用——
+   * 按文件夹、按扩展名筛选的表因此立刻完整。
+   */
+  const baseFiles = useMemo(() => {
+    const text = new Map(searchDocs.map((d) => [d.path, d.content]));
+    return allFiles.map((path) => {
+      const m = metaOf(path);
+      return { path, content: text.get(path) ?? '', mtime: m?.mtime, size: m?.size };
+    });
+  }, [allFiles, searchDocs, metaOf]);
 
 
   /** 执行一轮完整同步（推送本地增量 + 拉取远端变更） */
@@ -2293,7 +2314,7 @@ export default function App() {
             void onOpenPdf(p);
           }}
           baseDoc={baseDoc}
-          baseNotes={searchDocs}
+          baseNotes={baseFiles}
           onCloseBase={() => setBaseDoc(null)}
           onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
           pdfView={pdfView}
@@ -2479,7 +2500,7 @@ export default function App() {
             void onOpenPdf(p);
           }}
         baseDoc={baseDoc}
-        baseNotes={searchDocs}
+        baseNotes={baseFiles}
         onCloseBase={() => setBaseDoc(null)}
         onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
         pdfView={pdfView}

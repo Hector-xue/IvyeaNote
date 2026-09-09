@@ -732,6 +732,89 @@ await new Promise((r) => setTimeout(r, 2600));
   check('点表里的一行会打开那篇笔记（表随之关闭）', await evaluate(`(() => {
     return !document.querySelector('.base-view') && !!document.querySelector('.cm-content');
   })()`));
+
+  /*
+   * v0.11.15：**`.base` 的数据源是"库里的文件"，不是"库里的笔记"。**
+   *
+   * 用户原话：「个人空间统计不完全啊，图片，pdf，个人空间本身的 .base 文件都没有
+   * 在个人空间里面体现」。此前喂给它的是正文索引（只含 .md），于是一张按文件夹
+   * 筛的表里，图片 / PDF / 这个 .base 自己全都不见。这里造一个只按文件夹筛的表，
+   * 数它到底数全了没有。
+   */
+  await evaluate(`(async () => {
+    const bin = atob(${JSON.stringify(PNG_1X1)});
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const dir = await handle.getDirectoryHandle('资料', { create: true });
+      const NL = String.fromCharCode(10);
+      const put = async (n, text) => {
+        const fh = await dir.getFileHandle(n, { create: true });
+        const w = await fh.createWritable();
+        await w.write(new TextEncoder().encode(text));
+        await w.close();
+      };
+      await put('说明.md', ['# 说明', '', '正文', ''].join(NL));
+      await put('全部.base', [
+        'filters:', '  and:', '    - file.inFolder("资料")',
+        'views:', '  - type: table', '    name: 全部', '    order:', '      - file.name', '      - file.ext', '',
+      ].join(NL));
+      const ih = await dir.getFileHandle('插图.png', { create: true });
+      const iw = await ih.createWritable();
+      await iw.write(bytes);
+      await iw.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  // 文件夹可能是收起的：找不到里面的文件就先展开它，再找一次
+  const openedAll = await evaluate(`(async () => {
+    const findFile = () => [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('全部'));
+    if (!findFile()) {
+      const dir = [...document.querySelectorAll('.ft-dir-name')].find(x => x.textContent === '资料');
+      dir?.closest('.ft-dir')?.click();
+      await new Promise(r => setTimeout(r, 400));
+    }
+    const el = findFile();
+    const row = el?.closest('.ft-file');
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return {
+      clicked: !!row,
+      tree: [...document.querySelectorAll('.ft-file-name, .ft-dir-name')].map(x => x.textContent).slice(0, 24),
+    };
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const allFilesTable = await evaluate(`(() => {
+    const v = document.querySelector('.base-view');
+    if (!v) return null;
+    const rows = [...v.querySelectorAll('.base-table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim());
+    return { count: v.querySelector('.base-count')?.textContent ?? '', rows };
+  })()`);
+  check('.base 表里图片 / .base 自己都在（数据源是库里的文件，不是只有笔记）',
+    openedAll.clicked && !!allFilesTable &&
+    allFilesTable.rows.some((r) => r.includes('插图')) &&
+    allFilesTable.rows.some((r) => r.includes('全部')) &&
+    allFilesTable.rows.some((r) => r.includes('说明')), { ...allFilesTable, ...openedAll });
+  await shot('base-all-files.png');
+
+  // 点图片那一行：要开图片层，而不是拿文本通道去读 PNG 然后炸掉
+  await evaluate(`(() => {
+    const link = [...document.querySelectorAll('.base-table .base-link')].find(a => a.textContent.includes('插图'));
+    link?.click(); return !!link })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const imgFromBase = await evaluate(`(() => {
+    const v = document.querySelector('.img-view');
+    return { open: !!v, natural: v?.querySelector('img')?.naturalWidth ?? 0, err: !!document.querySelector('.err-wrap') };
+  })()`);
+  check('点表里的图片一行会打开图片预览（不是当成笔记去读，也不该把应用打进错误页）',
+    imgFromBase.open && imgFromBase.natural > 0 && !imgFromBase.err, imgFromBase);
+  await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
 }
 
 // ---------- 7.5b 右栏大纲（v0.11.11）----------
@@ -1494,8 +1577,31 @@ await new Promise((r) => setTimeout(r, 2600));
   const bottom = await evaluate(`(() => ({
     labels: [...document.querySelectorAll('.m-bottom .m-nav-btn')].map(b => b.getAttribute('aria-label')),
   }))()`);
-  check('底部四个键换成手机上真正高频的：搜索 / 新建 / 大纲 / 同步（格式条改由焦点触发）',
-    JSON.stringify(bottom.labels) === JSON.stringify(['搜索', '新建笔记', '大纲', '立即同步']), bottom);
+  /*
+   * v0.11.15：验证台跑的是**没登录**的本地模式，所以最右边那颗键的名字是
+   * 「登录后同步」——此前它在这种状态下叫「立即同步」，点下去调的却是一个
+   * 第一行就 return 的函数：没反应、没提示、没动效（用户点名问它是干什么的）。
+   */
+  check('底部四个键：搜索 / 新建 / 大纲 / 同步；没登录时最后一颗明说是"登录后同步"',
+    JSON.stringify(bottom.labels) === JSON.stringify(['搜索', '新建笔记', '大纲', '登录后同步']), bottom);
+
+  // 点它必须**有事发生**：本地模式下弹登录页
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.m-bottom .m-nav-btn')].pop();
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const afterSyncTap = await evaluate(`(() => ({
+    login: !!document.querySelector('.login-wrap'),
+    body: (document.body.innerText || '').slice(0, 40),
+  }))()`);
+  check('点最右边那颗键真的有反应（本地模式下把登录页叫出来，而不是静默什么都不做）',
+    afterSyncTap.login, afterSyncTap);
+  await shot('mobile-sync-tap.png');
+  // 退回主界面，后面的用例以"开着一篇笔记"为前提
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.login-wrap button')].find(x => /取消|返回/.test(x.textContent ?? ''));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 600));
 
   // 标题：把主区滚下去，标题应当跟着走（不再钉在顶上）
   const title = await evaluate(`(() => {

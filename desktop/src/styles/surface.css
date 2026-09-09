@@ -2106,3 +2106,29 @@ button.st-item:hover {
   align-self: center;
   margin-left: 4px;
 }
+
+/*
+ * 底部导航的「同步」键：转起来。
+ *
+ * `m-nav-btn spin` 这个 class 从 v0.11.13 起就挂上去了，但**样式表里从来没有过
+ * 这条规则**——同步时按钮一动不动，用户点完只能怀疑是不是坏了
+ * （原话：「点了之后看不到反应啊，也没个动效，也没有反应」）。
+ * 转的是图标不是按钮：按钮上还有下面那个未同步的小圆点，一起转就成了转盘。
+ */
+.m-nav-btn.spin svg {
+  animation: m-spin 1s linear infinite;
+}
+/* 有改动还没推上去：右上角一个小圆点（和系统里"有未读"是同一套语言） */
+.m-nav-btn.dot {
+  position: relative;
+}
+.m-nav-btn.dot::after {
+  content: '';
+  position: absolute;
+  top: 12px;
+  right: 26%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
