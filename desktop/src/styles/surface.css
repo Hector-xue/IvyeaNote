@@ -2132,3 +2132,232 @@ button.st-item:hover {
   border-radius: 50%;
   background: var(--accent);
 }
+
+/* ---- 侧栏头部：更紧、不留半边空白（v0.11.16）---- */
+/*
+ * 用户原话：「侧边栏这个地方的 UI 布局需要优化一下，感觉不对称，右边的空间有点空。
+ * 还感觉占的空间有点高」。
+ *
+ * 两笔账：
+ * ① **高**——那一片原本是两行：库名一行 + 「新建笔记/新建文件夹/排序/全部折叠」
+ *    一行。后者在 v0.11.14 已经搬到顶栏侧栏格里去了（标签要和页面对齐，那块地方
+ *    正好空着），这里再把剩下那行的上下留白收紧；
+ * ② **右边空**——库名按钮原来只占内容宽度，那个 ∨ 紧跟在名字后面，右边一大片空着。
+ *    改成整行铺满、∨ 顶到右边缘：它本来就是"点开换库"的下拉行，右对齐的箭头
+ *    才是这类行该有的样子（Obsidian 的库切换器、我们自己的手机端抽屉都是这样）。
+ */
+.sidebar {
+  padding: 8px 10px 12px;
+}
+.side-head {
+  padding: 0 2px 6px;
+  gap: 7px;
+}
+.vault-btn {
+  justify-content: space-between;
+}
+/* 名字与箭头之间那点间距归 space-between 管，名字自己吃满剩余宽度 */
+.vault-btn .vault-name {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+/* ============================================================ v0.11.16
+   左栏面板（标签 / 回收站）与右栏里的图谱。 */
+
+/*
+ * 一套行的形状给两个面板共用。用户说旧的「很乱」，乱在三处：
+ * 回收站每行挂两个实心按钮（一列按钮墙）、标签是一片大小不一的胶囊、
+ * 两者都还盖在正文上。现在都是左栏里的一列行：图标一栏对齐、名字吃满、
+ * 右侧放计数或悬停才出现的动作。
+ */
+.side-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.sp-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 6px 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+.sp-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.sp-clear {
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sp-link {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+.sp-link:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.sp-link.danger:hover {
+  color: #d95a4a;
+}
+.sp-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.sp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  margin: 1px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.sp-row-static {
+  cursor: default;
+}
+.sp-row:hover {
+  background: rgba(127, 127, 127, 0.1);
+}
+.sp-ico {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--muted);
+}
+.sp-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.sp-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 第二行放原来的目录：回收站里的文件名是编码过的时间戳串，光看名字不知道它是哪来的 */
+.sp-sub {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sp-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* 动作悬停才出现：回收站是偶尔来一次的地方，常显按钮会把列表变成按钮墙 */
+.sp-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+}
+.sp-row:hover .sp-actions,
+.sp-row:focus-within .sp-actions {
+  opacity: 1;
+}
+.sp-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sp-act:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+.sp-act.danger:hover {
+  color: #d95a4a;
+}
+.sp-empty {
+  padding: 12px 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/*
+ * 右栏里的图谱。整屏那一版是 fixed + inset:0，嵌进面板要改成"吃满这一栏"。
+ * 工具条在窄栏里会换行，所以让它自己 wrap，不要横向溢出。
+ */
+.graph-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.graph-panel .graph-toolbar {
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 8px;
+}
+.graph-panel .graph-search {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.graph-panel .graph-canvas {
+  flex: 1;
+  min-height: 0;
+}
+/* 那行操作提示（滚轮缩放 · 拖空白平移…）在 248px 宽的栏里会被截断，
+   而它本来就是给第一次铺开看全库的人准备的——窄栏里不显示 */
+.graph-panel .graph-hint {
+  display: none;
+}
+/* 图谱那一页要把整栏交出去：默认 rp-body 有内边距，图谱贴边才有面积 */
+.rp-body-graph {
+  padding: 0;
+  display: flex;
+  min-height: 0;
+}

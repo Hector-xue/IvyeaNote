@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
-import { MainView } from './ui/MainView';
+import { MainView, type SidebarTab } from './ui/MainView';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
@@ -482,17 +482,61 @@ export default function App() {
     [vault?.localPath, toast]
   );
 
+  /**
+   * 导出为 PDF（v0.11.16 重做）。
+   *
+   * 用户原话：「为什么导出为 PDF 还需要链接打印机？这跟我的需求不一样啊，
+   * 我的需求是直接能转成 PDF 文件」。此前这里只有一句 `window.print()`——
+   * 弹的是系统打印对话框，得在里面挑一个叫「Microsoft Print to PDF」的虚拟打印机。
+   *
+   * 现在 Windows 上走 WebView2 的 `PrintToPdf`：选个保存位置，直接落一个 PDF 文件，
+   * 出来的还是**矢量**的（文字能选中、能搜索、简历筛选系统能解析），
+   * 而不是把页面截成图拼出来的那种。
+   * 其它平台没有这条原生路，仍然退回打印对话框（macOS 的打印面板自带「存储为 PDF」），
+   * 而且**先问支不支持再决定要不要弹保存框**——不能让人选完位置才说做不到。
+   */
   const exportPdf = useCallback(async () => {
     if (!currentPath) return;
     setViewMode('read');
-    // 等阅读视图真的渲染出来再调打印：两帧足够 React 提交 + 浏览器排版
+    // 等阅读视图真的渲染出来再导出：两帧足够 React 提交 + 浏览器排版
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    try {
-      window.print();
-    } catch (e) {
-      toast(`导出失败：${errText(e)}`, 'error');
+    const fallbackPrint = () => {
+      try {
+        window.print();
+      } catch (e) {
+        toast(`导出失败：${errText(e)}`, 'error');
+      }
+    };
+    if (!isTauri) {
+      // 浏览器里只有打印这一条路（没有文件系统，也没有 WebView2 接口）
+      fallbackPrint();
+      return;
     }
-  }, [currentPath, toast]);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const native = await invoke<boolean>('export_pdf_supported');
+      if (!native) {
+        toast('这个平台还没有原生导出，已打开打印面板（在里面选「另存为 PDF」）', 'ok');
+        fallbackPrint();
+        return;
+      }
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const target = await save({
+        defaultPath: `${titleOfPath(currentPath)}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (!target) return; // 用户自己取消了，不该弹任何提示
+      await invoke('export_pdf', { path: target });
+      toast(`已导出 PDF：${target}`, 'ok');
+    } catch (e) {
+      /*
+       * 失败要说得出原因，并且**留一条能走的路**——静默失败这个仓库付过四轮返工的账。
+       * 老版本 WebView2 运行时没有 PrintToPdf，这里正好接住。
+       */
+      toast(`导出 PDF 失败：${errText(e)}；已改用打印面板`, 'error');
+      fallbackPrint();
+    }
+  }, [currentPath, toast, errText]);
 
   const onAuthExpired = useCallback(() => {
     setSessionExpired(true);
@@ -1395,8 +1439,19 @@ export default function App() {
 
   /** 「移动到…」选择器：桌面右键与移动端长按共用 */
   const [moving, setMoving] = useState<{ path: string; isDir: boolean } | null>(null);
-  /** v0.7.1 F8: graph view */
+  /** v0.7.1 F8: graph view（整屏那一版，现在是"全屏打开"才用） */
   const [showGraph, setShowGraph] = useState(false);
+  /**
+   * v0.11.16：**左栏显示哪个面板**。
+   *
+   * 从 MainView 提上来：命令面板里的「标签」「回收站」也要能切过来，
+   * 而那两条命令在这一层。ribbon 上那一排按钮从此只做一件事——切这个值。
+   */
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files');
+  /** 点标签面板里的标签 → 灌进侧栏搜索框（带序号，连点两次也要重搜） */
+  const [sideSearchSeed, setSideSearchSeed] = useState<{ text: string; n: number } | null>(null);
+  /** ribbon 那颗图谱按钮：加一次，右栏就展开并切到图谱标签 */
+  const [graphRequest, setGraphRequest] = useState(0);
 
   /**
    * v0.10.5：内置同步服务端。
@@ -1831,7 +1886,13 @@ export default function App() {
       onOpenSettings: () => setShowSettings(true),
       onCheckUpdate: checkUpdateNow,
       onAddDevice: state.account ? () => void showPairCode() : null,
-      onOpenTrash: vault ? () => void trash.reload() : null,
+      onOpenTrash: vault
+        ? () => {
+            setSidebarTab('trash');
+            void trash.reload();
+          }
+        : null,
+      onOpenTags: vault ? () => setSidebarTab('tags') : null,
     }),
     [
       onCreateNote,
@@ -1851,7 +1912,7 @@ export default function App() {
       vault,
     ]
   );
-  const { paletteMode, openPalette, closePalette, commands } = useCommands({
+  const { paletteMode, closePalette, commands } = useCommands({
     enabled: !!vault,
     splitOpen: !!splitPath,
     theme,
@@ -1905,24 +1966,13 @@ export default function App() {
     showSettings,
   ]);
 
-  /**
-   * 点标签 → 搜这个标签。桌面走命令面板的搜索模式；面板的输入框是非受控的，
-   * 只能用原生 setter + input 事件把值灌进去（React 不认直接赋 value）。
+  /*
+   * v0.11.16：**「点标签 → 搜标签」不再绕命令面板。**
+   * 标签面板现在就在左栏，点一下切到隔壁的搜索面板、把 `#标签` 灌进去即可
+   * （见桌面 MainView 的 onPickTag）。此前那段是"打开命令面板 → 用原生 setter
+   * 往非受控输入框里塞值 → 派发 input 事件"，纯粹是因为标签在一张弹窗里、
+   * 而搜索在另一个地方。手机端仍走抽屉里的搜索（mobileSearchSeed）。
    */
-  const searchTag = useCallback(
-    (tag: string) => {
-      openPalette('search');
-      window.setTimeout(() => {
-        const input = document.querySelector<HTMLInputElement>('.palette-input');
-        if (!input) return;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-        setter?.call(input, '#' + tag);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      }, 80);
-    },
-    [openPalette]
-  );
-
 
   /** 库内全部目录（笔记路径推导出来的 + 只有 .keep 的空目录），供「移动到…」列表用 */
   const allDirs = useMemo(() => {
@@ -2325,6 +2375,7 @@ export default function App() {
           resolveImage={resolveImage}
           onOpenPath={onOpenLinkPath}
           onOpenSettings={() => setShowSettings(true)}
+          onOpenDaily={() => void openDailyNote()}
         />
         {/* 标签面板原本整段写在桌面分支之后，手机上根本不渲染——补入口就得连它一起搬 */}
         {showTagPanel && (
@@ -2511,18 +2562,37 @@ export default function App() {
         resolveImage={resolveImage}
         importProgress={importProgress}
         trashCount={trash.list.length}
-        onOpenTrash={() => void trash.reload()}
+        /*
+         * v0.11.16：回收站与标签都变成左栏的面板（此前是两张对话框，
+         * 和 ribbon 上"文件/搜索"那两颗按钮行为不一致——用户说"很乱"的根子）。
+         */
+        sidebarTab={sidebarTab}
+        onSidebarTab={(t) => {
+          setSidebarTab(t);
+          if (t === 'trash') void trash.reload(); // 切过去就刷新一次，别看陈的
+        }}
+        trashList={trash.list}
+        onTrashRestore={(p) => void trash.restore(p)}
+        onTrashPurge={(p) => void trash.purge(p)}
+        onTrashPurgeAll={() => void trash.purgeAll()}
+        onPickTag={(tag) => {
+          setSidebarTab('search');
+          setSideSearchSeed((cur) => ({ text: `#${tag}`, n: (cur?.n ?? 0) + 1 }));
+        }}
+        searchSeed={sideSearchSeed}
+        onOpenDaily={() => void openDailyNote()}
         collapsedDirs={collapsedDirs}
         onToggleDir={toggleDir}
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
         conflictCount={conflictFiles.length}
-        onOpenTags={() => void openTagPanel()}
         onOpenSettings={() => setShowSettings(true)}
         searchDocs={searchDocs}
         onPasteImage={onPasteImage}
-        onOpenGraph={() => {
-          setShowGraph(true);
-        }}
+        /* 图谱改到右栏：这颗按钮只负责把右栏展开并切过去（见 ui/RightPanel） */
+        graphOpen={graphRequest > 0}
+        onOpenGraph={() => setGraphRequest((n) => n + 1)}
+        graphRequest={graphRequest}
+        onExpandGraph={() => setShowGraph(true)}
         onOpenWiki={(t) => void onOpenWiki(t)}
         onOpenPath={onOpenLinkPath}
         wikiOut={wikiLinks.out}
@@ -2571,50 +2641,14 @@ export default function App() {
           onClose={() => setShowGraph(false)}
         />
       )}
-      {showTagPanel && (
-        <TagPanel
-          docs={searchDocs}
-          onClose={() => setShowTagPanel(false)}
-          onPick={(tag) => {
-            setShowTagPanel(false);
-            searchTag(tag);
-          }}
-        />
-      )}
+      {/* 标签同样搬进了左栏面板；手机端那张 TagPanel 弹层保留（抽屉里没有 ribbon） */}
       {pairEl}
       {conflictEl}
       {settingsEl}
-      {trash.open && (
-        <div className="dlg-mask" onMouseDown={(e) => e.target === e.currentTarget && trash.setOpen(false)}>
-          <div className="dlg-card trash-card" role="dialog" aria-modal="true" aria-label="回收站">
-            <h2 className="dlg-title">回收站</h2>
-            {trash.list.length === 0 ? (
-              <p className="dlg-desc">回收站是空的。</p>
-            ) : (
-              <ul className="trash-list">
-                {trash.list.map((p) => (
-                  <li key={p} className="trash-item">
-                    <span className="ti-name" title={p}>
-                      {p.replace(/^\.trash\//, '')}
-                    </span>
-                    <button className="btn ghost" onClick={() => void trash.restore(p)}>
-                      恢复
-                    </button>
-                    <button className="btn danger" onClick={() => void trash.purge(p)}>
-                      彻底删除
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="dlg-actions">
-              <button className="btn primary" onClick={() => trash.setOpen(false)}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/*
+        v0.11.16：回收站那张对话框删掉了——它现在是左栏的一个面板（ui/SidePanes）。
+        同一个功能留两个入口，迟早变成"两处都要改、只改了一处"。
+      */}
       {moving && (
         <MoveDialog
           srcPath={moving.path}

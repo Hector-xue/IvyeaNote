@@ -7,6 +7,8 @@ pub mod localserver;
 pub mod firewall;
 // v0.11.4：把笔记库目录递归加进 fs 作用域。不加的话子目录里新建附件会被拒（粘贴图片失效）
 pub mod fsscope;
+// v0.11.16：导出 PDF 直接写文件（Windows 走 WebView2 的 PrintToPdf，不弹打印机）
+pub mod printpdf;
 
 // `AppHandle::state()` 来自 Manager trait，退出钩子里要用
 use tauri::Manager;
@@ -31,7 +33,9 @@ pub fn run() {
             localserver::local_server_available,
             firewall::firewall_status,
             firewall::fix_firewall,
-            fsscope::allow_vault_path
+            fsscope::allow_vault_path,
+            printpdf::export_pdf_supported,
+            printpdf::export_pdf
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

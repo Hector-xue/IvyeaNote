@@ -27,6 +27,7 @@ function makeActions(over: Partial<CommandActions> = {}): CommandActions {
     onCheckUpdate: vi.fn(),
     onAddDevice: null,
     onOpenTrash: null,
+    onOpenTags: null,
     ...over,
   };
 }

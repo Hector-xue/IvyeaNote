@@ -19,9 +19,18 @@ export type IconName =
   | 'strikethrough' | 'highlight' | 'clear-format' | 'code-block' | 'callout'
   // v0.11.0 窗口自绘按钮 + 图谱工具
   | 'win-min' | 'win-max' | 'win-restore' | 'win-close'
-  | 'zoom-in' | 'zoom-out' | 'focus' | 'filter' | 'page-left' | 'page-right';
+  | 'zoom-in' | 'zoom-out' | 'focus' | 'filter' | 'page-left' | 'page-right'
+  // v0.11.16：回收站里的「恢复」。用 sync 那个圆环会和"同步中"撞语义
+  | 'undo';
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  /** 恢复：一条绕回去的箭头（撤销的通用形状） */
+  undo: (
+    <>
+      <path d="M4 9h11a5 5 0 0 1 0 10h-6" />
+      <path d="M8 5 4 9l4 4" />
+    </>
+  ),
   // ---- v0.10.0 移动端 ----
   /** 侧栏开关：Obsidian 移动端左上角那个「圆角矩形 + 左侧竖条」 */
   sidebar: (
