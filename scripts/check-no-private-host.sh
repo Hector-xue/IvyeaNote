@@ -65,7 +65,9 @@ fail=0
 # ---------- 允许出现的主机 ----------
 # 每一条都要说得出理由，加新条目前先问一句"它凭什么进安装包"。
 # `192.168.x.x` 是界面上教用户"手机该填哪个地址"的**占位文本**，不是主机名。
-ALLOWED_HOSTS='^(localhost|127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.255|tauri\.localhost|github\.com|api\.github\.com|objects\.githubusercontent\.com|schema\.tauri\.app|(www\.)?w3\.org|example\.(com|org|test)|a\.com|x\.com|192\.168\.x\.x)$'
+# `example.com/net/org` 与 `.test` 是 RFC 2606 保留给文档用的，子域一并放行——
+# 它们不可能是任何人的私有服务器，而占位示例又确实需要一个像样的地址。
+ALLOWED_HOSTS='^(localhost|127\.0\.0\.1|0\.0\.0\.0|255\.255\.255\.255|tauri\.localhost|github\.com|api\.github\.com|objects\.githubusercontent\.com|schema\.tauri\.app|(www\.)?w3\.org|([a-z0-9-]+\.)*example\.(com|org|net|test)|a\.com|x\.com|192\.168\.x\.x)$'
 # 允许出现的裸 IP：回环、任意地址、广播、私网（RFC1918 / CGNAT / link-local），
 # 外加 8.8.8.8——`localserver.rs` 用 **UDP connect** 到它来问"本机出网走哪块网卡"，
 # 这个操作不发任何数据包，也不需要网络可达（换成私网地址就问不出正确答案）。

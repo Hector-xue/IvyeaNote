@@ -430,13 +430,22 @@ export function SettingsView(props: Props) {
             <div className="set-row">
               <label className="set-label" htmlFor="ai-base">
                 接口地址
-                <span className="set-hint">例：https://api.deepseek.com（写不写 /v1 都认）</span>
+                {/*
+                  这里刻意**不写任何真实厂商域名**：产物里出现具体主机名会被
+                  scripts/check-no-private-host.sh 拦下——那道闸门分不清"占位示例"
+                  和"写死的服务器"，而它宁可错拦也不该放过（v0.10.3 的教训）。
+                  厂商名用文字说，地址给一个 example 占位。
+                */}
+                <span className="set-hint">
+                  填厂商给的接口地址（DeepSeek / OpenAI / 硅基流动…），写不写 /v1 都认；
+                  本机 Ollama 填 http://localhost:11434/v1
+                </span>
               </label>
               <input
                 id="ai-base"
                 className="set-input"
                 value={p.ai.baseUrl}
-                placeholder="https://api.deepseek.com"
+                placeholder="https://api.example.com"
                 onChange={(e) => setPref({ ai: { ...p.ai, baseUrl: e.target.value } })}
               />
             </div>
@@ -457,7 +466,7 @@ export function SettingsView(props: Props) {
             <div className="set-row">
               <label className="set-label" htmlFor="ai-model">
                 模型
-                <span className="set-hint">例：deepseek-chat / gpt-4o-mini / qwen2.5:7b</span>
+                <span className="set-hint">厂商文档里那个模型名，例：deepseek-chat / gpt-4o-mini / qwen2.5:7b</span>
               </label>
               <input
                 id="ai-model"

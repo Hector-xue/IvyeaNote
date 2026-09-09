@@ -51,7 +51,7 @@ export interface Prefs {
 }
 
 export interface AiPrefs {
-  /** 接口地址，比如 https://api.deepseek.com（少写 /v1 也认，见 lib/llm 的 chatUrl） */
+  /** 接口地址（少写 /v1 也认，见 lib/llm 的 chatUrl）。示例见设置页，这里不写具体厂商域名 */
   baseUrl: string;
   apiKey: string;
   model: string;

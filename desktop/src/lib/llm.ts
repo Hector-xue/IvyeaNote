@@ -38,7 +38,7 @@ export function isLlmConfigured(c: Partial<LlmConfig> | null | undefined): c is 
   return !!(c && c.baseUrl?.trim() && c.model?.trim());
 }
 
-/** `https://api.x.com` → `https://api.x.com/v1/chat/completions`；已经带路径的原样用 */
+/** `https://api.example.com` → `…/v1/chat/completions`；已经带路径的原样用 */
 export function chatUrl(baseUrl: string): string {
   const base = baseUrl.trim().replace(/\/+$/, '');
   if (/\/chat\/completions$/.test(base)) return base;
