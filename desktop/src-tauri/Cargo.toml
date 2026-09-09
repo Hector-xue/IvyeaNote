@@ -1,6 +1,6 @@
 [package]
 name = "ivyea-note-desktop"
-version = "0.11.15"
+version = "0.11.16"
 description = "Ivyea Note 桌面端：本地 Markdown · 多端同步"
 authors = ["ivyea"]
 license = "MIT"
@@ -24,6 +24,13 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # 安卓 SAF：让笔记库能落在用户自己选的系统目录里（上游 dialog 插件没实现选目录）
 tauri-plugin-ivnote-saf = { path = "plugins/ivnote-saf" }
+
+# 导出 PDF（v0.11.16）：WebView2 的 PrintToPdf 直接写文件，不经打印机。
+# 版本必须跟着 tauri/wry 走——它们用的也是 webview2-com 0.38 / windows-core 0.61，
+# 对不上就会出现"两个 ICoreWebView2Controller 类型不一样"这种看不懂的报错。
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
 
 [profile.release]
 strip = true

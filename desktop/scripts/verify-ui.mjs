@@ -1332,6 +1332,71 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('colors-edit.png');
 }
 
+// ---------- 7.85 侧栏头部：紧凑且左右不空（v0.11.16）----------
+/*
+ * 用户原话：「侧边栏这个地方的 UI 布局需要优化一下，感觉不对称，右边的空间有点空。
+ * 还感觉占的空间有点高」。这条量三件事：库名行铺满整个侧栏宽度、下拉箭头顶到右边缘、
+ * 从侧栏顶端到文件树第一行的高度别超过一行半。
+ */
+{
+  const head = await evaluate(`(() => {
+    const side = document.querySelector('.sidebar');
+    const head = document.querySelector('.side-head');
+    const btn = document.querySelector('.vault-btn');
+    const chevron = btn?.querySelector('svg');
+    const firstRow = document.querySelector('.ft-root .ft-file, .ft-root .ft-dir');
+    if (!side || !head || !btn || !firstRow) return null;
+    const s = side.getBoundingClientRect(), h = head.getBoundingClientRect();
+    const b = btn.getBoundingClientRect(), c = chevron.getBoundingClientRect();
+    return {
+      sideRight: Math.round(s.right),
+      headRight: Math.round(h.right),
+      btnRight: Math.round(b.right),
+      chevronGap: Math.round(b.right - c.right),
+      // 侧栏顶到文件树第一行：这就是"占多高"
+      toFirstRow: Math.round(firstRow.getBoundingClientRect().top - s.top),
+      actionRows: document.querySelectorAll('.sidebar .side-actions').length,
+    };
+  })()`);
+  check('库名那一行铺满侧栏，下拉箭头顶到右边缘（右边不再空半条）',
+    !!head && head.chevronGap <= 12 && head.headRight - head.btnRight <= 30, head);
+  check('侧栏顶端到文件树第一行不超过 56px（那行图标已搬去顶栏，剩下的留白也收紧了）',
+    !!head && head.toFirstRow <= 56 && head.actionRows === 0, head);
+  await shot('sidebar-head.png');
+}
+
+// ---------- 7.86 导出 PDF：浏览器里退回打印面板（v0.11.16）----------
+/*
+ * Windows 上这条路走的是 WebView2 的 PrintToPdf（直接落文件、不弹打印机），
+ * 那段是 Rust、只有 Windows 编得到，这里验不了。**这里能验、也必须验的是另一半**：
+ * 没有 Tauri 的环境（浏览器）不能因为找不到 invoke 就把菜单点崩，
+ * 而要老老实实退回打印面板——这正是"能力写好了、另一条路没接"最容易翻车的地方。
+ */
+{
+  const exported = await evaluate(`(async () => {
+    window.__printed = 0;
+    window.print = () => { window.__printed++; };
+    const more = document.querySelector('.top-bar button[aria-label="更多操作"]');
+    if (!more) return { menu: false };
+    more.click();
+    await new Promise(r => setTimeout(r, 300));
+    const item = [...document.querySelectorAll('.ctx-item')]
+      .find(b => (b.querySelector('.ctx-label')?.textContent ?? '').includes('导出为 PDF'));
+    if (!item) return { menu: true, item: false };
+    item.click();
+    await new Promise(r => setTimeout(r, 900));
+    return {
+      menu: true,
+      item: true,
+      printed: window.__printed,
+      crashed: !!document.querySelector('.err-wrap'),
+      toasts: [...document.querySelectorAll('.toast')].map(t => t.textContent),
+    };
+  })()`);
+  check('「导出为 PDF」在没有 Tauri 的环境里退回打印面板，且不把应用点崩',
+    exported.item && exported.printed === 1 && !exported.crashed, exported);
+}
+
 // ---------- 7.9 编辑态：列表圆点 / 链接 / 标题上的光标（v0.11.15）----------
 /*
  * 用户拿 Obsidian 的截图逐条对比：「很多符号都没有正常显示，也没有自动识别链接」

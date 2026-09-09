@@ -482,17 +482,61 @@ export default function App() {
     [vault?.localPath, toast]
   );
 
+  /**
+   * 导出为 PDF（v0.11.16 重做）。
+   *
+   * 用户原话：「为什么导出为 PDF 还需要链接打印机？这跟我的需求不一样啊，
+   * 我的需求是直接能转成 PDF 文件」。此前这里只有一句 `window.print()`——
+   * 弹的是系统打印对话框，得在里面挑一个叫「Microsoft Print to PDF」的虚拟打印机。
+   *
+   * 现在 Windows 上走 WebView2 的 `PrintToPdf`：选个保存位置，直接落一个 PDF 文件，
+   * 出来的还是**矢量**的（文字能选中、能搜索、简历筛选系统能解析），
+   * 而不是把页面截成图拼出来的那种。
+   * 其它平台没有这条原生路，仍然退回打印对话框（macOS 的打印面板自带「存储为 PDF」），
+   * 而且**先问支不支持再决定要不要弹保存框**——不能让人选完位置才说做不到。
+   */
   const exportPdf = useCallback(async () => {
     if (!currentPath) return;
     setViewMode('read');
-    // 等阅读视图真的渲染出来再调打印：两帧足够 React 提交 + 浏览器排版
+    // 等阅读视图真的渲染出来再导出：两帧足够 React 提交 + 浏览器排版
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    try {
-      window.print();
-    } catch (e) {
-      toast(`导出失败：${errText(e)}`, 'error');
+    const fallbackPrint = () => {
+      try {
+        window.print();
+      } catch (e) {
+        toast(`导出失败：${errText(e)}`, 'error');
+      }
+    };
+    if (!isTauri) {
+      // 浏览器里只有打印这一条路（没有文件系统，也没有 WebView2 接口）
+      fallbackPrint();
+      return;
     }
-  }, [currentPath, toast]);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const native = await invoke<boolean>('export_pdf_supported');
+      if (!native) {
+        toast('这个平台还没有原生导出，已打开打印面板（在里面选「另存为 PDF」）', 'ok');
+        fallbackPrint();
+        return;
+      }
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const target = await save({
+        defaultPath: `${titleOfPath(currentPath)}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (!target) return; // 用户自己取消了，不该弹任何提示
+      await invoke('export_pdf', { path: target });
+      toast(`已导出 PDF：${target}`, 'ok');
+    } catch (e) {
+      /*
+       * 失败要说得出原因，并且**留一条能走的路**——静默失败这个仓库付过四轮返工的账。
+       * 老版本 WebView2 运行时没有 PrintToPdf，这里正好接住。
+       */
+      toast(`导出 PDF 失败：${errText(e)}；已改用打印面板`, 'error');
+      fallbackPrint();
+    }
+  }, [currentPath, toast, errText]);
 
   const onAuthExpired = useCallback(() => {
     setSessionExpired(true);
