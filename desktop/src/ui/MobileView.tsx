@@ -11,6 +11,7 @@ import type { SearchDoc } from '../lib/searchIndex';
 import type { BaseNote } from '../lib/bases';
 import { RibbonIcon } from './Icons';
 import { MarkdownEditor, type SelectionApi } from './MarkdownEditor';
+import type { AiMenuAction } from '../lib/editorMenu';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
 import { HtmlViewer } from './HtmlViewer';
@@ -104,7 +105,7 @@ interface Props {
    * v0.11.18 的 AI 只接了桌面，手机上连「⋯」里都没有——用户的原话是
    * 「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
    */
-  aiActions?: { id: string; label: string; hint: string; needsSelection: boolean }[];
+  aiActions?: AiMenuAction[];
   onAi?(id: string): void;
   onTidy?(): void;
   /** AI 结果面板（贴在编辑区下方；null = 不显示） */
@@ -275,20 +276,22 @@ export function MobileView(props: Props) {
      * 上一版刚因为"这张纸太碎"被骂过（「这么多横线还长短不一，好难看」）。
      */
     if (which === 'ai') {
-      const mk = (need: boolean): SheetItem[] =>
+      // 分组与桌面右键菜单同一套：会改正文的 / 只多给一段的 / 什么都不写的
+      const mk = (group: string): SheetItem[] =>
         (props.aiActions ?? [])
-          .filter((a) => a.needsSelection === need)
+          .filter((a) => (a.group ?? (a.needsSelection ? 'edit' : 'make')) === group)
           .map((a) => ({
             key: `ai-${a.id}`,
             icon: 'sparkle' as const,
             label: a.label,
             // 手机上没有"置灰的菜单项"这一说，把条件直接写进这一行
-            sub: need ? '要先选中一段文字' : a.hint,
+            sub: a.needsSelection ? '要先选中一段文字' : a.hint,
             onClick: () => props.onAi?.(a.id),
           }));
       return [
-        mk(true),
-        mk(false),
+        mk('edit'),
+        mk('make'),
+        mk('ask'),
         props.onTidy
           ? [{ key: 'tidy', icon: 'text-format', label: '整理排版', sub: '本地规则，不联网', onClick: () => props.onTidy?.() }]
           : [],

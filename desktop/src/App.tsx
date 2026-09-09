@@ -6,12 +6,18 @@ import { renderMarkdown, resolveImagesIn, type SelectionApi } from './ui/Markdow
 import { AiPanel } from './ui/AiPanel';
 import {
   AI_ACTIONS,
+  askNoteSpec,
+  askVaultSpec,
   buildMessages,
+  buildVaultContext,
   cleanReply,
+  customSpec,
   isLlmConfigured,
   streamChat,
   type AiActionSpec,
 } from './lib/llm';
+import { retrieve, totalChars } from './lib/retrieve';
+import { aiSubmenu } from './lib/editorMenu';
 import { tidyMarkdown, describeTidy } from './lib/tidy';
 import { pickDensity } from './lib/density';
 import { isSameTitle } from './ui/InlineTitle';
@@ -1274,6 +1280,91 @@ export default function App() {
   );
 
   /**
+   * **自定义指令**：用户自己说一句要怎么处理。
+   *
+   * 内置那十二条再多也盖不全人的需求（「改成给客户看的口吻」「把人名换成代号」），
+   * 这一条等于无数条。有选区就改这一段，没选区就把结果附到文末——
+   * 「没选中还要替换」只能意味着替换整篇，那种事这个软件不做。
+   */
+  const startCustomAi = useCallback(async () => {
+    const sel = selectionApi.current?.get() ?? null;
+    const hasSel = !!sel?.text.trim();
+    const instruction = await prompt({
+      title: '让 AI 做什么',
+      description: hasSel
+        ? `作用于选中的 ${sel!.text.length} 字，结果先给你看对照，不直接写进笔记`
+        : '没有选中文字，所以结果会作为新内容附到文末，不会覆盖原文',
+      placeholder: '例如：改写成给客户看的口吻，去掉内部黑话',
+      okText: '开始',
+      validate: (v) => (v.trim().length < 2 ? '说清楚要怎么处理' : null),
+    });
+    if (!instruction) return;
+    const spec = customSpec(instruction.trim(), hasSel ? 'replace' : 'produce');
+    if (hasSel) {
+      void runAi(spec, sel!.text, `选中的 ${sel!.text.length} 字`, { from: sel!.from, to: sel!.to });
+    } else {
+      const text = doc ?? '';
+      if (!text.trim()) {
+        toast('这篇还是空的', 'error');
+        return;
+      }
+      void runAi(spec, text, '整篇笔记', null);
+    }
+  }, [doc, prompt, runAi, toast]);
+
+  /** **问这篇笔记**：答案只许来自这一篇，问不到就该说问不到 */
+  const askThisNote = useCallback(async () => {
+    const sel = selectionApi.current?.get() ?? null;
+    const text = sel?.text.trim() ? sel.text : (doc ?? '');
+    if (!text.trim()) {
+      toast('这篇还是空的', 'error');
+      return;
+    }
+    const q = await prompt({
+      title: '问这篇笔记',
+      description: sel?.text.trim() ? `只根据选中的 ${sel.text.length} 字回答` : '只根据这篇笔记的内容回答',
+      placeholder: '例如：这篇里我最后定的方案是什么？',
+      okText: '问',
+      validate: (v) => (v.trim().length < 2 ? '问题写清楚一点' : null),
+    });
+    if (!q) return;
+    void runAi(askNoteSpec(q.trim()), text, sel?.text.trim() ? `选中的 ${sel.text.length} 字` : '整篇笔记', null);
+  }, [doc, prompt, runAi, toast]);
+
+  /**
+   * **问整个笔记库**。
+   *
+   * 先在**本地**检索出最相关的几段，再把这几段发出去——绝不是"把库传上去让它找"。
+   * 界面上如实写清这次送了哪几篇、多少字：用户有权知道自己的资料出去了多少。
+   */
+  const askVault = useCallback(async () => {
+    if (searchDocs.length === 0) {
+      toast('库里还没有可检索的笔记', 'error');
+      return;
+    }
+    const q = await prompt({
+      title: '问整个笔记库',
+      description: `先在本机检索，只把最相关的几段（最多 5 篇）发给模型，答案会标出处`,
+      placeholder: '例如：我之前关于定价的结论是什么？',
+      okText: '问',
+      validate: (v) => (v.trim().length < 2 ? '问题写清楚一点' : null),
+    });
+    if (!q) return;
+    const passages = retrieve(searchDocs, q.trim());
+    if (passages.length === 0) {
+      toast('本机检索没找到相关的笔记——换个说法，或者用更具体的词', 'error');
+      return;
+    }
+    const names = passages.map((p) => (p.path.split('/').pop() ?? p.path).replace(/\.md$/i, ''));
+    void runAi(
+      askVaultSpec(q.trim()),
+      buildVaultContext(passages),
+      `${passages.length} 篇 · 约 ${totalChars(passages)} 字：${names.join('、')}`,
+      null
+    );
+  }, [prompt, runAi, searchDocs, toast]);
+
+  /**
    * 右键菜单里那一组 AI 动作。
    *
    * v0.11.18 把能力做出来了，入口却只挂在顶栏「⋯」的二级菜单和命令面板里——
@@ -1281,21 +1372,31 @@ export default function App() {
    * 选中一段字之后，人的手就在右键上；这里才是这些动作的家。
    */
   const editorAiActions = useMemo(
-    () =>
-      AI_ACTIONS.map((a) => ({
+    () => [
+      ...AI_ACTIONS.map((a) => ({
         id: a.id,
         label: a.label,
         hint: a.hint,
         needsSelection: a.mode === 'replace',
+        // 改写类和产出类分两组：前者会覆盖你选中的字，后者只会多给你一段东西
+        group: a.mode === 'replace' ? ('edit' as const) : ('make' as const),
       })),
+      { id: 'custom', label: '自定义指令…', hint: '你说要怎么处理', needsSelection: false, group: 'ask' as const },
+      { id: 'ask-note', label: '问这篇笔记…', hint: '答案只来自这一篇', needsSelection: false, group: 'ask' as const },
+      { id: 'ask-vault', label: '问整个笔记库…', hint: '本机先检索，答案标出处', needsSelection: false, group: 'ask' as const },
+    ],
     []
   );
   const onEditorAi = useCallback(
     (id: string) => {
+      // 三条要先问一句再跑，不在 AI_ACTIONS 里
+      if (id === 'custom') return void startCustomAi();
+      if (id === 'ask-note') return void askThisNote();
+      if (id === 'ask-vault') return void askVault();
       const spec = AI_ACTIONS.find((a) => a.id === id);
       if (spec) startAi(spec);
     },
-    [startAi]
+    [askThisNote, askVault, startAi, startCustomAi]
   );
 
   /** 应用：替换类换掉那一段（走撤销栈），产出类追加到文末 */
@@ -2188,12 +2289,7 @@ export default function App() {
         : null,
       onOpenTags: vault ? () => setSidebarTab('tags') : null,
       onTidy: currentPath ? tidyNote : null,
-      onAi: currentPath
-        ? (id: 'proofread' | 'polish' | 'summarize') => {
-            const spec = AI_ACTIONS.find((a) => a.id === id);
-            if (spec) startAi(spec);
-          }
-        : null,
+      onAi: currentPath ? onEditorAi : null,
     }),
     [
       onCreateNote,
@@ -2213,7 +2309,7 @@ export default function App() {
       vault,
       currentPath,
       tidyNote,
-      startAi,
+      onEditorAi,
     ]
   );
   const { paletteMode, closePalette, commands } = useCommands({
@@ -2519,6 +2615,10 @@ export default function App() {
         if (aiState.spec === TIDY_SPEC) tidyNote();
         else if (aiState.spec) void runAi(aiState.spec, aiState.source, aiState.scope, aiState.range);
       }}
+      onCopy={(text) => {
+        void navigator.clipboard?.writeText(text);
+        toast('结果已复制', 'ok');
+      }}
       onClose={() => {
         aiAbort.current?.abort();
         setAiState((st) => ({ ...st, spec: null, busy: false }));
@@ -2576,16 +2676,12 @@ export default function App() {
               {
                 id: 'ai',
                 label: 'AI 助手',
-                icon: 'graph',
+                icon: 'sparkle',
                 /*
-                 * 二级菜单：替换类动作要求先选中文字（面板里会说清），
-                 * 产出类（摘要 / 起标题）没选区就按整篇来，也会在面板上标明范围。
+                 * 和编辑区右键、状态栏那颗按钮**共用同一份构造**（lib/editorMenu 的
+                 * aiSubmenu）——三处各写一遍，迟早会长成三张不一样的单子。
                  */
-                submenu: AI_ACTIONS.map((a) => ({
-                  id: `ai-${a.id}`,
-                  label: `${a.label}　${a.hint}`,
-                  run: () => startAi(a),
-                })),
+                submenu: aiSubmenu(editorAiActions, true, onEditorAi),
               },
               { type: 'sep', id: 's-1' },
               { id: 'rename', label: '重命名…', icon: 'edit', run: () => void requestRename(currentPath) },

@@ -7,6 +7,7 @@ import { InlineTitle } from './InlineTitle';
 import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
 import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
+import { aiSubmenu, type AiMenuAction } from '../lib/editorMenu';
 import { SearchPanel } from './SearchPanel';
 import { GraphView } from './GraphView';
 import { TagPane, TrashPane } from './SidePanes';
@@ -207,7 +208,7 @@ interface Props {
   /** v0.11.18：AI 结果面板（贴在编辑区下方；null = 不显示） */
   aiPanel?: React.ReactNode;
   /** v0.11.19：AI 动作进编辑器右键菜单与状态栏——只放在「⋯」里太深，用户根本没找到 */
-  aiActions?: { id: string; label: string; hint: string; needsSelection: boolean }[];
+  aiActions?: AiMenuAction[];
   onAi?(id: string): void;
   onTidy?(): void;
   /** v0.6.1 H6: add-device pairing */
@@ -763,26 +764,12 @@ export function MainView(props: Props) {
                 aria-label="AI"
                 onClick={(e) => {
                   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const items: MenuAnchor['items'] = [];
-                  const replace = props.aiActions!.filter((a) => a.needsSelection);
-                  const produce = props.aiActions!.filter((a) => !a.needsSelection);
-                  for (const a of replace) {
-                    items.push({
-                      id: `ai-${a.id}`,
-                      label: a.label,
-                      hint: a.hint,
-                      run: () => props.onAi?.(a.id),
-                    });
-                  }
-                  if (replace.length > 0 && produce.length > 0) items.push({ type: 'sep', id: 's-ai1' });
-                  for (const a of produce) {
-                    items.push({
-                      id: `ai-${a.id}`,
-                      label: a.label,
-                      hint: a.hint,
-                      run: () => props.onAi?.(a.id),
-                    });
-                  }
+                  /*
+                   * 分段与右键菜单同一套（见 lib/editorMenu 的 aiSubmenu）：
+                   * 会改正文的 / 只多给一段的 / 什么都不写的。这里不置灰——
+                   * 状态栏这颗按钮离编辑区远，选区常常已经没了，点了会说清原因。
+                   */
+                  const items: MenuAnchor['items'] = aiSubmenu(props.aiActions!, true, (id) => props.onAi?.(id));
                   if (props.onTidy) {
                     items.push({ type: 'sep', id: 's-ai2' });
                     items.push({

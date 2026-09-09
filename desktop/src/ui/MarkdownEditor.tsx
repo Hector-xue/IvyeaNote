@@ -45,7 +45,7 @@ import {
   type ImageApi,
 } from '../lib/livePreview';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
-import { blockSnippet, buildEditorMenu } from '../lib/editorMenu';
+import { blockSnippet, buildEditorMenu, type AiMenuAction } from '../lib/editorMenu';
 import { raiseToast } from './Toast';
 import { autocompletion } from '@codemirror/autocomplete';
 import { wikiCompletion } from '../lib/wikiComplete';
@@ -121,7 +121,7 @@ export interface MarkdownEditorProps {
    * 用户装完 v0.11.18 的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」
    * ——能力当时只挂在顶栏「⋯」的二级菜单里。选中文字之后人的第一反应是右键。
    */
-  aiActions?: { id: string; label: string; hint: string; needsSelection: boolean }[];
+  aiActions?: AiMenuAction[];
   onAi?(id: string): void;
   onTidy?(): void;
   /**

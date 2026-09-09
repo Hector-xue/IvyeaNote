@@ -214,6 +214,32 @@ describe('AI 组', () => {
     expect(buildEditorMenu(base, { ...actions(), ai: vi.fn() }).find((i) => !isSeparator(i) && i.id === 'ai')).toBeUndefined();
   });
 
+  /*
+   * v0.11.20：十五条动作平铺在一列里，人扫不出哪些会动到自己的正文。
+   * 分段的依据是**它会对你的文件做什么**，不是功能分类。
+   */
+  it('按"会不会改你的正文"分段，段间有分隔线', () => {
+    const many = [
+      { id: 'proofread', label: '校对', hint: '', needsSelection: true, group: 'edit' as const },
+      { id: 'summarize', label: '写摘要', hint: '', needsSelection: false, group: 'make' as const },
+      { id: 'ask-vault', label: '问整个笔记库…', hint: '', needsSelection: false, group: 'ask' as const },
+    ];
+    const items = buildEditorMenu({ ...base, aiActions: many }, { ...actions(), ai: vi.fn() });
+    const sub = (items[0] as MenuAction).submenu!;
+    expect(sub.filter(isSeparator)).toHaveLength(2);
+    expect(sub.findIndex((i) => !isSeparator(i) && i.id === 'ai-proofread')).toBeLessThan(
+      sub.findIndex((i) => !isSeparator(i) && i.id === 'ai-ask-vault')
+    );
+  });
+
+  it('提问类不需要选区——它们一个字都不会往笔记里写', () => {
+    const items = buildEditorMenu(
+      { ...base, aiActions: [{ id: 'ask-note', label: '问这篇笔记…', hint: '', needsSelection: false, group: 'ask' }] },
+      { ...actions(), ai: vi.fn() }
+    );
+    expect(find(items, 'ai-ask-note')?.disabled).toBeFalsy();
+  });
+
   it('「整理排版」是本地规则，跟着 AI 组一起出现', () => {
     const tidy = vi.fn();
     const items = buildEditorMenu({ ...base, aiActions: ai }, { ...actions(), ai: vi.fn(), tidy });

@@ -150,10 +150,23 @@ export async function testConnection(cfg: LlmConfig): Promise<string> {
 
 // ---------------------------------------------------------------- 动作
 
-export type AiAction = 'proofread' | 'polish' | 'concise' | 'formal' | 'structure' | 'summarize' | 'title';
+export type AiAction =
+  | 'proofread'
+  | 'polish'
+  | 'concise'
+  | 'formal'
+  | 'structure'
+  | 'expand'
+  | 'translate-en'
+  | 'translate-zh'
+  | 'summarize'
+  | 'title'
+  | 'todos'
+  | 'tags';
 
 export interface AiActionSpec {
-  id: AiAction;
+  /** 内置动作是 AiAction；用户自定义与"问一句"这类临时动作是自己造的 id */
+  id: string;
   label: string;
   hint: string;
   /** 结果是"替换选中文本"还是"给一段新东西"（后者不会覆盖原文） */
@@ -205,6 +218,27 @@ export const AI_ACTIONS: AiActionSpec[] = [
     system: `你是中文编辑。把这段零散的文字整理成结构化的 Markdown：该分点的分点、该做表的做表、该加小标题的加小标题。**不要新增原文没有的信息**。只输出 Markdown 正文本身，不要前言与解释。`,
   },
   {
+    id: 'expand',
+    label: '扩写',
+    hint: '把要点铺成完整段落',
+    mode: 'replace',
+    system: `你是中文编辑。把这段提纲式的要点铺开成完整、连贯的段落，补上必要的过渡与说明。**不要引入原文没有的事实、数字或结论**——展开的是表达，不是内容。${KEEP}`,
+  },
+  {
+    id: 'translate-en',
+    label: '译成英文',
+    hint: '保持 Markdown 结构',
+    mode: 'replace',
+    system: `你是中英译者。把这段内容翻译成自然的英文，保持原有的 Markdown 结构。专有名词、代码、链接地址、行内代码保持原样不译。${KEEP}`,
+  },
+  {
+    id: 'translate-zh',
+    label: '译成中文',
+    hint: '保持 Markdown 结构',
+    mode: 'replace',
+    system: `你是英中译者。把这段内容翻译成自然的中文（不要翻译腔），保持原有的 Markdown 结构。专有名词、代码、链接地址、行内代码保持原样不译。${KEEP}`,
+  },
+  {
     id: 'summarize',
     label: '写摘要',
     hint: '三到五句，附在文末',
@@ -218,7 +252,96 @@ export const AI_ACTIONS: AiActionSpec[] = [
     mode: 'produce',
     system: '你是中文编辑。为这段内容拟三个标题候选，每行一个，不要编号、不要解释、不要引号。',
   },
+  {
+    id: 'todos',
+    label: '提取待办',
+    hint: '会议记录 → 勾选清单',
+    mode: 'produce',
+    system:
+      '从这段内容里找出所有"要做的事"，输出 Markdown 待办清单，每行形如 `- [ ] 事项`。' +
+      '只列文中确实提到的事，**不要发挥**；能看出负责人或时间的就写在事项里。一件都没有就回复"没有找到待办"。',
+  },
+  {
+    id: 'tags',
+    label: '生成标签',
+    hint: '三到五个，附在文末',
+    mode: 'produce',
+    system:
+      '为这篇笔记拟 3~5 个标签，用于以后检索。只输出一行，形如 `#标签一 #标签二 #标签三`。' +
+      '标签要具体（用领域词、项目名、方法名），不要「笔记」「记录」「其他」这类没有区分度的词。不要解释。',
+  },
 ];
+
+// ------------------------------------------------- 临时动作（指令 / 提问）
+
+/**
+ * **自定义指令**：用户自己说一句要怎么处理这段文字。
+ *
+ * 内置那十二条动作再多也盖不全人的需求——「改成给客户看的口吻」「把人名换成代号」
+ * 「按时间重排」，这类一次性的活只能由用户自己说。所以留这一条：
+ * 一个动作等于无数动作。
+ *
+ * 有选中文字时是**替换**（改的是这一段），没有选中时是**产出**（结果附到文末），
+ * 因为"没选中还要替换"只能意味着替换整篇——那是把用户的笔记交给一次不可见的调用，
+ * 这个软件不做这种事。
+ */
+export function customSpec(instruction: string, mode: 'replace' | 'produce'): AiActionSpec {
+  const tail =
+    mode === 'replace'
+      ? KEEP
+      : '直接输出结果本身，不要前言与解释。';
+  return {
+    id: 'custom',
+    label: '自定义指令',
+    hint: instruction.length > 24 ? `${instruction.slice(0, 24)}…` : instruction,
+    mode,
+    system: `你是中文写作助手。按用户的要求处理下面这段内容。用户的要求是：「${instruction}」。${tail}`,
+  };
+}
+
+/**
+ * **问这篇笔记**：答案只许来自这篇笔记。
+ *
+ * 关键是最后那句"资料里没有就直说"。笔记问答里最坏的结果不是答不上来，
+ * 而是**编一个看起来像自己写过的答案**——用户会当成自己的旧结论用出去。
+ */
+export function askNoteSpec(question: string): AiActionSpec {
+  return {
+    id: 'ask-note',
+    label: '问这篇笔记',
+    hint: question.length > 24 ? `${question.slice(0, 24)}…` : question,
+    mode: 'produce',
+    system:
+      `根据用户给出的笔记内容回答这个问题：「${question}」。` +
+      '只依据给出的内容回答，**不要用你自己的知识补充**。笔记里没有写到的，就直说"这篇笔记里没有提到"。' +
+      '回答简明，需要时可以引用原文里的原句。',
+  };
+}
+
+/**
+ * **问整个笔记库**：答案只许来自检索到的那几段，而且必须标出处。
+ *
+ * 出处不是装饰——它是用户唯一能核对的东西。没有出处的全库问答，
+ * 和"随便说一个听起来像你写过的答案"没有区别。
+ */
+export function askVaultSpec(question: string): AiActionSpec {
+  return {
+    id: 'ask-vault',
+    label: '问整个笔记库',
+    hint: question.length > 24 ? `${question.slice(0, 24)}…` : question,
+    mode: 'produce',
+    system:
+      `根据用户给出的若干篇笔记片段回答这个问题：「${question}」。` +
+      '每一段前面有 `【出处：路径】`。**只依据这些片段回答**，不要用你自己的知识补充。' +
+      '答案里凡是有依据的地方，都要在句末标出处，写成 `[[路径]]`（去掉 .md 后缀）。' +
+      '片段里找不到答案就直说"这些笔记里没有提到"，并说明你查到的最接近的是哪几篇。',
+  };
+}
+
+/** 把检索到的片段拼成一段给模型看的资料，每段带出处 */
+export function buildVaultContext(passages: readonly { path: string; text: string }[]): string {
+  return passages.map((p) => `【出处：${p.path}】\n${p.text}`).join('\n\n---\n\n');
+}
 
 /** 拼一次动作的消息。文本永远走 user 角色，system 只放指令 */
 export function buildMessages(spec: AiActionSpec, text: string): ChatMessage[] {

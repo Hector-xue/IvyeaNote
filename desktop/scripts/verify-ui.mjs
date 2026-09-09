@@ -1641,6 +1641,14 @@ await new Promise((r) => setTimeout(r, 2600));
        */
       await w.write(new TextEncoder().encode(['# AI样张', '', '这段话有错别字和语病，等着被校对。', '', '第二段不该被动。', ''].join(NL)));
       await w.close();
+      // 「问整个笔记库」要有个可被检索到的靶子，还要有个**不该被送出去**的对照组
+      const biz = await h.getDirectoryHandle('商业', { create: true });
+      const p1 = await (await biz.getFileHandle('定价策略.md', { create: true })).createWritable();
+      await p1.write(new TextEncoder().encode(['# 定价策略', '', '最后定的是三档订阅，毛利率目标 70%。', ''].join(NL)));
+      await p1.close();
+      const p2 = await (await biz.getFileHandle('无关杂记.md', { create: true })).createWritable();
+      await p2.write(new TextEncoder().encode(['# 无关杂记', '', '今天中午吃了一碗牛肉面，天气很好。', ''].join(NL)));
+      await p2.close();
       return 'ok';
     }
     return 'no-vault';
@@ -1799,6 +1807,45 @@ await new Promise((r) => setTimeout(r, 2600));
   const undone = await evaluate(`document.querySelector('.cm-content')?.innerText ?? ''`);
   check('Ctrl+Z 能把 AI 的改动退回去（替换走的是编辑器撤销栈，不是覆盖 doc）',
     undone.includes('有错别字和语病'), { head: undone.slice(0, 40) });
+
+  /*
+   * ④ **问整个笔记库**（v0.11.20）。
+   *
+   * 这条验的是这个功能的立身之本：**检索在本机做，发出去的只有那几段**。
+   * 如果哪天有人图省事改成"把全库拼起来发过去"，这条会立刻红——
+   * 对照组「无关杂记」出现在请求体里就是失败。
+   */
+  await evaluate(`(() => { window.__aiCalls = []; return true })()`);
+  await openAiMenu('问整个笔记库');
+  await new Promise((r) => setTimeout(r, 600));
+  const asked = await evaluate(`(async () => {
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { dialog: false };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '我定价的结论是什么');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('问'))?.click();
+    await new Promise(r => setTimeout(r, 1200));
+    const calls = window.__aiCalls || [];
+    const body = calls.length ? calls[calls.length - 1].body : '';
+    return {
+      dialog: true,
+      calls: calls.length,
+      // 送出去的是检索到的片段（带出处标记），不是全库
+      hasCite: body.includes('出处'),
+      hasTarget: body.includes('毛利率目标'),
+      leakedUnrelated: body.includes('牛肉面'),
+      scope: document.querySelector('.ai-scope')?.textContent ?? null,
+      panel: !!document.querySelector('.ai-panel'),
+    };
+  })()`);
+  check('「问整个笔记库」在本机检索后只发相关片段（无关笔记一个字都没出去）',
+    asked.dialog && asked.calls === 1 && asked.hasTarget && asked.hasCite && !asked.leakedUnrelated, asked);
+  check('面板上如实写出这次送了几篇、多少字（用户有权知道自己的资料出去了多少）',
+    !!asked.scope && /篇/.test(asked.scope) && /字/.test(asked.scope), asked.scope);
+  await evaluate(`(() => { document.querySelector('.ai-head [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
 }
 
 // ---------- 7.875 HTML 在应用内看（v0.11.18）----------
@@ -2534,6 +2581,91 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('mobile-image.png');
   await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
   await new Promise((r) => setTimeout(r, 300));
+
+  /*
+   * v0.11.20：**给电脑设计的 HTML 在手机上要读得了**。
+   * 用户发来的截图：一份左目录 + 右正文的手册，手机上目录占掉一半，正文每行两三个字。
+   * 这条用的正是那种页面——固定侧栏 + min-width:1000px、且**没有** viewport 声明。
+   */
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const web = await h.getDirectoryHandle('网页', { create: true });
+      const fh = await web.getFileHandle('重排样张.html', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode(
+        '<html><head><meta charset="utf-8"><style>' +
+        'body{margin:0}.wrap{display:flex;min-width:1000px}' +
+        '.side{width:320px;flex:0 0 320px;position:fixed;left:0;top:0;bottom:0;background:#eee}' +
+        '.main{margin-left:320px;width:680px;font-size:16px}' +
+        '</style></head><body><div class="wrap"><aside class="side">目录</aside>' +
+        '<main class="main"><h1>手册标题</h1><p>正文一二三四五六七八九十</p></main></div></body></html>'
+      ));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  // 文件夹的展开状态存在 localStorage 里，上一段用例可能已经把它展开了——
+  // 无脑点一下等于**收起**。所以先看孩子在不在，不在才点，最多试两次（第一次点错方向）。
+  await evaluate(`(async () => {
+    const find = () => [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('重排样张'));
+    for (let i = 0; i < 2 && !find(); i++) {
+      const dir = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent === '网页');
+      (dir?.closest('.m-tree-row') ?? dir)?.click();
+      await new Promise(r => setTimeout(r, 500));
+    }
+    const el = find();
+    const row = el?.closest('.m-tree-row') ?? el;
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return !!row;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1600));
+  const htmlFit = await evaluate(`(() => {
+    const fr = document.querySelector('iframe.html-frame');
+    const d = fr && fr.contentDocument;
+    if (!d || !d.body) return null;
+    const side = d.querySelector('.side');
+    const main = d.querySelector('.main');
+    return {
+      // 内容不该比屏幕宽——横向滚动条就是"读不了"的另一种写法
+      scrollW: d.documentElement.scrollWidth,
+      winW: window.innerWidth,
+      sidePos: side ? getComputedStyle(side).position : null,
+      mainLeft: main ? getComputedStyle(main).marginLeft : null,
+      // 字号一个像素都没动：重排是拍平布局，不是把页面缩小
+      bodyFont: main ? getComputedStyle(main).fontSize : null,
+      text: (d.body.innerText || '').slice(0, 20),
+    };
+  })()`);
+  check('手机上打开给电脑做的 HTML：内容不再比屏幕宽（固定侧栏拍平、不留横向滚动）',
+    !!htmlFit && htmlFit.scrollW <= htmlFit.winW + 2 && htmlFit.sidePos === 'static' &&
+    htmlFit.mainLeft === '0px', htmlFit);
+  check('重排只动布局，不动字号（缩小等于把"读不了"换成"看不清"）',
+    !!htmlFit && htmlFit.bodyFont === '16px', htmlFit?.bodyFont);
+  await shot('mobile-html.png');
+  // 工具条上那颗键要真的能切回原样，否则"重排"就是不可撤销的
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="重排以适应屏幕"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const htmlRaw = await evaluate(`(() => {
+    const fr = document.querySelector('iframe.html-frame');
+    const d = fr && fr.contentDocument;
+    if (!d || !d.body) return null;
+    return { scrollW: d.documentElement.scrollWidth, winW: window.innerWidth,
+      sidePos: d.querySelector('.side') ? getComputedStyle(d.querySelector('.side')).position : null };
+  })()`);
+  check('工具条上能切回原始排版（作者的设计不是被我们永久改掉）',
+    !!htmlRaw && htmlRaw.sidePos === 'fixed' && htmlRaw.scrollW > htmlRaw.winW, htmlRaw);
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
 
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');

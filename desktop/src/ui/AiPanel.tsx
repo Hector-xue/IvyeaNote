@@ -36,6 +36,13 @@ export interface AiPanelProps {
   onApply(): void;
   onRetry(): void;
   onClose(): void;
+  /**
+   * 把结果复制走。
+   *
+   * 「问这篇 / 问整个库」的答案多数时候是**看一眼就够**——它不是要写进笔记的内容。
+   * 只给「插入到文末」等于逼人把问答记录攒进正文里。
+   */
+  onCopy?(text: string): void;
 }
 
 /** 一行的样式：加了、删了、还是没动 */
@@ -122,6 +129,15 @@ export function AiPanel(props: AiPanelProps) {
         <button className="btn ghost" onClick={props.onRetry} disabled={props.busy}>
           重试
         </button>
+        {props.onCopy && (
+          <button
+            className="btn ghost"
+            onClick={() => props.onCopy?.(props.result)}
+            disabled={props.busy || !props.result.trim()}
+          >
+            复制
+          </button>
+        )}
         <button
           className="btn primary"
           onClick={props.onApply}
