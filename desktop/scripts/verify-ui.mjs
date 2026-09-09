@@ -1861,11 +1861,61 @@ await new Promise((r) => setTimeout(r, 2600));
       row: ${JSON.stringify(row)},
     }))()`)));
   }
-  check('底部菜单是一整张贴边的纸（有底色、上两角圆、遮罩压暗），行高够按、分隔线从文字处起画',
+  check('底部菜单是一整张贴边的纸（有底色、上两角圆、遮罩压暗），行高够按',
     !!sheet && parseFloat(sheet.radius) >= 12 && !sheet.transparentSheet && !sheet.maskTransparent &&
     sheet.left === 0 && sheet.right === 0 && sheet.bottom === 0 &&
-    (sheet.itemH ?? 0) >= 48 && parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
+    (sheet.itemH ?? 0) >= 48 && sheet.icons > 0, sheet);
+
+  /*
+   * v0.11.18：**一根分隔线都不画**（用户：「这么多横线还长短不一，好难看」）。
+   * 分组交给留白——所以这条量两件事：伪元素没有内容/边框，组与组之间有真实的间距。
+   */
+  const noLines = await evaluate(`(() => {
+    const items = [...document.querySelectorAll('.m-sheet2-item')];
+    const groups = [...document.querySelectorAll('.m-sheet2-group')];
+    const sep = items[1] ? getComputedStyle(items[1], '::before') : null;
+    const gap = groups.length > 1
+      ? Math.round(groups[1].getBoundingClientRect().top - groups[0].getBoundingClientRect().bottom)
+      : null;
+    return {
+      sepContent: sep ? sep.content : null,
+      sepBorder: sep ? sep.borderTopWidth : null,
+      groupBorder: groups[1] ? getComputedStyle(groups[1]).borderTopWidth : null,
+      groupGap: gap,
+      groups: groups.length,
+      head: !!document.querySelector('.m-sheet2-head .m-sheet2-grip'),
+      title: document.querySelector('.m-sheet2-title')?.textContent ?? null,
+    };
+  })()`);
+  check('弹层里一根分隔线都没有，分组靠留白；头部有把手与上下文标题',
+    !!noLines && (noLines.sepContent === 'none' || noLines.sepBorder === '0px') &&
+    (noLines.groupBorder === '0px' || noLines.groupBorder === null) &&
+    (noLines.groups < 2 || (noLines.groupGap ?? 0) >= 10) && noLines.head, noLines);
+
   await shot('mobile-sheet.png');
+
+  /*
+   * **把手不再是假的**：按住头部往下拖就该关掉。此前画了一条可拖的把手，
+   * 却只能点遮罩关——界面在撒谎。这里派发真的 touch 序列来验。
+   */
+  const grip = await evaluate(`(() => {
+    const h = document.querySelector('.m-sheet2-head');
+    if (!h) return null;
+    const r = h.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (grip) {
+    const pt = (y) => [{ x: grip.x, y, radiusX: 6, radiusY: 6, force: 1, id: 1 }];
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pt(grip.y) });
+    for (const dy of [40, 90, 140]) {
+      await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pt(grip.y + dy) });
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  check('按住把手下滑能把弹层关掉（把手此前是个假承诺，只能点遮罩关）',
+    !!grip && !(await evaluate(`!!document.querySelector('.m-sheet2')`)), { grip });
 
   // --- v0.11.13：标题不冻结 / 大纲弹层形状 / 底部四个键 ---
   await evaluate(`(() => {

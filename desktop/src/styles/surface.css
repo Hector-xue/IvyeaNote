@@ -1883,11 +1883,7 @@ button.st-item:hover {
   min-height: 44px;
   gap: 0;
 }
-/* 「大纲」这两个字要在把手正下方居中，不然它会孤零零挂在卡片外的左上角 */
-.m-outline2 .m-sheet2-title {
-  text-align: center;
-  padding-bottom: 10px;
-}
+/* v0.11.18：标题一律在把手正下方居中——四张弹层同一套头部，不再一张居中一张靠左 */
 /*
  * 分隔线从内容处起画。底部菜单缩进 50px 是为了避开左边那栏图标，
  * 而大纲没有图标——照抄那个数值会让线看起来无缘无故往里缩一块。
@@ -2387,4 +2383,62 @@ button.st-item:hover {
 }
 .m-bottom-wrap {
   padding-bottom: max(4px, calc(env(safe-area-inset-bottom) / 2));
+}
+
+/* ============================================================ v0.11.18
+   手机端底部弹层：去掉所有分隔线，分组交给留白。 */
+/*
+ * 用户原话：「这种弹窗为什么这么多横线还长短不一，好难看」。数一下截图：
+ * 组内那条从文字处起画的缩进线、组间那条通栏线、大纲下面那条——一屏三种长度。
+ *
+ * 根子在于**让线去做分组的活**：线一旦长短不一就碎，长度统一了又把一张纸
+ * 切成好几段。iOS 的 context menu、Obsidian 移动端菜单都是一根线不画，
+ * 靠间距分组——52px 的行高加上对齐的图标栏，本来就读得清"这是两行"。
+ */
+.m-sheet2-item + .m-sheet2-item::before {
+  content: none;
+}
+.m-sheet2-group + .m-sheet2-group {
+  border-top: none;
+  margin-top: 14px;
+  padding-top: 0;
+}
+/* 危险动作与常规动作再拉开一点：删除和"移动到…"之间不该是等距的 */
+.m-sheet2-group + .m-sheet2-group:last-child {
+  margin-top: 16px;
+}
+
+/* ---- 头部：把手 + 上下文标题 ---- */
+/*
+ * 手势挂在这一块上（见 ui/mobile/BottomSheet）：所以它要吃满宽度、
+ * 并且 touch-action:none —— 否则浏览器会把下滑解释成"滚动内容"，
+ * 手指按在把手上拖，纸一动不动。
+ */
+.m-sheet2-head {
+  flex: 0 0 auto;
+  touch-action: none;
+  cursor: grab;
+}
+.m-sheet2 {
+  /* 跟手拖动之后松手要弹回去：这条过渡由内联 style 在拖动中临时关掉 */
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.m-sheet2-title {
+  /* 标题是"这张单子作用在谁身上"，不是主角：弱化、居中、单行、超长省略 */
+  padding: 2px 16px 10px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 重命名那张里的输入框：它是内容不是行，单独给内边距 */
+.m-sheet2-field {
+  padding: 4px 12px 2px;
+}
+/*
+ * 最后一行不该贴着屏幕底边。安全区在有手势条的机器上够用，在没有的机器上是 0——
+ * 那时"删除"就紧贴屏幕最下沿，既难按又显得没做完。给一个 10px 的下限。
+ */
+.m-app .m-sheet2 {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 10px);
 }

@@ -18,6 +18,7 @@ import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
 import { Drawer } from './mobile/Drawer';
 import { Sheet, type SheetItem } from './mobile/Sheet';
+import { BottomSheet } from './mobile/BottomSheet';
 import { TrashPane } from './SidePanes';
 import { extractHeadings } from '../lib/headings';
 import type { VaultMeta } from '../lib/store';
@@ -519,11 +520,9 @@ export function MobileView(props: Props) {
 
   /** 重命名弹层。沿用 Sheet 的观感：从底部推上来的一张卡 */
   const renameEl = renaming ? (
-    <div className="m-sheet-mask" onClick={() => setRenaming(null)}>
-      <div className="m-sheet2" onClick={(e) => e.stopPropagation()}>
-        <div className="m-sheet2-grip" aria-hidden="true" />
-        <div className="m-sheet2-title">重命名</div>
-        <div className="m-sheet2-group" style={{ padding: '10px 12px' }}>
+    <BottomSheet open title="重命名" onClose={() => setRenaming(null)}>
+      <div className="m-sheet2-scroll">
+        <div className="m-sheet2-group m-sheet2-field">
           <input
             className="m-rename-input"
             value={renaming.value}
@@ -547,7 +546,7 @@ export function MobileView(props: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </BottomSheet>
   ) : null;
 
   return (
@@ -754,8 +753,23 @@ export function MobileView(props: Props) {
         syncDisabled={props.syncDisabled}
       />
 
+      {/*
+        v0.11.18：**这张菜单要有主语。**「重命名 / 移动到 / 删除」作用在哪一篇？
+        此前整张纸上没有任何交代。笔记动作那张给出当前笔记名，其余几张各有其名。
+      */}
       <Sheet
         open={menu !== null}
+        title={
+          menu === 'note'
+            ? props.currentPath
+              ? (props.currentPath.split('/').pop() ?? '').replace(/\.(md|markdown)$/i, '')
+              : props.vault.name
+            : menu === 'vault'
+              ? '笔记库'
+              : menu === 'sort'
+                ? '排序方式'
+                : '应用与账号'
+        }
         groups={menu === null ? [] : buildMenu(menu)}
         onClose={() => setMenu(null)}
       />
@@ -769,62 +783,44 @@ export function MobileView(props: Props) {
       />
 
 
-      {/* P6：大纲浮层 */}
-      {showOutline && (
-        /*
-         * v0.11.13：大纲改成和底部菜单**同一套形状**——贴着底边、上面两角圆、
-         * 顶上一条把手。此前它是 `.m-outline`：直角、且位置由外层 flex 决定，
-         * 于是浮在半空中（用户：「大纲的弹窗是直角且位置不对」）。
-         * 同一个应用里两种弹层形状，只会让人觉得是两个应用。
-         */
-        <div className="m-sheet-mask" onClick={() => setShowOutline(false)}>
-          <div
-            className="m-sheet2 m-outline2"
-            role="dialog"
-            aria-label="大纲"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="m-sheet2-grip" aria-hidden="true" />
-            <div className="m-sheet2-title">大纲</div>
-            <div className="m-sheet2-scroll">
-              <div className="m-sheet2-group">
-                {headings.map((h, i) => (
-                  <button
-                    key={i}
-                    className="m-sheet2-item m-outline-item"
-                    style={{ paddingLeft: `${(h.level - 1) * 14 + 16}px` }}
-                    onClick={() => jumpToOffset(h.offset)}
-                  >
-                    <span className="m-sheet2-label">{h.text}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
+      {/*
+        P6 大纲：与底部菜单同一张纸、同一套手势（v0.11.18 起共用 BottomSheet）。
+        同一个应用里两种弹层形状，只会让人觉得是两个应用。
+      */}
+      <BottomSheet
+        open={showOutline}
+        title="大纲"
+        className="m-outline2"
+        onClose={() => setShowOutline(false)}
+      >
+        <div className="m-sheet2-scroll">
+          <div className="m-sheet2-group">
+            {headings.map((h, i) => (
+              <button
+                key={i}
+                className="m-sheet2-item m-outline-item"
+                style={{ paddingLeft: `${(h.level - 1) * 14 + 16}px` }}
+                onClick={() => jumpToOffset(h.offset)}
+              >
+                <span className="m-sheet2-label">{h.text}</span>
+              </button>
+            ))}
           </div>
         </div>
-      )}
+      </BottomSheet>
+
 
       {/* v0.11.16：回收站弹层。列表与动作复用桌面那套 TrashPane，不另写一份 */}
-      {showTrash && (
-        <div className="m-sheet-mask" onClick={() => setShowTrash(false)}>
-          <div
-            className="m-sheet2 m-trash2"
-            role="dialog"
-            aria-label="回收站"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="m-sheet2-grip" aria-hidden="true" />
-            <div className="m-sheet2-title">回收站</div>
-            <div className="m-sheet2-scroll">
-              <TrashPane
-                list={props.trashList ?? []}
-                onRestore={(p) => props.onTrashRestore?.(p)}
-                onPurge={(p) => props.onTrashPurge?.(p)}
-              />
-            </div>
-          </div>
+      <BottomSheet open={showTrash} title="回收站" className="m-trash2" onClose={() => setShowTrash(false)}>
+        <div className="m-sheet2-scroll">
+          <TrashPane
+            list={props.trashList ?? []}
+            onRestore={(p) => props.onTrashRestore?.(p)}
+            onPurge={(p) => props.onTrashPurge?.(p)}
+          />
         </div>
-      )}
+      </BottomSheet>
+
 
       {/* P4：图片全屏预览（由 MarkdownEditor 内部打开，见 viewerImg 桥） */}
 
