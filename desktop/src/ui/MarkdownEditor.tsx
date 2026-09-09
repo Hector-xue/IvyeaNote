@@ -109,6 +109,14 @@ export interface MarkdownEditorProps {
    */
   exposeFormat?(apply: ((key: string) => void) | null): void;
   /**
+   * v0.11.18：**选区读写桥**，给 AI 动作用。
+   *
+   * AI 的原则是"只发选中的那点内容、结果先预览再替换"，所以外层需要两件事：
+   * 拿到当前选中的文字与它的位置，以及在用户点「应用」时把那一段换掉。
+   * 和 exposeFormat 一样，卸载时回传 null。
+   */
+  exposeSelection?(api: SelectionApi | null): void;
+  /**
    * v0.10.2：普通 Markdown 链接指向库内文件时的回调（已解析成库内相对路径）。
    * 不传则只处理外部链接与锚点——**外部链接必须处理**，
    * 否则 WebView 会带着整个应用导航走。
@@ -407,6 +415,14 @@ export async function resolveImagesIn(
     if (url) img.src = url;
     else img.alt = `${img.alt}（图片加载失败：${src}）`;
   }
+}
+
+/** 选区读写桥（v0.11.18，给 AI 动作用） */
+export interface SelectionApi {
+  /** 当前选中的文字与位置；没有选区返回 null */
+  get(): { text: string; from: number; to: number } | null;
+  /** 把 [from,to) 换成 text。返回是否真的替换了（文档变短了就会失败） */
+  replace(from: number, to: number, text: string): boolean;
 }
 
 export function renderMarkdown(md: string): string {
@@ -1083,6 +1099,33 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const insertImageHolder = useRef<(() => Promise<void>) | null>(null);
   const applyRef = useRef(applyFormat);
   applyRef.current = applyFormat;
+
+  /*
+   * 选区桥：拿当前选区 + 把某个区间换成新文本。
+   * 替换走 CM 的 dispatch 而不是改 props.doc —— 这样它进得了编辑器的撤销栈，
+   * 用户 Ctrl+Z 能把 AI 的改动退回去（改 doc 那条路会绕过撤销，等于覆盖不可逆）。
+   */
+  const { exposeSelection } = props;
+  useEffect(() => {
+    if (!exposeSelection) return;
+    exposeSelection({
+      get() {
+        const view = viewRef.current;
+        if (!view) return null;
+        const r = view.state.selection.main;
+        if (r.empty) return null;
+        return { text: view.state.sliceDoc(r.from, r.to), from: r.from, to: r.to };
+      },
+      replace(from: number, to: number, text: string) {
+        const view = viewRef.current;
+        if (!view) return false;
+        if (to > view.state.doc.length) return false;
+        view.dispatch({ changes: { from, to, insert: text } });
+        return true;
+      },
+    });
+    return () => exposeSelection(null);
+  }, [exposeSelection]);
 
   const { exposeFormat } = props;
   useEffect(() => {

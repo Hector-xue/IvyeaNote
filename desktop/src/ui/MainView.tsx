@@ -12,6 +12,7 @@ import { GraphView } from './GraphView';
 import { TagPane, TrashPane } from './SidePanes';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
+import { HtmlViewer } from './HtmlViewer';
 import type { TreeNode } from './FileTree';
 import { countWords } from '../lib/wordCount';
 import type { VaultMeta } from '../lib/store';
@@ -149,6 +150,12 @@ interface Props {
    * 「属性声明了却一次都没渲染」的跟头（v0.11.9 的 vaultSelector）。
    */
   baseDoc?: { path: string; text: string } | null;
+  /** v0.11.18：正在看的 `.html`（主区渲染，沙箱 iframe 不跑脚本） */
+  htmlDoc?: { path: string; html: string } | null;
+  onCloseHtml?(): void;
+  onOpenHtmlExternal?(path: string): void;
+  resolveAsset?(rel: string): Promise<string | null>;
+  readVaultText?(rel: string): Promise<string>;
   /** 库里全部笔记（.base 求值要读 frontmatter / 标签 / 链接） */
   /**
    * v0.11.15：喂给 `.base` 的是**库里的全部文件**（含图片 / PDF / 别的 .base），
@@ -195,6 +202,10 @@ interface Props {
   onCloseGraph?(): void;
   /** v0.11.16：今日日记。能力早就有（lib/daily + useTemplates），此前只有命令面板能到 */
   onOpenDaily?(): void;
+  /** v0.11.18：选区读写桥（AI 动作要"只处理选中的那段"并能替换回去） */
+  exposeSelection?(api: import('./MarkdownEditor').SelectionApi | null): void;
+  /** v0.11.18：AI 结果面板（贴在编辑区下方；null = 不显示） */
+  aiPanel?: React.ReactNode;
   /** v0.6.1 H6: add-device pairing */
   onAddDevice?(): void;
   /** v0.7.0 F3: wiki links */
@@ -602,6 +613,17 @@ export function MainView(props: Props) {
             onOpenNote={(p) => props.onSelect(p)}
             onClose={() => props.onCloseGraph?.()}
           />
+        ) : props.htmlDoc && props.resolveAsset && props.readVaultText ? (
+          <HtmlViewer
+            path={props.htmlDoc.path}
+            html={props.htmlDoc.html}
+            resolveAsset={props.resolveAsset}
+            readText={props.readVaultText}
+            onClose={() => props.onCloseHtml?.()}
+            onOpenExternal={
+              props.onOpenHtmlExternal ? () => props.onOpenHtmlExternal?.(props.htmlDoc!.path) : undefined
+            }
+          />
         ) : props.baseDoc ? (
           <BaseView
             path={props.baseDoc.path}
@@ -665,6 +687,7 @@ export function MainView(props: Props) {
                 /* 桌面此前从不传 exposeFormat，于是编辑器里的 doInsertImage
                    是彻头彻尾的死代码。状态栏那颗「插入图片」就靠它 */
                 exposeFormat={exposeFormat}
+                exposeSelection={props.exposeSelection}
               />
             </div>
             {props.splitPath && (
@@ -694,6 +717,7 @@ export function MainView(props: Props) {
             )}
           </div>
         )}
+        {props.aiPanel}
         {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
         {/* v0.10.0：同步从侧栏那个大绿按钮降级到这里。Obsidian 的同步状态就待在
             右下角状态栏，安静、可点、不抢视线；侧栏留给文件树 */}

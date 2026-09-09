@@ -13,6 +13,7 @@ import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
+import { HtmlViewer } from './HtmlViewer';
 import { InlineTitle } from './InlineTitle';
 import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
@@ -124,6 +125,12 @@ interface Props {
    */
   /** v0.11.10：`.base` 表格视图（手机上同样能开，不再只能"交给 Obsidian"） */
   baseDoc?: { path: string; text: string } | null;
+  /** v0.11.18：正在看的 `.html`（主区渲染，沙箱 iframe 不跑脚本） */
+  htmlDoc?: { path: string; html: string } | null;
+  onCloseHtml?(): void;
+  onOpenHtmlExternal?(path: string): void;
+  resolveAsset?(rel: string): Promise<string | null>;
+  readVaultText?(rel: string): Promise<string>;
   /**
    * v0.11.15：喂给 `.base` 的是**库里的全部文件**（含图片 / PDF / 别的 .base），
    * 不再只是笔记——非笔记的 content 是空串，靠 file.* 那组属性参与筛选。
@@ -654,7 +661,18 @@ export function MobileView(props: Props) {
           offline && <div className="m-offline">离线，联网后自动同步</div>
         )}
 
-        {props.baseDoc ? (
+        {props.htmlDoc && props.resolveAsset && props.readVaultText ? (
+          <HtmlViewer
+            path={props.htmlDoc.path}
+            html={props.htmlDoc.html}
+            resolveAsset={props.resolveAsset}
+            readText={props.readVaultText}
+            onClose={() => props.onCloseHtml?.()}
+            onOpenExternal={
+              props.onOpenHtmlExternal ? () => props.onOpenHtmlExternal?.(props.htmlDoc!.path) : undefined
+            }
+          />
+        ) : props.baseDoc ? (
           <BaseView
             path={props.baseDoc.path}
             text={props.baseDoc.text}

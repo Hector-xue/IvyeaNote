@@ -2442,3 +2442,184 @@ button.st-item:hover {
 .m-app .m-sheet2 {
   padding-bottom: calc(env(safe-area-inset-bottom) + 10px);
 }
+
+/* ---- 应用内 HTML 查看器（v0.11.18）---- */
+/*
+ * 与 PDF 阅读器同一套形状：一条工具条 + 一块内容区，吃满主区。
+ * iframe 给白底：库里的 HTML 多半自带浅色样式，套在深色主题上会花。
+ */
+.html-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--panel);
+}
+.html-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.html-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 缺资源时说出来：静默裂图会让人以为是软件坏了 */
+.html-note {
+  color: #b26a3c;
+  font-size: 12px;
+}
+.html-gap {
+  flex: 1;
+}
+.html-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* ---- AI 结果面板（v0.11.18）---- */
+/*
+ * 贴在编辑区下方、状态栏之上：它是"这次操作的结果"，不是一个要盖住正文的弹窗——
+ * 用户要一边看原文一边判断改得对不对。高度给上限，长文自己滚。
+ */
+.ai-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 46vh;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.ai-head,
+.ai-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.ai-foot {
+  border-top: 1px solid var(--border);
+}
+.ai-title {
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* 进行中的那颗点：流式回来时它在呼吸，用户知道不是卡住了 */
+.ai-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: m-pulse 1.1s ease-in-out infinite;
+}
+.ai-scope,
+.ai-count,
+.ai-hint {
+  font-size: 12px;
+}
+.ai-count {
+  color: var(--accent);
+}
+.ai-gap {
+  flex: 1;
+}
+.ai-tabs {
+  display: flex;
+  gap: 2px;
+}
+.ai-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ai-tab.on {
+  background: var(--panel);
+  color: var(--text);
+}
+.ai-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 8px;
+}
+.ai-error {
+  margin: 8px 12px;
+  color: #d95a4a;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ai-result {
+  margin: 0;
+  padding: 6px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+/* 对照：只给行底色，不画边框——一行一行看的时候边框全是噪声 */
+.ai-diff {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ai-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ai-row.add {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ai-row.del {
+  background: color-mix(in srgb, #d95a4a 12%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, #d95a4a 55%, transparent);
+}
+.ai-sign {
+  flex: 0 0 auto;
+  width: 10px;
+  color: var(--muted);
+  user-select: none;
+}
+.ai-text {
+  flex: 1;
+  min-width: 0;
+}
+/* 设置页里连通性测试的结果 */
+.set-hint.ok {
+  color: var(--accent);
+}
+.set-hint.bad {
+  color: #d95a4a;
+}
+.set-input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}

@@ -33,7 +33,31 @@ export interface Prefs {
    * 老图片一张都不动、照常显示——变的只是以后新插入的落点。
    */
   attachMode: AttachMode;
+  /**
+   * v0.11.18：**按内容自动选阅读密度**（字号 / 行宽 / 行高）。
+   *
+   * 默认关：它会改变正文的样子，而"从没打开过设置的老用户升级后一切照旧"是本文件
+   * 开头那条铁律。打开之后由 `lib/density` 的纯函数按内容选档——不是问大模型，
+   * 那种做法慢、花钱、而且同一篇两次可能给出不同答案。
+   */
+  autoDensity: boolean;
+  /**
+   * v0.11.18：大模型配置（OpenAI 兼容）。与 ivyea-translate 同一套三件套。
+   *
+   * ⚠️ Key 存在本机 localStorage 里，和其它偏好一样——这是个本地应用，
+   * 没有服务端可以替你保管它。**它不会随笔记同步**（同步的只有 vault 里的文件）。
+   */
+  ai: AiPrefs;
 }
+
+export interface AiPrefs {
+  /** 接口地址，比如 https://api.deepseek.com（少写 /v1 也认，见 lib/llm 的 chatUrl） */
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
+export const AI_DEFAULTS: AiPrefs = { baseUrl: '', apiKey: '', model: '' };
 
 export const PREF_DEFAULTS: Prefs = {
   defaultView: 'edit',
@@ -41,6 +65,8 @@ export const PREF_DEFAULTS: Prefs = {
   titleSync: true,
   autoSync: true,
   attachMode: 'beside',
+  autoDensity: false,
+  ai: AI_DEFAULTS,
 };
 
 const KEY = 'ivnote.prefs';
@@ -58,6 +84,12 @@ export function loadPrefs(): Prefs {
         raw.attachMode === 'vault' || raw.attachMode === 'subfolder' || raw.attachMode === 'beside'
           ? raw.attachMode
           : PREF_DEFAULTS.attachMode,
+      autoDensity: typeof raw.autoDensity === 'boolean' ? raw.autoDensity : PREF_DEFAULTS.autoDensity,
+      ai: {
+        baseUrl: typeof raw.ai?.baseUrl === 'string' ? raw.ai.baseUrl : '',
+        apiKey: typeof raw.ai?.apiKey === 'string' ? raw.ai.apiKey : '',
+        model: typeof raw.ai?.model === 'string' ? raw.ai.model : '',
+      },
     };
   } catch {
     return { ...PREF_DEFAULTS };

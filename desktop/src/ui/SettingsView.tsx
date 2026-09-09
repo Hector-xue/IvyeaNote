@@ -13,8 +13,16 @@ import { RibbonIcon } from './Icons';
 import { SyncDiagnostics } from './SyncDiagnostics';
 import { isLocalServerAccount } from '../lib/localServer';
 import { DEFAULTS, LIMITS, type Appearance, type ReadFont, type ThemeMode } from '../lib/appearance';
+import { useState } from 'react';
+import { isLlmConfigured, testConnection } from '../lib/llm';
 import { SHORTCUTS, type Prefs } from '../lib/prefs';
 import type { AttachMode } from '../lib/attachPath';
+
+/** 连通性测试的结果：说清是通了还是没通，以及为什么 */
+interface AiTestState {
+  ok: boolean;
+  msg: string;
+}
 
 interface Props {
   value: Appearance;
@@ -161,6 +169,30 @@ export function SettingsView(props: Props) {
   const set = (patch: Partial<Appearance>) => props.onChange({ ...v, ...patch });
   const p = props.prefs;
   const setPref = (patch: Partial<Prefs>) => props.onPrefsChange({ ...p, ...patch });
+
+  /*
+   * 连通性测试（v0.11.18）。填完三个框最想知道的就是"到底通没通"——
+   * 没有这颗按钮，用户只能去笔记里选段文字试一次，失败了还分不清是 Key 错、
+   * 地址错还是模型名错。这里让模型回一个词，把失败原因原样摆出来。
+   */
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTest, setAiTest] = useState<AiTestState | null>(null);
+  const testAi = async () => {
+    if (!isLlmConfigured(p.ai)) {
+      setAiTest({ ok: false, msg: '接口地址与模型名都要填' });
+      return;
+    }
+    setAiTesting(true);
+    setAiTest(null);
+    try {
+      const reply = await testConnection({ ...p.ai, temperature: 0 });
+      setAiTest({ ok: true, msg: `通了，模型回：${reply.slice(0, 20)}` });
+    } catch (e) {
+      setAiTest({ ok: false, msg: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setAiTesting(false);
+    }
+  };
 
   /**
    * 现在这台设备的笔记到底怎么流动的。三条路互斥，一眼说清：
@@ -384,6 +416,69 @@ export function SettingsView(props: Props) {
                 {ATTACH_MODES.find((m) => m.id === p.attachMode)?.hint}
               </p>
             </div>
+          </section>
+
+          {/* ---------------- AI（v0.11.18） ---------------- */}
+          <section className="set-section">
+            <h3 className="set-h">AI</h3>
+            <p className="set-hint">
+              任何 <b>OpenAI 兼容</b>接口都能用：官方、中转、或本机跑的 Ollama / LM Studio。
+              Key 只存在这台设备上，<b>不会随笔记同步</b>。
+              校对 / 润色这类动作默认<b>只发送你选中的那段文字</b>，结果先给对照预览，
+              点「应用」才写进笔记。
+            </p>
+            <div className="set-row">
+              <label className="set-label" htmlFor="ai-base">
+                接口地址
+                <span className="set-hint">例：https://api.deepseek.com（写不写 /v1 都认）</span>
+              </label>
+              <input
+                id="ai-base"
+                className="set-input"
+                value={p.ai.baseUrl}
+                placeholder="https://api.deepseek.com"
+                onChange={(e) => setPref({ ai: { ...p.ai, baseUrl: e.target.value } })}
+              />
+            </div>
+            <div className="set-row">
+              <label className="set-label" htmlFor="ai-key">
+                API Key
+                <span className="set-hint">本机跑的模型通常不需要，可以留空</span>
+              </label>
+              <input
+                id="ai-key"
+                className="set-input"
+                type="password"
+                value={p.ai.apiKey}
+                placeholder="sk-…"
+                onChange={(e) => setPref({ ai: { ...p.ai, apiKey: e.target.value } })}
+              />
+            </div>
+            <div className="set-row">
+              <label className="set-label" htmlFor="ai-model">
+                模型
+                <span className="set-hint">例：deepseek-chat / gpt-4o-mini / qwen2.5:7b</span>
+              </label>
+              <input
+                id="ai-model"
+                className="set-input"
+                value={p.ai.model}
+                placeholder="deepseek-chat"
+                onChange={(e) => setPref({ ai: { ...p.ai, model: e.target.value } })}
+              />
+            </div>
+            <div className="set-row">
+              <button className="btn" onClick={() => void testAi()} disabled={aiTesting}>
+                {aiTesting ? '测试中…' : '测试连通性'}
+              </button>
+              {aiTest && <span className={`set-hint ${aiTest.ok ? 'ok' : 'bad'}`}>{aiTest.msg}</span>}
+            </div>
+            <Toggle
+              label="按内容自动调整阅读密度"
+              hint="代码表格多就收紧字号、放宽行宽；短句清单多就字大行疏。纯本地规则（不调模型），同一篇每次结果一样"
+              checked={p.autoDensity}
+              onChange={(x) => setPref({ autoDensity: x })}
+            />
           </section>
 
           <section className="set-section">

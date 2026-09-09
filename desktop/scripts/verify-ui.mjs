@@ -1550,6 +1550,303 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('sidebar-head.png');
 }
 
+// ---------- 7.874 AI 动作：只发选中的、先预览、可撤销（v0.11.18）----------
+/*
+ * 这一整条链最怕的不是"接口调不通"，而是**它悄悄改坏用户的笔记**。所以这里假一个
+ * 模型端点（拦 fetch），把整条路走完并逐项断言：
+ *   ① 没选中文字时，替换类动作**拒绝执行**——绝不默认把整篇发出去；
+ *   ② 发出去的 body 里只有选中的那段；
+ *   ③ 结果先进面板给对照，笔记这时**一个字都没变**；
+ *   ④ 点「应用」才写回，而且走编辑器撤销栈（Ctrl+Z 能退回去）。
+ */
+{
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      const fh = await h.getFileHandle('AI样张.md', { create: true });
+      const w = await fh.createWritable();
+      /*
+       * H1 必须和文件名**一模一样**（都不带空格）：否则"标题跟随文件名"会把文件改名
+       * 并把正文回灌一次，那次外部改动会把编辑器的撤销栈顶掉，
+       * 于是下面那条 Ctrl+Z 用例莫名其妙地红——第一版就是这么被自己绊倒的。
+       */
+      await w.write(new TextEncoder().encode(['# AI样张', '', '这段话有错别字和语病，等着被校对。', '', '第二段不该被动。', ''].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  // 配好一个假端点：地址随便填，下面把 fetch 拦掉
+  await evaluate(`(() => {
+    const prefs = JSON.parse(localStorage.getItem('ivnote.prefs') || '{}');
+    prefs.ai = { baseUrl: 'https://fake-llm.test', apiKey: 'k', model: 'm' };
+    localStorage.setItem('ivnote.prefs', JSON.stringify(prefs));
+    return true })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('AI样张'));
+    const row = el?.closest('.ft-file'); row?.scrollIntoView({ block: 'center' }); row?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  /*
+   * **必须显式切回编辑态。** 前面几段用例会把应用留在阅读模式，那时根本没有
+   * CodeMirror，选区无从谈起——第一版就是这么跑出三条红的，而失败信息只说
+   * "笔记是空的"，很容易被当成"AI 没跑"。
+   */
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('编辑视图'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 800));
+
+  // 拦 fetch：记录请求体，回一段 SSE
+  await evaluate(`(() => {
+    window.__aiCalls = [];
+    const real = window.fetch;
+    window.fetch = async (url, init) => {
+      const u = String(url);
+      if (!u.includes('fake-llm.test')) return real(url, init);
+      window.__aiCalls.push({ url: u, body: init && init.body ? String(init.body) : '' });
+      const enc = new TextEncoder();
+      const body = new ReadableStream({
+        start(c) {
+          for (const piece of ['这段话', '没有错别字', '了。']) {
+            c.enqueue(enc.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: piece } }] }) + String.fromCharCode(10, 10)));
+          }
+          c.enqueue(enc.encode('data: [DONE]' + String.fromCharCode(10, 10)));
+          c.close();
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    return true })()`);
+
+  const openAiMenu = async (label) => {
+    await evaluate(`(async () => {
+      document.querySelector('.top-bar button[aria-label="更多操作"]')?.click();
+      await new Promise(r => setTimeout(r, 300));
+      const item = [...document.querySelectorAll('.ctx-item')].find(b => (b.querySelector('.ctx-label')?.textContent ?? '').includes('AI 助手'));
+      if (!item) return false;
+      const r = item.getBoundingClientRect();
+      item.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: r.left + 10, clientY: r.top + 8 }));
+      await new Promise(r2 => setTimeout(r2, 400));
+      const sub = [...document.querySelectorAll('.ctx-sub-menu .ctx-item')].find(b => (b.textContent ?? '').includes(${JSON.stringify(label)}));
+      sub?.click();
+      return !!sub;
+    })()`);
+    await new Promise((r) => setTimeout(r, 900));
+  };
+
+  // ① 没选区时，替换类动作要拒绝
+  await openAiMenu('校对');
+  const refused = await evaluate(`(() => ({
+    panel: !!document.querySelector('.ai-panel'),
+    calls: (window.__aiCalls || []).length,
+    toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|'),
+  }))()`);
+  check('没选中文字时「校对」拒绝执行，并说清原因（绝不默认把整篇发出去）',
+    !refused.panel && refused.calls === 0 && refused.toast.includes('选中'), refused);
+
+  // ② 选中第一段再来一次
+  await evaluate(`(() => { document.querySelector('.toast-host')?.replaceChildren?.(); return true })()`);
+  /*
+   * 选区要**真的用键鼠选**：拿 DOM Range 硬塞进去，CodeMirror 不认（它只在自己
+   * 观察到选区变化时才更新 state.selection），于是 selectionApi 拿到的还是空。
+   * 点进那一行 → Home → Shift+End，这是用户真会做的动作。
+   */
+  const lineAt = await evaluate(`(() => {
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.textContent.includes('错别字'));
+    if (!line) return null;
+    const r = line.getBoundingClientRect();
+    return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (lineAt) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: lineAt.x, y: lineAt.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 8 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 8 });
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  console.log('  · 选中了 =', JSON.stringify(await evaluate(`(() => {
+    const s = getSelection();
+    return { text: s ? String(s).slice(0, 30) : null, hasCm: !!document.querySelector('.cm-content') };
+  })()`)));
+  await openAiMenu('校对');
+  await new Promise((r) => setTimeout(r, 1200));
+  const ran = await evaluate(`(() => {
+    const calls = window.__aiCalls || [];
+    const body = calls.length ? calls[calls.length - 1].body : '';
+    const panel = document.querySelector('.ai-panel');
+    return {
+      calls: calls.length,
+      url: calls.length ? calls[calls.length - 1].url : null,
+      sentOnlySelection: body.includes('错别字') && !body.includes('第二段不该被动'),
+      panel: !!panel,
+      diffRows: document.querySelectorAll('.ai-row').length,
+      result: document.querySelector('.ai-result')?.textContent ?? null,
+      scope: document.querySelector('.ai-scope')?.textContent ?? null,
+      // 这时候笔记必须一个字都没变
+      docUntouched: (document.querySelector('.cm-content')?.innerText ?? '').includes('有错别字和语病'),
+    };
+  })()`);
+  check('AI 只把**选中的那段**发出去，结果先进对照面板，笔记这时一个字都没变',
+    ran.calls === 1 && ran.url.includes('/v1/chat/completions') && ran.sentOnlySelection &&
+    ran.panel && ran.diffRows > 0 && ran.docUntouched, ran);
+  await shot('ai-panel.png');
+
+  // ③ 点应用才写回，且能撤销
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.ai-foot button')].find(x => x.textContent.trim() === '应用');
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 900));
+  const applied = await evaluate(`(() => ({
+    text: (document.querySelector('.cm-content')?.innerText ?? ''),
+    panelGone: !document.querySelector('.ai-panel'),
+  }))()`);
+  check('点「应用」之后结果才写进笔记（面板随之收起）',
+    applied.panelGone && applied.text.includes('没有错别字') && !applied.text.includes('有错别字和语病'),
+    { panelGone: applied.panelGone, head: applied.text.slice(0, 40) });
+
+  // Ctrl+Z：AI 的改动必须能退回去。**要真的点进编辑器**——focus() 不等于用户点了一下
+  const cmPt = await evaluate(`(() => {
+    const c = document.querySelector('.cm-content');
+    if (!c) return null;
+    const r = c.getBoundingClientRect();
+    return { x: Math.round(r.left + 40), y: Math.round(r.top + 20) };
+  })()`);
+  if (cmPt) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: cmPt.x, y: cmPt.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  console.log('  · 撤销前焦点 =', await evaluate(`(document.activeElement?.className || document.activeElement?.tagName || '?')`));
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90, modifiers: 2 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', windowsVirtualKeyCode: 90, modifiers: 2 });
+  await new Promise((r) => setTimeout(r, 800));
+  const undone = await evaluate(`document.querySelector('.cm-content')?.innerText ?? ''`);
+  check('Ctrl+Z 能把 AI 的改动退回去（替换走的是编辑器撤销栈，不是覆盖 doc）',
+    undone.includes('有错别字和语病'), { head: undone.slice(0, 40) });
+}
+
+// ---------- 7.875 HTML 在应用内看（v0.11.18）----------
+/*
+ * 用户原话：「在我的 ivyeanote 能直接浏览 html 文件吗？现在是点开 html 文件
+ * 然后跳转到浏览器」。这条验三件事，缺一不可：
+ *   ① 点开 .html 是在**主区**渲染，不是跳出去；
+ *   ② 相对路径的图片与样式表要真的生效（srcdoc 没有基地址，不处理必裂）；
+ *   ③ **脚本不许跑**——库里的 HTML 可能来自任何地方。
+ */
+{
+  await evaluate(`(async () => {
+    const bin = atob(${JSON.stringify(PNG_1X1)});
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const web = await h.getDirectoryHandle('网页', { create: true });
+      const put = async (dir, n, text) => {
+        const fh = await dir.getFileHandle(n, { create: true });
+        const w = await fh.createWritable();
+        await w.write(new TextEncoder().encode(text));
+        await w.close();
+      };
+      await put(web, 'style.css', '.mark{color:rgb(12,34,56)}');
+      const ih = await web.getFileHandle('图.png', { create: true });
+      const iw = await ih.createWritable();
+      await iw.write(bytes);
+      await iw.close();
+      await put(web, '报表.html', [
+        '<html><head><link rel="stylesheet" href="style.css"></head><body>',
+        '<h1 class="mark">本地报表</h1>',
+        '<img src="图.png" width="20">',
+        '<script>document.body.innerHTML = "脚本跑起来了";<' + '/script>',
+        '</body></html>',
+      ].join(''));
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  const opened = await evaluate(`(async () => {
+    const dir = [...document.querySelectorAll('.ft-dir-name')].find(x => x.textContent === '网页');
+    if (dir && !dir.closest('.ft-node')?.querySelector('.ft-children')) {
+      dir.closest('.ft-dir')?.click();
+      await new Promise(r => setTimeout(r, 400));
+    }
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('报表'));
+    const row = el?.closest('.ft-file');
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return !!row;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1500));
+  const view = await evaluate(`(() => {
+    const v = document.querySelector('.html-view');
+    if (!v) return { open: false };
+    const fr = v.querySelector('iframe.html-frame');
+    const pane = document.querySelector('.editor-pane');
+    return {
+      open: true,
+      inMainArea: !!pane && pane.contains(v),
+      sandbox: fr ? fr.getAttribute('sandbox') : null,
+      hasSrcdoc: !!(fr && (fr.getAttribute('srcdoc') || '').includes('本地报表')),
+      // 相对路径处理过了：图片换成 blob、样式表内联成 <style>
+      imgResolved: !!(fr && /<img[^>]+src="blob:/.test(fr.getAttribute('srcdoc') || '')),
+      // 不用正则：这段是模板字面量，反斜杠会被吃掉（本文件开头写着这个坑，我又踩了一次）
+      cssInlined: (() => {
+        const d = fr ? (fr.getAttribute('srcdoc') || '') : '';
+        return d.includes('<style>') && d.includes('rgb(12,34,56)');
+      })(),
+      note: v.querySelector('.html-note')?.textContent ?? null,
+      hasExternal: !!v.querySelector('[title*="浏览器"]'),
+    };
+  })()`);
+  check('点开 .html 在主区渲染（不再跳浏览器），相对路径的图片与样式表都解析了',
+    opened && view.open && view.inMainArea && view.hasSrcdoc && view.imgResolved && view.cssInlined,
+    view);
+  /*
+   * sandbox 只给 same-origin、**不给 scripts**：脚本一行都跑不了，同源也就无从被利用。
+   * 空 sandbox 更严但会让 srcdoc 整个不加载（Chromium 不给不透明来源建子帧），
+   * 表现是"一片白"——这条断言连同下面那条脚本检查，就是为了不让它再退回去。
+   */
+  check('沙箱不给 allow-scripts（同源可给），并留了"用浏览器打开"的出口',
+    view.sandbox === 'allow-same-origin' && view.hasExternal,
+    { sandbox: view.sandbox, hasExternal: view.hasExternal });
+
+  // 脚本真的没跑：跑了的话 body 会被替换成"脚本跑起来了"
+  await new Promise((r) => setTimeout(r, 800));
+  const framed = await evaluate(`(() => {
+    const fr = document.querySelector('iframe.html-frame');
+    const d = fr && fr.contentDocument;
+    if (!d || !d.body) return { loaded: false };
+    return {
+      loaded: true,
+      // 真的渲染出来了没有：文字在不在、图片解没解出来
+      text: (d.body.innerText || '').slice(0, 40),
+      imgWidths: [...d.images].map((i) => i.naturalWidth),
+      scriptRan: (d.body.innerText || '').includes('脚本跑起来了'),
+      h1Color: d.querySelector('h1') ? getComputedStyle(d.querySelector('h1')).color : null,
+    };
+  })()`);
+  check('iframe 里**真的渲染出内容**了（此前 sandbox="" 时是一片白），图片解析成功',
+    framed.loaded && framed.text.includes('本地报表') && (framed.imgWidths[0] ?? 0) > 0, framed);
+  check('HTML 里的脚本没有执行',
+    framed.loaded && framed.scriptRan === false, { scriptRan: framed.scriptRan });
+  check('外部样式表被内联并真的生效（h1 用上了 style.css 里的颜色）',
+    framed.h1Color === 'rgb(12, 34, 56)', { h1Color: framed.h1Color });
+  await shot('html-view.png');
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 500));
+}
+
 // ---------- 7.87 导出 PDF：真的打一份出来，逐页数有没有字（v0.11.17）----------
 /*
  * 用户拿到的 PDF「只有第一页，总页数还多出那么多」。我把他同步到服务器上的那份
