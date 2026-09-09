@@ -36,7 +36,8 @@ export interface CommandActions {
   /** v0.11.18：整理排版（纯本地规则）。没有打开笔记时为 null */
   onTidy: (() => void) | null;
   /** v0.11.18：AI 动作（按 id 触发）。没有打开笔记时为 null */
-  onAi: ((id: 'proofread' | 'polish' | 'summarize') => void) | null;
+  /** 动作 id 见 lib/llm 的 AI_ACTIONS，外加 custom / ask-note / ask-vault 三条要先问一句的 */
+  onAi: ((id: string) => void) | null;
 }
 
 export interface CommandsDeps {
@@ -134,6 +135,15 @@ export function useCommands(deps: CommandsDeps): Commands {
           ? { id: 'ai-polish', label: 'AI 润色选中的文字', run: () => actions.onAi?.('polish') }
           : null,
         actions.onAi ? { id: 'ai-summary', label: 'AI 写摘要', run: () => actions.onAi?.('summarize') } : null,
+        actions.onAi
+          ? { id: 'ai-custom', label: 'AI 自定义指令（你说要怎么处理）', run: () => actions.onAi?.('custom') }
+          : null,
+        actions.onAi
+          ? { id: 'ai-ask-note', label: 'AI 问这篇笔记', run: () => actions.onAi?.('ask-note') }
+          : null,
+        actions.onAi
+          ? { id: 'ai-ask-vault', label: 'AI 问整个笔记库（本机先检索，答案标出处）', run: () => actions.onAi?.('ask-vault') }
+          : null,
         // v0.7.2：应用内更新入口（手动检查）
         { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: actions.onCheckUpdate },
       ].filter((c): c is CommandItem => c !== null),

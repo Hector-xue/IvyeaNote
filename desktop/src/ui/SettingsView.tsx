@@ -488,6 +488,62 @@ export function SettingsView(props: Props) {
               checked={p.autoDensity}
               onChange={(x) => setPref({ autoDensity: x })}
             />
+
+            {/*
+              v0.11.20：**存下来的自定义动作**。
+              这里只管"看一眼、删掉、改个名"——**新增在 AI 面板里**：
+              跑过一次「自定义指令」、看到结果确实是你要的，再点「存为动作」。
+              让人在设置页里凭空写一句提示词，写完还得回去试，是本末倒置。
+            */}
+            <div className="set-row set-about">
+              <span className="set-label">
+                我的动作（{p.ai.actions.length}）
+                <span className="set-hint">
+                  在编辑区右键 → AI 助手 →「自定义指令…」跑一次，结果满意就点面板上的「存为动作」。
+                  存下来的会和内置动作并排出现在菜单里。
+                </span>
+              </span>
+            </div>
+            {p.ai.actions.length > 0 && (
+              <ul className="set-actions">
+                {p.ai.actions.map((a) => (
+                  <li key={a.id} className="set-action">
+                    <span className="set-action-main">
+                      {/*
+                        改名就地改。**不能用 window.prompt**——WebView2 里它静默返回 null，
+                        点了毫无反应（v0.3.3 就是为这个才自己画的对话框）。
+                      */}
+                      <input
+                        className="set-input set-action-name"
+                        value={a.label}
+                        aria-label={`动作名称：${a.label}`}
+                        onChange={(e) =>
+                          setPref({
+                            ai: {
+                              ...p.ai,
+                              actions: p.ai.actions.map((x) =>
+                                x.id === a.id ? { ...x, label: e.target.value } : x
+                              ),
+                            },
+                          })
+                        }
+                      />
+                      <span className="set-hint">
+                        {a.mode === 'replace' ? '改写选中的文字' : '产出新内容'} · {a.instruction}
+                      </span>
+                    </span>
+                    <button
+                      className="btn ghost danger"
+                      onClick={() =>
+                        setPref({ ai: { ...p.ai, actions: p.ai.actions.filter((x) => x.id !== a.id) } })
+                      }
+                    >
+                      删除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           <section className="set-section">

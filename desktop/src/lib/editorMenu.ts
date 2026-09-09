@@ -13,6 +13,14 @@ import type { MenuItem } from '../ui/ContextMenu';
 export interface EditorMenuCtx {
   /** 有没有选中文字：没有选区时「剪切/复制」要置灰，而不是点了没反应 */
   hasSelection: boolean;
+  /**
+   * v0.11.19：AI 动作列表。**空数组 = 不显示这一组**。
+   *
+   * 为什么进右键菜单：v0.11.18 把 AI 只挂在顶栏「⋯」的二级菜单和命令面板里，
+   * 用户装完的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
+   * 选中一段文字之后**第一反应是右键**——能力放在人手会去摸的地方才算接上入口。
+   */
+  aiActions?: AiMenuAction[];
   /** 右键正好点在链接上时的地址 */
   linkHref: string | null;
   /** 右键正好点在图片上时的库内路径 */
@@ -24,6 +32,10 @@ export interface EditorMenuCtx {
 }
 
 export interface EditorMenuActions {
+  /** 跑一个 AI 动作（按 id） */
+  ai?(id: string): void;
+  /** 整理排版：纯本地规则，不联网 */
+  tidy?(): void;
   /** 按 TOOLS 里的 key 施加行内/行级格式 */
   format(key: string): void;
   /** 设定标题级别，0 = 正文 */
@@ -45,6 +57,46 @@ export interface EditorMenuActions {
   selectAll(): void;
   openLink(href: string): void;
   copyToClipboard(text: string): void;
+}
+
+/**
+ * 右键菜单里的一条 AI 动作。
+ *
+ * `group` 决定它落在哪一段——**分段的依据是"它会对你的文件做什么"**，
+ * 不是功能分类：`edit` 覆盖你选中的字、`make` 只多给一段东西、`ask` 什么都不写，
+ * `saved` 是用户自己存下来的（改不改正文看它自己的 mode）。
+ * 十几二十条平铺在一列里，人扫不出哪些会动到自己的正文。
+ */
+export interface AiMenuAction {
+  id: string;
+  label: string;
+  hint: string;
+  needsSelection: boolean;
+  group?: 'edit' | 'make' | 'saved' | 'ask';
+}
+
+/** 按 group 分段（段间插分隔线），需要选区的在没选区时置灰 */
+export function aiSubmenu(
+  actions: readonly AiMenuAction[],
+  hasSelection: boolean,
+  run: (id: string) => void
+): MenuItem[] {
+  const items: MenuItem[] = [];
+  let last: string | undefined;
+  for (const a of actions) {
+    if (last !== undefined && a.group !== last) items.push({ type: 'sep', id: `s-ai-${a.group ?? 'x'}` });
+    last = a.group;
+    items.push({
+      id: `ai-${a.id}`,
+      label: a.label,
+      // 「校对/润色/精简」光看名字分不清，而它们会直接改正文——点之前就要知道
+      hint: a.hint,
+      // 需要选区的动作在没选中时置灰——而不是点了弹一句"请先选中"
+      disabled: a.needsSelection && !hasSelection,
+      run: () => run(a.id),
+    });
+  }
+  return items;
 }
 
 /** Obsidian 那张菜单的结构：链接 → 三个子菜单 → 剪贴板 */
@@ -73,6 +125,25 @@ export function buildEditorMenu(ctx: EditorMenuCtx, act: EditorMenuActions): Men
         run: () => act.copyToClipboard(ctx.imageSrc!),
       },
       { type: 'sep', id: 's-img' }
+    );
+  }
+
+  /*
+   * AI 放在**最上面**：右键之前用户刚选完一段文字，此刻他想做的十有八九就是
+   * "把这段怎么样一下"。放在菜单底部等于让人先滑过十几项格式命令。
+   */
+  if (!ctx.readOnly && ctx.aiActions && ctx.aiActions.length > 0 && act.ai) {
+    items.push(
+      {
+        id: 'ai',
+        label: 'AI 助手',
+        icon: 'sparkle',
+        submenu: aiSubmenu(ctx.aiActions, ctx.hasSelection, (id) => act.ai?.(id)),
+      },
+      ...(act.tidy
+        ? ([{ id: 'tidy', label: '整理排版（本地规则）', icon: 'text-format', run: act.tidy }] as MenuItem[])
+        : []),
+      { type: 'sep', id: 's-ai' }
     );
   }
 

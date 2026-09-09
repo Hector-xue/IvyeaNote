@@ -240,9 +240,40 @@ const menu = await evaluate(`(() => {
 })()`);
 check('编辑区右键弹出自己的菜单（不是 WebView 那三项）', !!menu, menu);
 check('菜单有分隔线 / 图标 / 二级菜单箭头',
-  menu && menu.seps >= 2 && menu.icons >= 8 && menu.arrows === 3, menu && { seps: menu.seps, icons: menu.icons, arrows: menu.arrows });
+  menu && menu.seps >= 2 && menu.icons >= 8 && menu.arrows === 4, menu && { seps: menu.seps, icons: menu.icons, arrows: menu.arrows });
 check('无选区时「剪切/复制」置灰', menu && menu.disabled.includes('剪切') && menu.disabled.includes('复制'), menu?.disabled);
+// v0.11.19：AI 的入口此前只在顶栏「⋯」的二级菜单里，用户直接说"没看到任何 AI 按钮"。
+// 右键菜单第一项就该是它——选完字手就在右键上。
+check('右键菜单第一项是「AI 助手」', menu && menu.items[0] === 'AI 助手', menu?.items?.slice(0, 3));
+check('菜单里有「整理排版（本地规则）」', menu && menu.items.includes('整理排版（本地规则）'), menu?.items);
 
+// 展开「AI 助手」子菜单：没选区时替换类动作必须是置灰的，而不是点了才弹一句"请先选中"
+const aiBox = await evaluate(`(() => {
+  const item = [...document.querySelectorAll('.ctx-item')].find(b => b.querySelector('.ctx-label')?.textContent === 'AI 助手');
+  if (!item) return null;
+  const r = item.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+})()`);
+if (aiBox) {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: aiBox.x - 30, y: aiBox.y - 24 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: aiBox.x, y: aiBox.y });
+  await new Promise((r) => setTimeout(r, 500));
+}
+const aiSub = await evaluate(`(() => {
+  const sub = document.querySelector('.ctx-sub-menu');
+  if (!sub) return null;
+  return {
+    labels: [...sub.querySelectorAll('.ctx-item')].map(b => b.querySelector('.ctx-label')?.textContent),
+    disabled: [...sub.querySelectorAll('.ctx-item')].filter(b => b.disabled).map(b => b.querySelector('.ctx-label')?.textContent),
+    hints: [...sub.querySelectorAll('.ctx-hint')].length,
+  };
+})()`);
+check('「AI 助手」子菜单列出了校对 / 润色 / 写摘要',
+  aiSub && ['校对', '润色', '写摘要'].every((x) => aiSub.labels.includes(x)), aiSub);
+check('无选区时替换类 AI 动作置灰、产出类可点',
+  aiSub && aiSub.disabled.includes('校对') && !aiSub.disabled.includes('写摘要'), aiSub?.disabled);
+check('每条 AI 动作都写了它会做什么', aiSub && aiSub.hints === aiSub.labels.length, aiSub?.hints);
+await shot('menu-ai.png');
 // 展开「文本格式」子菜单
 // React 的 onMouseEnter 是用 mouseover/mouseout 委托实现的，
 // 直接 dispatch 一个 'mouseenter' 事件根本不会触发它——必须真的把鼠标移过去
@@ -268,6 +299,42 @@ await shot('menu.png');
 // 关掉菜单
 await evaluate(`document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}))`);
 await new Promise((r) => setTimeout(r, 300));
+
+// ---------- 5.1 状态栏那颗「AI」 ----------
+/*
+ * v0.11.19：状态栏那颗「AI」。
+ *
+ * 右键菜单已经是主入口，但**右键是要先知道才会去按的**——状态栏这一条是明面上的
+ * 那个「按钮」，用户找的就是它（原话：「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」）。
+ */
+const aiBtn = await evaluate(`(() => {
+  const b = [...document.querySelectorAll('.status-bar .st-item')].find(x => x.textContent.trim() === 'AI');
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), hasIcon: !!b.querySelector('svg') };
+})()`);
+check('状态栏上有一颗看得见的「AI」按钮（右键要先知道才会按，这条是明面上的入口）',
+  !!aiBtn && aiBtn.hasIcon, aiBtn);
+if (aiBtn) {
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: aiBtn.x, y: aiBtn.y, button: 'left', clickCount: 1, buttons: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: aiBtn.x, y: aiBtn.y, button: 'left', clickCount: 1, buttons: 1 });
+  await new Promise((r) => setTimeout(r, 500));
+}
+const aiBtnMenu = await evaluate(`(() => {
+  const m = document.querySelector('.ctx-menu');
+  if (!m) return null;
+  const r = m.getBoundingClientRect();
+  return {
+    labels: [...m.querySelectorAll('.ctx-label')].map(x => x.textContent),
+    hints: m.querySelectorAll('.ctx-hint').length,
+    onScreen: r.top >= 0 && r.bottom <= window.innerHeight + 1,
+  };
+})()`);
+check('点它弹出的单子里有校对 / 写摘要 / 整理排版，且整张菜单在视口内（它贴着窗口底边）',
+  !!aiBtnMenu && ['校对', '写摘要', '整理排版'].every((x) => aiBtnMenu.labels.includes(x)) && aiBtnMenu.onScreen,
+  aiBtnMenu);
+await evaluate(`document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}))`);
+await new Promise((r) => setTimeout(r, 250));
 
 // ---------- 5.2 粘贴图片 ----------
 /*
@@ -1574,6 +1641,14 @@ await new Promise((r) => setTimeout(r, 2600));
        */
       await w.write(new TextEncoder().encode(['# AI样张', '', '这段话有错别字和语病，等着被校对。', '', '第二段不该被动。', ''].join(NL)));
       await w.close();
+      // 「问整个笔记库」要有个可被检索到的靶子，还要有个**不该被送出去**的对照组
+      const biz = await h.getDirectoryHandle('商业', { create: true });
+      const p1 = await (await biz.getFileHandle('定价策略.md', { create: true })).createWritable();
+      await p1.write(new TextEncoder().encode(['# 定价策略', '', '最后定的是三档订阅，毛利率目标 70%。', ''].join(NL)));
+      await p1.close();
+      const p2 = await (await biz.getFileHandle('无关杂记.md', { create: true })).createWritable();
+      await p2.write(new TextEncoder().encode(['# 无关杂记', '', '今天中午吃了一碗牛肉面，天气很好。', ''].join(NL)));
+      await p2.close();
       return 'ok';
     }
     return 'no-vault';
@@ -1609,9 +1684,17 @@ await new Promise((r) => setTimeout(r, 2600));
       if (!u.includes('fake-llm.test')) return real(url, init);
       window.__aiCalls.push({ url: u, body: init && init.body ? String(init.body) : '' });
       const enc = new TextEncoder();
+      /*
+       * 全库问答的回复要带 [[出处]]——这一版要验"出处点得回去"。
+       * ⚠️ 别用 '出处' 当判据：校对动作的提示词里有「只输**出处**理后的正文」，
+       * 中文子串就这么撞上了，于是校对也拿到了问答的回复（第一版就这么红的）。
+       */
+      const pieces = String(init && init.body || '').includes('【出处：')
+        ? ['结论在这里：', '毛利率目标 70%。', '[[商业/定价策略]]']
+        : ['这段话', '没有错别字', '了。'];
       const body = new ReadableStream({
         start(c) {
-          for (const piece of ['这段话', '没有错别字', '了。']) {
+          for (const piece of pieces) {
             c.enqueue(enc.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: piece } }] }) + String.fromCharCode(10, 10)));
           }
           c.enqueue(enc.encode('data: [DONE]' + String.fromCharCode(10, 10)));
@@ -1732,6 +1815,140 @@ await new Promise((r) => setTimeout(r, 2600));
   const undone = await evaluate(`document.querySelector('.cm-content')?.innerText ?? ''`);
   check('Ctrl+Z 能把 AI 的改动退回去（替换走的是编辑器撤销栈，不是覆盖 doc）',
     undone.includes('有错别字和语病'), { head: undone.slice(0, 40) });
+
+  /*
+   * ④ **问整个笔记库**（v0.11.20）。
+   *
+   * 这条验的是这个功能的立身之本：**检索在本机做，发出去的只有那几段**。
+   * 如果哪天有人图省事改成"把全库拼起来发过去"，这条会立刻红——
+   * 对照组「无关杂记」出现在请求体里就是失败。
+   */
+  await evaluate(`(() => { window.__aiCalls = []; return true })()`);
+  await openAiMenu('问整个笔记库');
+  await new Promise((r) => setTimeout(r, 600));
+  const asked = await evaluate(`(async () => {
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { dialog: false };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '我定价的结论是什么');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('问'))?.click();
+    await new Promise(r => setTimeout(r, 1200));
+    const calls = window.__aiCalls || [];
+    const body = calls.length ? calls[calls.length - 1].body : '';
+    return {
+      dialog: true,
+      calls: calls.length,
+      // 送出去的是检索到的片段（带出处标记），不是全库
+      hasCite: body.includes('出处'),
+      hasTarget: body.includes('毛利率目标'),
+      leakedUnrelated: body.includes('牛肉面'),
+      scope: document.querySelector('.ai-scope')?.textContent ?? null,
+      panel: !!document.querySelector('.ai-panel'),
+    };
+  })()`);
+  check('「问整个笔记库」在本机检索后只发相关片段（无关笔记一个字都没出去）',
+    asked.dialog && asked.calls === 1 && asked.hasTarget && asked.hasCite && !asked.leakedUnrelated, asked);
+  check('面板上如实写出这次送了几篇、多少字（用户有权知道自己的资料出去了多少）',
+    !!asked.scope && /篇/.test(asked.scope) && /字/.test(asked.scope), asked.scope);
+  /*
+   * ⑤ 答案里的 `[[出处]]` 要**点得回去**（v0.11.20）。
+   * 出处不是装饰：它是用户唯一能核对的凭据。摆成纯文本，人还得自己再搜一遍，
+   * 这条链就断在最后一步。
+   */
+  const cite = await evaluate(`(() => {
+    const b = document.querySelector('.ai-result .ai-cite');
+    return b ? { text: b.textContent, tag: b.tagName } : null;
+  })()`);
+  check('全库问答的答案里 [[出处]] 是可点的按钮，不是一段死文字',
+    !!cite && cite.tag === 'BUTTON' && cite.text.includes('定价'), cite);
+  await evaluate(`(() => { document.querySelector('.ai-result .ai-cite')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  // 看正文，不看标题栏：正文出现那篇的内容才叫"真的打开了"
+  const opened = await evaluate(`(() => ({
+    body: (document.querySelector('.cm-content')?.innerText ?? document.querySelector('.md-body')?.innerText ?? '').slice(0, 60),
+    tabs: [...document.querySelectorAll('.tb-tab')].map(t => t.textContent.trim()),
+  }))()`);
+  check('点出处真的把那篇笔记打开了', opened.body.includes('三档订阅'), opened);
+
+  /*
+   * ⑥ **自定义指令 → 存为动作**（v0.11.20）。
+   * 同一句话用第二次还得重打一遍，这个功能就废了一半。存下来的动作要出现在菜单里。
+   */
+  await evaluate(`(() => { window.__aiCalls = []; return true })()`);
+  /*
+   * 先把选区收掉。上一段用例选过一行，留着的话「自定义指令」会走**替换**分支——
+   * 这条要验的是"没选中时结果只会附到文末"，模式不能碰运气。
+   */
+  const collapseAt = await evaluate(`(() => {
+    const c = document.querySelector('.cm-content');
+    if (!c) return null;
+    const r = c.getBoundingClientRect();
+    return { x: Math.round(r.left + 30), y: Math.round(r.top + 12) };
+  })()`);
+  if (collapseAt) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: collapseAt.x, y: collapseAt.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  await openAiMenu('自定义指令');
+  await new Promise((r) => setTimeout(r, 600));
+  const custom = await evaluate(`(async () => {
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { dialog: false };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '改成给客户看的口吻');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('开始'))?.click();
+    await new Promise(r => setTimeout(r, 1400));
+    const calls = window.__aiCalls || [];
+    return {
+      dialog: true,
+      calls: calls.length,
+      // 用户那句话原样进了提示词
+      inPrompt: (calls[0]?.body ?? '').includes('改成给客户看的口吻'),
+      saveBtn: [...document.querySelectorAll('.ai-foot button')].some(b => b.textContent.trim() === '存为动作'),
+    };
+  })()`);
+  check('「自定义指令」把用户原话原样送进提示词，面板上给出「存为动作」',
+    custom.dialog && custom.calls === 1 && custom.inPrompt && custom.saveBtn, custom);
+  const saved = await evaluate(`(async () => {
+    [...document.querySelectorAll('.ai-foot button')].find(b => b.textContent.trim() === '存为动作')?.click();
+    await new Promise(r => setTimeout(r, 500));
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { dialog: false };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '客户口吻');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('存'))?.click();
+    await new Promise(r => setTimeout(r, 600));
+    const prefs = JSON.parse(localStorage.getItem('ivnote.prefs') || '{}');
+    return { dialog: true, actions: prefs.ai?.actions ?? [] };
+  })()`);
+  check('存下来的是**用户原话**（不是拼好的提示词），存进了本机偏好',
+    saved.dialog && saved.actions.length === 1 && saved.actions[0].instruction === '改成给客户看的口吻' &&
+    saved.actions[0].label === '客户口吻' && saved.actions[0].mode === 'produce', saved);
+  await evaluate(`(() => { document.querySelector('.ai-head [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const inMenu = await evaluate(`(async () => {
+    document.querySelector('.top-bar button[aria-label="更多操作"]')?.click();
+    await new Promise(r => setTimeout(r, 300));
+    const item = [...document.querySelectorAll('.ctx-item')].find(b => (b.querySelector('.ctx-label')?.textContent ?? '') === 'AI 助手');
+    if (!item) return null;
+    const r = item.getBoundingClientRect();
+    item.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: r.left + 10, clientY: r.top + 8 }));
+    await new Promise(r2 => setTimeout(r2, 500));
+    const labels = [...document.querySelectorAll('.ctx-sub-menu .ctx-label')].map(x => x.textContent);
+    document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    return labels;
+  })()`);
+  check('存下来的动作和内置动作并排出现在 AI 菜单里',
+    Array.isArray(inMenu) && inMenu.includes('客户口吻'), inMenu);
+  await new Promise((r) => setTimeout(r, 300));
 }
 
 // ---------- 7.875 HTML 在应用内看（v0.11.18）----------
@@ -2214,6 +2431,39 @@ await new Promise((r) => setTimeout(r, 2600));
   check('按住把手下滑能把弹层关掉（把手此前是个假承诺，只能点遮罩关）',
     !!grip && !(await evaluate(`!!document.querySelector('.m-sheet2')`)), { grip });
 
+  /*
+   * v0.11.19：手机上没有右键，「⋯」是这些动作**唯一**的入口——
+   * v0.11.18 的 AI 只接了桌面，手机端连设置里都到不了。
+   */
+  await evaluate(`document.querySelector('.m-sheet-mask')?.dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+  await new Promise((r) => setTimeout(r, 300));
+  await evaluate(`[...document.querySelectorAll('.m-top-btn')].find(b => b.getAttribute('aria-label') === '更多')?.click()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const moreItems = await evaluate(`(() => [...document.querySelectorAll('.m-sheet2-label')].map(b => b.firstChild?.textContent?.trim()))()`);
+  check('手机端「⋯」里有「AI 助手」这一行（手机没有右键，这张单子是唯一入口）',
+    Array.isArray(moreItems) && moreItems.includes('AI 助手'), moreItems);
+  // 七个动作没有平铺进「⋯」——那张纸本来就长，上一版刚因为"太碎"挨过骂
+  check('AI 的动作没有平铺在「⋯」里（那张纸已经有大纲/日记/重命名/移动/删除/设置）',
+    Array.isArray(moreItems) && !moreItems.includes('校对'), moreItems);
+  await evaluate(`[...document.querySelectorAll('.m-sheet2-item')].find(b => b.textContent.trim().startsWith('AI 助手'))?.click()`);
+  await new Promise((r) => setTimeout(r, 450));
+  const mobileAi = await evaluate(`(() => {
+    const items = [...document.querySelectorAll('.m-sheet2-item')].map(b => ({
+      label: b.querySelector('.m-sheet2-label')?.firstChild?.textContent?.trim() ?? null,
+      sub: b.querySelector('.m-sheet2-sub')?.textContent ?? null,
+    }));
+    if (items.length === 0) return null;
+    return { title: document.querySelector('.m-sheet2-title')?.textContent ?? null, items };
+  })()`);
+  check('点进去是一张「AI 助手」的纸：校对 / 写摘要 / 整理排版都在',
+    !!mobileAi && mobileAi.title === 'AI 助手' &&
+    ['校对', '写摘要', '整理排版'].every((x) => mobileAi.items.some((i) => i.label === x)), mobileAi);
+  check('每一行都写了它会做什么；替换类写明"要先选中一段文字"（手机上没有置灰+悬停这一说）',
+    !!mobileAi && mobileAi.items.every((i) => !!i.sub) &&
+    mobileAi.items.find((i) => i.label === '校对')?.sub === '要先选中一段文字', mobileAi?.items);
+  await evaluate(`document.querySelector('.m-sheet-mask')?.dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+  await new Promise((r) => setTimeout(r, 300));
+
   // --- v0.11.13：标题不冻结 / 大纲弹层形状 / 底部四个键 ---
   await evaluate(`(() => {
     // 关掉菜单，打开那篇有标题的长笔记
@@ -2434,6 +2684,91 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('mobile-image.png');
   await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
   await new Promise((r) => setTimeout(r, 300));
+
+  /*
+   * v0.11.20：**给电脑设计的 HTML 在手机上要读得了**。
+   * 用户发来的截图：一份左目录 + 右正文的手册，手机上目录占掉一半，正文每行两三个字。
+   * 这条用的正是那种页面——固定侧栏 + min-width:1000px、且**没有** viewport 声明。
+   */
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const web = await h.getDirectoryHandle('网页', { create: true });
+      const fh = await web.getFileHandle('重排样张.html', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode(
+        '<html><head><meta charset="utf-8"><style>' +
+        'body{margin:0}.wrap{display:flex;min-width:1000px}' +
+        '.side{width:320px;flex:0 0 320px;position:fixed;left:0;top:0;bottom:0;background:#eee}' +
+        '.main{margin-left:320px;width:680px;font-size:16px}' +
+        '</style></head><body><div class="wrap"><aside class="side">目录</aside>' +
+        '<main class="main"><h1>手册标题</h1><p>正文一二三四五六七八九十</p></main></div></body></html>'
+      ));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  // 文件夹的展开状态存在 localStorage 里，上一段用例可能已经把它展开了——
+  // 无脑点一下等于**收起**。所以先看孩子在不在，不在才点，最多试两次（第一次点错方向）。
+  await evaluate(`(async () => {
+    const find = () => [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('重排样张'));
+    for (let i = 0; i < 2 && !find(); i++) {
+      const dir = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent === '网页');
+      (dir?.closest('.m-tree-row') ?? dir)?.click();
+      await new Promise(r => setTimeout(r, 500));
+    }
+    const el = find();
+    const row = el?.closest('.m-tree-row') ?? el;
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return !!row;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1600));
+  const htmlFit = await evaluate(`(() => {
+    const fr = document.querySelector('iframe.html-frame');
+    const d = fr && fr.contentDocument;
+    if (!d || !d.body) return null;
+    const side = d.querySelector('.side');
+    const main = d.querySelector('.main');
+    return {
+      // 内容不该比屏幕宽——横向滚动条就是"读不了"的另一种写法
+      scrollW: d.documentElement.scrollWidth,
+      winW: window.innerWidth,
+      sidePos: side ? getComputedStyle(side).position : null,
+      mainLeft: main ? getComputedStyle(main).marginLeft : null,
+      // 字号一个像素都没动：重排是拍平布局，不是把页面缩小
+      bodyFont: main ? getComputedStyle(main).fontSize : null,
+      text: (d.body.innerText || '').slice(0, 20),
+    };
+  })()`);
+  check('手机上打开给电脑做的 HTML：内容不再比屏幕宽（固定侧栏拍平、不留横向滚动）',
+    !!htmlFit && htmlFit.scrollW <= htmlFit.winW + 2 && htmlFit.sidePos === 'static' &&
+    htmlFit.mainLeft === '0px', htmlFit);
+  check('重排只动布局，不动字号（缩小等于把"读不了"换成"看不清"）',
+    !!htmlFit && htmlFit.bodyFont === '16px', htmlFit?.bodyFont);
+  await shot('mobile-html.png');
+  // 工具条上那颗键要真的能切回原样，否则"重排"就是不可撤销的
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="重排以适应屏幕"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const htmlRaw = await evaluate(`(() => {
+    const fr = document.querySelector('iframe.html-frame');
+    const d = fr && fr.contentDocument;
+    if (!d || !d.body) return null;
+    return { scrollW: d.documentElement.scrollWidth, winW: window.innerWidth,
+      sidePos: d.querySelector('.side') ? getComputedStyle(d.querySelector('.side')).position : null };
+  })()`);
+  check('工具条上能切回原始排版（作者的设计不是被我们永久改掉）',
+    !!htmlRaw && htmlRaw.sidePos === 'fixed' && htmlRaw.scrollW > htmlRaw.winW, htmlRaw);
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
 
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');

@@ -53,7 +53,12 @@ describe('读写与容错', () => {
       autoSync: false,
       attachMode: 'vault',
       autoDensity: true,
-      ai: { baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' },
+      ai: {
+        baseUrl: 'https://api.example.com',
+        apiKey: 'k',
+        model: 'm',
+        actions: [{ id: 'a1', label: '客户口吻', instruction: '改成给客户看的口吻', mode: 'replace' }],
+      },
     });
     expect(loadPrefs()).toEqual({
       defaultView: 'read',
@@ -62,8 +67,42 @@ describe('读写与容错', () => {
       autoSync: false,
       attachMode: 'vault',
       autoDensity: true,
-      ai: { baseUrl: 'https://api.example.com', apiKey: 'k', model: 'm' },
+      ai: {
+        baseUrl: 'https://api.example.com',
+        apiKey: 'k',
+        model: 'm',
+        actions: [{ id: 'a1', label: '客户口吻', instruction: '改成给客户看的口吻', mode: 'replace' }],
+      },
     });
+  });
+
+  /*
+   * 存下来的动作要**逐条**校验：手改坏（或旧版本写下）的一条，
+   * 不该把其余几条一起吃掉——那是"我的自定义动作全没了"。
+   */
+  it('自定义动作逐条校验，坏的丢掉、好的留下', () => {
+    localStorage.setItem(
+      'ivnote.prefs',
+      JSON.stringify({
+        ai: {
+          baseUrl: 'x',
+          apiKey: '',
+          model: 'm',
+          actions: [
+            { id: 'ok', label: '好的', instruction: '做点什么', mode: 'produce' },
+            { id: 'bad', label: '缺 mode', instruction: '做点什么' },
+            null,
+            'not-an-object',
+          ],
+        },
+      })
+    );
+    expect(loadPrefs().ai.actions).toEqual([{ id: 'ok', label: '好的', instruction: '做点什么', mode: 'produce' }]);
+  });
+
+  it('从没存过 actions 的老配置读回来是空数组，不是 undefined', () => {
+    localStorage.setItem('ivnote.prefs', JSON.stringify({ ai: { baseUrl: 'x', apiKey: '', model: 'm' } }));
+    expect(loadPrefs().ai.actions).toEqual([]);
   });
 
   it('只存了一部分时，其余项回落默认而不是 undefined', () => {

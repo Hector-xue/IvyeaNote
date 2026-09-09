@@ -30,7 +30,26 @@
  * `<style>`。这和阅读视图里图片的解析规则是同一件事（见 MarkdownEditor 的
  * `resolveImagesIn`），只是这里还多一层样式。
  *
- * ## 3. 链接点了去哪？
+ * ## 3. 手机上怎么读一张给电脑设计的页面？（v0.11.20）
+ *
+ * 用户发来的截图：一份左侧目录 + 右侧正文的 HTML 手册，在手机上左边目录占掉一半，
+ * 右边正文每行只剩两三个字，竖着流下去——**没法读**。
+ *
+ * 根子在于 iframe 是它自己的视口。手机浏览器打开这种页面时会按 980px 排版再整体
+ * 缩小（overview mode），而 iframe 只有屏幕那么宽，于是作者按 1000px 写的两栏
+ * 被硬塞进 390px。
+ *
+ * 两条路，我们都给，默认按页面自己有没有为手机做过适配来选：
+ * - **重排**（窄屏默认）：注入一张覆盖样式，把 flex/grid/浮动/固定定位统统拍平成
+ *   自上而下的块，宽度一律跟着视口。字号保持作者的原值，所以**读得清**。
+ *   代价是设计感会丢一部分——但读不了的排版没有设计可言。
+ * - **原样**：一个字不动。页面自己声明了 `viewport width=device-width`（说明作者
+ *   做过手机适配）时默认走这条，工具条上也随时能切回来。
+ *
+ * 为什么不做"按比例缩小"：iframe 里缩到 0.4 倍，16px 的正文只剩 6px，
+ * 而沙箱 iframe 里双指放大会连整个应用一起放大。缩小等于把不能读换成看不清。
+ *
+ * ## 4. 链接点了去哪？
  *
  * 沙箱 iframe 里的链接点了什么都不会发生（没有 `allow-top-navigation`），
  * 那就等于"链接坏了"。所以拦下点击：库内的 `.md` 用应用打开，外部链接交给浏览器。
@@ -41,7 +60,7 @@
  * 工具条上给「用浏览器打开」——沙箱会拦下导航，但用户至少看得见链接指向哪儿
  * （hover 有 title）。真要跳转就用工具条那颗按钮。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { RibbonIcon } from './Icons';
 import { resolveVaultPath } from '../lib/links';
 
@@ -64,10 +83,68 @@ function baseName(path: string): string {
   return path.split('/').pop() ?? path;
 }
 
+/**
+ * 页面有没有为手机做过适配：认 `<meta name="viewport" content="...width=device-width...">`。
+ * 这是作者的**声明**，不是猜测——声明过就照他的来，没声明的才轮到我们重排。
+ */
+export function declaresMobileViewport(html: string): boolean {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const meta = doc.querySelector('meta[name="viewport" i]');
+  const content = meta?.getAttribute('content') ?? '';
+  return /width\s*=\s*device-width/i.test(content);
+}
+
+/**
+ * 重排用的覆盖样式：**把二维布局拍平成一维**。
+ *
+ * 选择器写成 `html body :is(...)`（0,0,2）而不是 `*`：
+ * `*` 会把 `<span>`、`<code>` 这些行内元素也变成块，一句话被拆成一行一个词。
+ * 只拍容器类元素，行内排版留给作者。
+ *
+ * 表格不拍——拍了就没有行列了；给它自己的横向滚动条。
+ */
+const REFLOW_CSS = `
+html, body {
+  width: auto !important; min-width: 0 !important; max-width: 100% !important;
+  margin: 0 !important; overflow-x: hidden !important;
+}
+body { padding: 12px !important; }
+html body :is(div, section, article, aside, nav, main, header, footer, form, ul, ol, dl, figure) {
+  display: block !important;
+  position: static !important;
+  float: none !important;
+  width: auto !important; min-width: 0 !important; max-width: 100% !important;
+  height: auto !important; max-height: none !important;
+  margin-left: 0 !important; margin-right: 0 !important;
+  transform: none !important;
+  overflow: visible !important;
+}
+html body :is(img, video, canvas, svg, iframe) { max-width: 100% !important; height: auto !important; }
+html body :is(pre, code) { white-space: pre-wrap !important; word-break: break-word !important; }
+html body table { display: block !important; width: max-content !important; max-width: 100% !important; overflow-x: auto !important; }
+`;
+
+/** 把重排样式塞进 </head> 之前；没有 head 就贴在最前面 */
+function withReflow(html: string, on: boolean): string {
+  if (!on || !html) return html;
+  const tag = `<style data-ivnote="reflow">${REFLOW_CSS}</style>`;
+  return html.includes('</head>') ? html.replace('</head>', `${tag}</head>`) : tag + html;
+}
+
 export function HtmlViewer(props: Props) {
   const [doc, setDoc] = useState<string>('');
   const [note, setNote] = useState<string | null>(null);
   const urls = useRef<string[]>([]);
+  /**
+   * 默认值只在打开新文件时定一次：作者声明过手机适配就原样，否则重排。
+   * 之后用户在工具条上怎么切就是怎么切——不能每次重渲染又把他的选择顶回去。
+   */
+  const [reflow, setReflow] = useState(false);
+  useEffect(() => {
+    const narrow = window.innerWidth < 700;
+    setReflow(narrow && !declaresMobileViewport(props.html));
+  }, [props.path, props.html]);
+  const srcDoc = useMemo(() => withReflow(doc, reflow), [doc, reflow]);
 
   useEffect(() => {
     let cancelled = false;
@@ -148,6 +225,19 @@ export function HtmlViewer(props: Props) {
         {note && <span className="html-note">{note}</span>}
         <span className="html-gap" />
         {/* 沙箱里不跑脚本，所以要留一条真能跑的路 */}
+        {/*
+          v0.11.20：给电脑设计的页面在手机上没法读（用户截图：左边目录占一半，
+          右边正文每行两三个字）。这颗按钮在"重排"与"原样"之间切。
+        */}
+        <button
+          className={`icon-btn ${reflow ? 'on' : ''}`}
+          title={reflow ? '当前：重排以适应屏幕（点这里看原始排版）' : '当前：原始排版（点这里重排以适应屏幕）'}
+          aria-pressed={reflow}
+          aria-label="重排以适应屏幕"
+          onClick={() => setReflow((v) => !v)}
+        >
+          <RibbonIcon name={reflow ? 'list-ul' : 'table'} size={15} />
+        </button>
         {props.onOpenExternal && (
           <button className="icon-btn" title="用浏览器打开（可执行脚本）" onClick={props.onOpenExternal}>
             <RibbonIcon name="external-link" size={15} />
@@ -165,7 +255,7 @@ export function HtmlViewer(props: Props) {
          * 空 sandbox 会让 srcdoc 根本不加载（见文件头那段），别再"更严"了。
          */
         sandbox="allow-same-origin"
-        srcDoc={doc}
+        srcDoc={srcDoc}
       />
     </div>
   );

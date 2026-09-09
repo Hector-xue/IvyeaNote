@@ -4,7 +4,19 @@
  * 所以测的是这几件事，而不是去真的调一次接口。
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { chatUrl, cleanReply, isLlmConfigured, streamChat, LlmError, AI_ACTIONS, buildMessages } from './llm';
+import {
+  chatUrl,
+  cleanReply,
+  isLlmConfigured,
+  streamChat,
+  LlmError,
+  AI_ACTIONS,
+  buildMessages,
+  customSpec,
+  askNoteSpec,
+  askVaultSpec,
+  buildVaultContext,
+} from './llm';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -110,5 +122,53 @@ describe('回复清洗与动作定义', () => {
     const msgs = buildMessages(AI_ACTIONS[0], '原文');
     expect(msgs[0].role).toBe('system');
     expect(msgs[1]).toEqual({ role: 'user', content: '原文' });
+  });
+});
+
+/**
+ * 临时动作（v0.11.20）：自定义指令与两种提问。
+ *
+ * 这三条不在 AI_ACTIONS 里，是**按用户当场说的话现造**的。要锁死的是：
+ * 指令进得了提示词、模式选得对（会不会覆盖原文）、以及问答那两条**必须**
+ * 带上"答不上来就说答不上来"——笔记问答里最坏的结果不是没答案，
+ * 而是编一个看起来像自己写过的答案。
+ */
+describe('自定义指令与提问', () => {
+  it('用户说的那句话进了提示词', () => {
+    const spec = customSpec('改成给客户看的口吻', 'replace');
+    expect(spec.system).toContain('改成给客户看的口吻');
+    expect(spec.mode).toBe('replace');
+  });
+
+  it('没有选区时是产出模式——"替换整篇"这种事不做', () => {
+    expect(customSpec('随便改改', 'produce').mode).toBe('produce');
+  });
+
+  it('提示词太长时 hint 截断，菜单里不会撑成一整行', () => {
+    const spec = customSpec('一'.repeat(80), 'replace');
+    expect(spec.hint.length).toBeLessThanOrEqual(25);
+  });
+
+  it('问一篇：只准用给出的内容，答不上来要直说', () => {
+    const spec = askNoteSpec('我最后定的方案是什么');
+    expect(spec.mode).toBe('produce');
+    expect(spec.system).toContain('我最后定的方案是什么');
+    expect(spec.system).toContain('没有提到');
+  });
+
+  it('问全库：必须标出处——没有出处的全库问答等于随口一说', () => {
+    const spec = askVaultSpec('定价结论');
+    expect(spec.system).toContain('[[');
+    expect(spec.system).toContain('出处');
+  });
+
+  it('片段拼起来时每段都带自己的出处', () => {
+    const ctx = buildVaultContext([
+      { path: 'a/b.md', text: '第一段' },
+      { path: 'c.md', text: '第二段' },
+    ]);
+    expect(ctx).toContain('【出处：a/b.md】');
+    expect(ctx).toContain('【出处：c.md】');
+    expect(ctx.indexOf('第一段')).toBeLessThan(ctx.indexOf('第二段'));
   });
 });

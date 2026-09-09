@@ -36,6 +36,46 @@ export interface AiPanelProps {
   onApply(): void;
   onRetry(): void;
   onClose(): void;
+  /**
+   * 把结果复制走。
+   *
+   * 「问这篇 / 问整个库」的答案多数时候是**看一眼就够**——它不是要写进笔记的内容。
+   * 只给「插入到文末」等于逼人把问答记录攒进正文里。
+   */
+  onCopy?(text: string): void;
+  /**
+   * 把这次的自定义指令存成一条动作（只有 `custom` 会给）。
+   * 同一句话用第二次还得重打一遍，这个功能就废了一半。
+   */
+  onSaveAction?(): void;
+  /** 点结果里的 `[[出处]]`。全库问答的答案要能一路点回原文——否则出处只是装饰 */
+  onOpenNote?(target: string): void;
+}
+
+/**
+ * 把结果里的 `[[路径]]` 渲染成可点的东西。
+ *
+ * 出处不是装饰：它是用户唯一能核对的凭据。摆成纯文本，人还得自己去搜一遍，
+ * 那这条链就断在最后一步。
+ */
+function withLinks(text: string, onOpen?: (t: string) => void): React.ReactNode {
+  if (!onOpen) return text;
+  const out: React.ReactNode[] = [];
+  const re = /\[\[([^\]]+)\]\]/g;
+  let at = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (m.index > at) out.push(text.slice(at, m.index));
+    const target = m[1];
+    out.push(
+      <button key={`${m.index}-${target}`} className="ai-cite" onClick={() => onOpen(target)} title={`打开 ${target}`}>
+        {target}
+      </button>
+    );
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push(text.slice(at));
+  return out;
 }
 
 /** 一行的样式：加了、删了、还是没动 */
@@ -102,7 +142,9 @@ export function AiPanel(props: AiPanelProps) {
         {props.error ? (
           <p className="ai-error">{props.error}</p>
         ) : produce || tab === 'result' ? (
-          <pre className="ai-result">{props.result || (props.busy ? '' : '（空）')}</pre>
+          <pre className="ai-result">
+            {props.result ? withLinks(props.result, props.onOpenNote) : props.busy ? '' : '（空）'}
+          </pre>
         ) : (
           <div className="ai-diff">
             {rows.map((r, i) => (
@@ -122,6 +164,20 @@ export function AiPanel(props: AiPanelProps) {
         <button className="btn ghost" onClick={props.onRetry} disabled={props.busy}>
           重试
         </button>
+        {props.onSaveAction && (
+          <button className="btn ghost" onClick={props.onSaveAction} disabled={props.busy} title="下次直接在菜单里点它">
+            存为动作
+          </button>
+        )}
+        {props.onCopy && (
+          <button
+            className="btn ghost"
+            onClick={() => props.onCopy?.(props.result)}
+            disabled={props.busy || !props.result.trim()}
+          >
+            复制
+          </button>
+        )}
         <button
           className="btn primary"
           onClick={props.onApply}

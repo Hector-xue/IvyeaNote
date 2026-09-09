@@ -18,7 +18,13 @@ export function extractTags(md: string): string[] {
         if (v) tags.add(v);
       }
     } else {
-      const block = fm[1].match(/^tags:\s*$([\s\S]*?)(?=^\w+:|\Z)/m);
+      /*
+       * ⚠️ 这里原来写的是 `(?=^\w+:|\Z)`。JS 正则**没有 `\Z`**——它就是字面量 Z。
+       * 于是 `tags:` 块状写法只有在后面还跟着别的字段时才解析得出来；
+       * 写在 frontmatter 最末尾（最常见的写法）时整块被丢掉，
+       * 表现是"标签写了，标签面板里没有"。改成"下一个字段或文本末尾"。
+       */
+      const block = fm[1].match(/^tags:\s*$([\s\S]*?)(?=^\w+:|$(?![\s\S]))/m);
       if (block) {
         for (const line of block[1].split('\n')) {
           const t = line.replace(/^[-\s]+/, '').trim();

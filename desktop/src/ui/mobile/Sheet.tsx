@@ -15,6 +15,12 @@ export interface SheetItem {
   key: string;
   icon: IconName;
   label: string;
+  /**
+   * 标签下面一行小字：这一项会做什么、或者它需要什么条件。
+   * 「校对 / 润色 / 精简」光看名字分不清差别，而它们会直接改正文——
+   * 手机上又没有"置灰 + 悬停提示"这一说，只能写在明处。
+   */
+  sub?: string;
   /** 右侧的状态标记，比如当前处于哪个视图 */
   checked?: boolean;
   danger?: boolean;
@@ -51,7 +57,10 @@ export function Sheet({ open, title, groups, onClose }: Props) {
                 <span className="m-sheet2-ico">
                   <RibbonIcon name={it.icon} size={20} />
                 </span>
-                <span className="m-sheet2-label">{it.label}</span>
+                <span className="m-sheet2-label">
+                  {it.label}
+                  {it.sub && <span className="m-sheet2-sub">{it.sub}</span>}
+                </span>
                 {it.checked && (
                   <span className="m-sheet2-check">
                     <RibbonIcon name="check" size={18} />

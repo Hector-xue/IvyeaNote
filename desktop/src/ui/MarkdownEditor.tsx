@@ -45,7 +45,7 @@ import {
   type ImageApi,
 } from '../lib/livePreview';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
-import { blockSnippet, buildEditorMenu } from '../lib/editorMenu';
+import { blockSnippet, buildEditorMenu, type AiMenuAction } from '../lib/editorMenu';
 import { raiseToast } from './Toast';
 import { autocompletion } from '@codemirror/autocomplete';
 import { wikiCompletion } from '../lib/wikiComplete';
@@ -116,6 +116,14 @@ export interface MarkdownEditorProps {
    * 和 exposeFormat 一样，卸载时回传 null。
    */
   exposeSelection?(api: SelectionApi | null): void;
+  /**
+   * v0.11.19：右键菜单里的 AI 动作。
+   * 用户装完 v0.11.18 的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」
+   * ——能力当时只挂在顶栏「⋯」的二级菜单里。选中文字之后人的第一反应是右键。
+   */
+  aiActions?: AiMenuAction[];
+  onAi?(id: string): void;
+  onTidy?(): void;
   /**
    * v0.10.2：普通 Markdown 链接指向库内文件时的回调（已解析成库内相对路径）。
    * 不传则只处理外部链接与锚点——**外部链接必须处理**，
@@ -1257,8 +1265,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         imageSrc,
         canInsertImage: !!props.onInsertImage && !!props.currentPath,
         readOnly,
+        aiActions: props.aiActions,
       },
       {
+        ai: props.onAi,
+        tidy: props.onTidy,
         format: (key) => {
           const btn = TOOLS.find((b) => b.key === key);
           if (btn) applyEdit(btn.run);
