@@ -10,7 +10,7 @@
  * 每次发版重拍。这里拿的是**真实构建产物**：起一个静态服务、真的把应用跑起来、
  * 真的点开侧栏与面板，再截图，和 verify-ui 同一套做法。
  *
- * 出图：shot-desktop / shot-search / shot-dark / shot-graph / shot-mobile
+ * 出图：shot-desktop / shot-search / shot-dark / shot-graph / shot-ai / shot-mobile
  * 桌面 1440x900 @2x（2880x1800），手机 390x844 @2x（780x1688）——
  * 尺寸与门户 index.html 里写死的 width/height 对齐，换图不用动 HTML。
  */
@@ -279,6 +279,63 @@ await setTheme('dark');
 await settle(700);
 await shot('shot-dark.png');
 await setTheme('light');
+
+/*
+ * AI（v0.11.20）。
+ *
+ * 拍的是**右键菜单里那一组**——真界面、真菜单项，一个字都不是编的。
+ * 刻意**不拍结果面板**：那需要真的调一次模型，截图脚本里没有（也不该有）网络，
+ * 而拿假回复拼出来的"AI 输出"就成了对外承诺里唯一一处摆拍。面板长什么样，
+ * 门户上用文字说。
+ */
+await clickRibbon('文件');
+await openNote('广告优化');
+await evaluate(`(() => {
+  const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('编辑'));
+  b?.click(); return !!b })()`);
+await settle(900);
+// 选中一段：替换类动作没有选区时是置灰的，截图里该是它们可用的样子
+// 挑一行**正文**：表格分隔行（| --- |）被选中时截图上像坏掉了，标题行同理
+const aiLine = await evaluate(`(() => {
+  const lines = [...document.querySelectorAll('.cm-line')].filter(l => {
+    const t = (l.textContent ?? '').trim();
+    return t.length > 20 && !t.startsWith('|') && !t.startsWith('#') && !t.startsWith('-');
+  });
+  const line = lines[0];
+  if (!line) return null;
+  const r = line.getBoundingClientRect();
+  return { x: Math.round(r.left + 40), y: Math.round(r.top + r.height / 2) };
+})()`);
+if (aiLine) {
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: aiLine.x, y: aiLine.y, button: 'left', clickCount: 1, buttons: 1 });
+  }
+  await settle(300);
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Home', code: 'Home', windowsVirtualKeyCode: 36 });
+  await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 8 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 8 });
+  await settle(400);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: aiLine.x, y: aiLine.y, button: 'right', clickCount: 1, buttons: 2 });
+  }
+  await settle(700);
+  // 展开「AI 助手」子菜单。React 的 onMouseEnter 走 mouseover 委托，真的把鼠标移过去
+  const aiItem = await evaluate(`(() => {
+    const item = [...document.querySelectorAll('.ctx-item')].find(b => (b.querySelector('.ctx-label')?.textContent ?? '') === 'AI 助手');
+    if (!item) return null;
+    const r = item.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (aiItem) {
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: aiItem.x - 30, y: aiItem.y - 24 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: aiItem.x, y: aiItem.y });
+    await settle(700);
+  }
+  await shot('shot-ai.png');
+  await evaluate(`document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}))`);
+  await settle(400);
+}
 
 // ---------- 手机 ----------
 await phoneViewport();
