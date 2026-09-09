@@ -81,6 +81,8 @@ interface Props {
   onCreateNote(): void;
   onNewFolderNote(folder: string): void;
   onDeleteFile(path: string): void;
+  /** v0.11.15：删除整个文件夹（里面的文件进回收站）。不传就不显示这个菜单项 */
+  onDeleteFolder?(dir: string): void;
   /** v0.7.5 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
   /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
@@ -287,6 +289,23 @@ export function MainView(props: Props) {
               ? ([{ id: 'movedir', label: '移动到…', icon: 'move', run: () => props.onRequestMove?.(node.path, true) }] as MenuAnchor['items'])
               : []),
             { id: 'copy', label: '复制路径', icon: 'copy', run: () => props.onCopyPath?.(node.path) },
+            /*
+             * v0.11.15：**文件夹也要能删**（用户：「文件夹右键点击没有删除选项」）。
+             * 此前只有文件那一支有删除，文件夹在界面上根本没有任何删除入口——
+             * 只能一篇篇删完，还剩个空壳。
+             */
+            ...(props.onDeleteFolder
+              ? ([
+                  { type: 'sep', id: 's-deldir' },
+                  {
+                    id: 'deldir',
+                    label: '删除文件夹',
+                    icon: 'trash',
+                    danger: true,
+                    run: () => props.onDeleteFolder?.(node.path),
+                  },
+                ] as MenuAnchor['items'])
+              : []),
           ]
         : [
             { id: 'open', label: '打开', icon: 'file', run: () => openTreeFile(node.path) },

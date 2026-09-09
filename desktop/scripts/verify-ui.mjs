@@ -1249,6 +1249,119 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('colors-edit.png');
 }
 
+// ---------- 7.9 编辑态：列表圆点 / 链接 / 标题上的光标（v0.11.15）----------
+/*
+ * 用户拿 Obsidian 的截图逐条对比：「很多符号都没有正常显示，也没有自动识别链接」
+ * 「这种文档，我用键盘的方向键无法移动到大标题，用鼠标也无法点击到大标题，
+ * 上方向键经常跳到很上面」。
+ *
+ * 后一条的真因是**行级装饰改了行高**（line-height / margin）：CodeMirror 的
+ * 高度模型量的是 getBoundingClientRect，外边距不在盒子里、line-height 它也不认，
+ * 于是坐标从第一个标题起就开始偏，标题越多偏得越远。这类问题只有在**真实产物里
+ * 真的按键、真的点击**才量得到，纯函数测不到一个字节。
+ */
+{
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      const fh = await handle.getFileHandle('排版样张.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode([
+        '## 教育经历', '', '河南经贸职业学院 | 工商企业管理 | 大专', '',
+        '## GitHub / 项目', '',
+        '- **IvyeaOps**', '  - https://github.com/Hector-xue/IvyeaOps',
+        '- [github.com/Hector-xue/ivyea-agent](https://github.com/Hector-xue/ivyea-agent)', '',
+        '## 早期创业经历', '',
+        '- 从实际经营问题出发参与蜂蜜品牌定位', '- 探索直播电商、传统电商等线上销售渠道', '',
+      ].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2500));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('排版样张'));
+    const row = el?.closest('.ft-file'); row?.scrollIntoView({ block: 'center' }); row?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 1000));
+  await evaluate(`(() => { document.querySelector('.cm-content')?.blur(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+
+  const marks = await evaluate(`(() => {
+    const bullets = [...document.querySelectorAll('.cm-live-bullet')];
+    const links = [...document.querySelectorAll('.cm-live-link')];
+    const cs = links[0] ? getComputedStyle(links[0]) : null;
+    return {
+      bullets: bullets.length,
+      bulletText: bullets[0]?.textContent ?? null,
+      // 圆点是渲染层的事：文档里那个 - 必须原样还在（改成 replace 也不该动内容）
+      rawDash: (document.querySelector('.cm-content')?.innerText ?? '').includes(String.fromCharCode(45) + ' 从实际经营'),
+      links: links.map(a => a.textContent),
+      underline: cs ? cs.textDecorationLine : null,
+      linkColor: cs ? cs.color : null,
+      bodyColor: getComputedStyle(document.querySelector('.cm-content')).color,
+    };
+  })()`);
+  check('无序列表在编辑态画成圆点（Obsidian 同款），源码里的 - 一个字节没动',
+    marks.bullets >= 4 && marks.bulletText === '•' && !marks.rawDash, marks);
+  check('链接看得出是链接：品牌色 + 一条下划线（此前只有颜色，用户说"没有自动识别链接"）',
+    marks.links.length >= 2 && marks.underline === 'underline' && marks.linkColor !== marks.bodyColor,
+    marks);
+  await shot('live-marks.png');
+
+  // --- 鼠标点标题：光标必须落在标题那一行 ---
+  const clickHead = await evaluate(`(() => {
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.innerText.includes('早期创业经历'));
+    if (!line) return null;
+    const r = line.getBoundingClientRect();
+    return { x: Math.round(r.left + 60), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (clickHead) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: clickHead.x, y: clickHead.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const landed = await evaluate(`(() => {
+    const s = getSelection();
+    const n = s.anchorNode;
+    const line = n && (n.nodeType === 1 ? n : n.parentElement)?.closest('.cm-line');
+    return line ? line.innerText.slice(0, 16) : null;
+  })()`);
+  check('鼠标点在大标题上，光标就落在那一行（行级装饰用 margin/line-height 时会落到别的行）',
+    !!landed && landed.includes('早期创业经历'), { landed });
+
+  // --- 上方向键：逐行走，不跳过标题行 ---
+  await evaluate(`(() => {
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.innerText.includes('从实际经营'));
+    const r = line.getBoundingClientRect();
+    window.__up = { x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) };
+    return true })()`);
+  const upPt = await evaluate(`window.__up`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: upPt.x, y: upPt.y, button: 'left', clickCount: 1, buttons: 1 });
+  }
+  await new Promise((r) => setTimeout(r, 300));
+  const trail = [];
+  for (let i = 0; i < 3; i++) {
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 });
+    await new Promise((r) => setTimeout(r, 180));
+    trail.push(await evaluate(`(() => {
+      const s = getSelection();
+      const n = s.anchorNode;
+      const line = n && (n.nodeType === 1 ? n : n.parentElement)?.closest('.cm-line');
+      return line ? line.innerText.slice(0, 12) : null;
+    })()`));
+  }
+  // 文档顺序：## 早期创业经历 / 空行 / - 从实际经营… ，所以往上两步必须踩到标题
+  check('连按上方向键逐行往上走，会停在大标题那一行（此前整行跳过去）',
+    trail.some((x) => (x ?? '').includes('早期创业经历')), trail);
+}
+
 // ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------
 /*
  * 用户报的是「侧边栏展开的直角改为 R 角」「按钮弹窗也不好看」。

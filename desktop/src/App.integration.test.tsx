@@ -436,7 +436,9 @@ describe('右键上下文菜单（E3）', () => {
     });
     const labels = [...screen.getAllByRole('menuitem')].map((b) => b.textContent);
     // v0.8.3：文件夹也能「移动到…」（不能移进自己的子孙，由 MoveDialog 守卫）
-    expect(labels).toEqual(['在此新建笔记', '在此新建子文件夹', '移动到…', '复制路径']);
+    // v0.11.15：文件夹也能删（用户点名"文件夹右键点击没有删除选项"）；
+    // 文案是「删除文件夹」而不是「删除笔记」——它删的是一整个目录
+    expect(labels).toEqual(['在此新建笔记', '在此新建子文件夹', '移动到…', '复制路径', '删除文件夹']);
   });
 
   it('Esc 关闭菜单', async () => {
@@ -1097,5 +1099,52 @@ describe('顶栏左格：侧栏正上方的常用按钮（v0.11.14）', () => {
     });
     // 按钮本身还在 DOM 里（宽度过渡靠 CSS 裁切），但那一格已经没有可用宽度
     expect(document.querySelector('.tb-left')).toBeTruthy();
+  });
+});
+
+/*
+ * 2026-09-09 用户：「文件夹右键点击没有删除选项」。
+ * 侧栏里文件那一支从 v0.7.9 起就有删除，文件夹那一支一直只有"新建 / 移动 /
+ * 复制路径"——想删一个文件夹只能一篇篇删完，还剩个空壳在树里。
+ */
+describe('文件夹右键能删除（v0.11.15）', () => {
+  const dirRow = (name: string) =>
+    [...document.querySelectorAll('.ft-dir-name')]
+      .find((el) => el.textContent === name)
+      ?.closest('.ft-dir') as HTMLElement | undefined;
+  const menuItem = (label: string) =>
+    [...document.querySelectorAll('.ctx-item')].find(
+      (b) => b.querySelector('.ctx-label')?.textContent === label
+    ) as HTMLElement | undefined;
+
+  it('右键文件夹有「删除文件夹」，确认后里面的文件进回收站', async () => {
+    await renderApp({ '资料/a.md': '# A', '资料/b.md': '# B', 'c.md': '# C' });
+    fireEvent.contextMenu(dirRow('资料')!);
+    await waitFor(() => {
+      if (!menuItem('删除文件夹')) {
+        throw new Error(
+          `菜单里没有删除：${[...document.querySelectorAll('.ctx-label')].map((x) => x.textContent).join('/')}`
+        );
+      }
+    });
+    fireEvent.click(menuItem('删除文件夹')!);
+
+    // 确认框：说清楚会删几个文件
+    await waitFor(() => {
+      if (!document.querySelector('.dlg-mask')) throw new Error('没有弹确认框');
+    });
+    expect(document.querySelector('.dlg-mask')?.textContent).toMatch(/2 个文件/);
+    const okBtn = [...document.querySelectorAll('.dlg-mask button')].find((b) =>
+      (b.textContent ?? '').includes('删除')
+    ) as HTMLElement;
+    fireEvent.click(okBtn);
+
+    await waitFor(() => {
+      if (memFiles.has('资料/a.md') || memFiles.has('资料/b.md')) throw new Error('文件还在原处');
+    });
+    // 进的是回收站，不是物理删除——用户点错了还能捞回来
+    const trashed = [...memFiles.keys()].filter((p) => p.startsWith('.trash/'));
+    expect(trashed.length).toBe(2);
+    expect(memFiles.get('c.md')).toBe('# C'); // 文件夹外的一律不动
   });
 });

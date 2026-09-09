@@ -52,12 +52,26 @@ export function isSameTitle(fileTitle: string, doc: string | null): boolean {
 
 export function InlineTitle({ path, doc, onRename }: Props) {
   const [draft, setDraft] = useState<string | null>(null);
+  /*
+   * v0.11.15：**草稿要有一份 ref**，否则回车会提交两次。
+   *
+   * 回车时我们 `commit()` 之后把焦点交给正文——焦点一走就触发 `onBlur`，
+   * 而这一拍 React 还没重渲染，blur 里的 `commit` 闭包看到的仍是**旧的 draft**，
+   * 于是第二次用**已经不存在的旧路径**再改一次名。用户看到的就是
+   * 「已重命名：untitled → 测试」和「重命名失败：… untitled.md … 系统找不到
+   * 指定的文件」同时弹出来（2026-09-09 反馈）。
+   * ref 是同步的：第一次提交就把它清空，blur 那次直接返回。
+   */
+  const draftRef = useRef<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const title = path ? titleOf(path) : '';
   const duplicated = isSameTitle(title, doc ?? null);
 
   // 换笔记时丢掉未提交的草稿，否则会把上一篇的标题带过来
-  useEffect(() => setDraft(null), [path]);
+  useEffect(() => {
+    draftRef.current = null;
+    setDraft(null);
+  }, [path]);
 
   // 用 textarea 是为了长标题能自动折行（input 只会横向滚动，中文标题很容易超宽）
   useEffect(() => {
@@ -71,9 +85,12 @@ export function InlineTitle({ path, doc, onRename }: Props) {
   const value = draft ?? title;
 
   const commit = () => {
-    const next = (draft ?? '').trim();
+    const cur = draftRef.current;
+    draftRef.current = null;
     setDraft(null);
-    if (draft === null || next === '' || next === title) return;
+    if (cur === null) return; // 已经提交过了（回车之后紧跟的那次 blur）
+    const next = cur.trim();
+    if (next === '' || next === title) return;
     onRename(path, next);
   };
 
@@ -91,7 +108,11 @@ export function InlineTitle({ path, doc, onRename }: Props) {
       rows={1}
       spellCheck={false}
       aria-label="笔记标题（改这里就是改文件名）"
-      onChange={(e) => setDraft(e.target.value.replace(/\n/g, ''))}
+      onChange={(e) => {
+        const v = e.target.value.replace(/\n/g, '');
+        draftRef.current = v;
+        setDraft(v);
+      }}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
@@ -101,6 +122,7 @@ export function InlineTitle({ path, doc, onRename }: Props) {
           document.querySelector<HTMLElement>('.cm-content')?.focus();
         } else if (e.key === 'Escape') {
           e.preventDefault();
+          draftRef.current = null;
           setDraft(null);
           (e.target as HTMLTextAreaElement).blur();
         }

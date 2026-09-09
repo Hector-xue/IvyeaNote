@@ -1058,6 +1058,14 @@ export default function App() {
       base = base.replace(/\.(md|markdown)$/i, '') + '.md';
       const target = `${dir}${base}`;
       if (target === path) return;
+      /*
+       * 源文件不在了 = 这次改名**已经被别人做过了**（同一个提交走了两遍）。
+       * 这不是失败，不该弹红字——用户 2026-09-09 看到的「已重命名：untitled → 测试」
+       * 和「重命名失败：… untitled.md … 系统找不到指定的文件」正是这么来的。
+       * 真正的重复提交在 ui/InlineTitle 里堵掉了，这里是第二道闸：
+       * 手机端长按菜单、命令面板都能触发改名，谁都可能撞上同一件事。
+       */
+      if (!(await io.exists(vault.localPath ?? '', path).catch(() => true))) return;
       try {
         let final = target;
         if (await io.exists(vault.localPath ?? '', final)) {
@@ -1271,6 +1279,64 @@ export default function App() {
       }
     },
     [vault, io, currentPath, splitPath, closeSplit, refreshFiles, doSync, confirm, toast]
+  );
+
+  /**
+   * v0.11.15：**删除文件夹**。
+   *
+   * 侧栏右键点文件夹此前只有"新建 / 移动 / 复制路径"——没有删除（用户点名）。
+   * 语义与删一篇笔记一致：整个文件夹里的文件逐个搬进回收站，可原路恢复；
+   * 不做物理删除。空文件夹的 `.keep` 占位一并搬走，否则删完那个空壳还在树里。
+   */
+  const onDeleteFolder = useCallback(
+    async (dir: string) => {
+      if (!vault || !dir) return;
+      const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+      const all = await io.list(vault.localPath ?? '');
+      const inside = all.filter((p) => p.startsWith(prefix));
+      const ok = await confirm({
+        title: '删除文件夹',
+        description:
+          inside.length > 0
+            ? `「${dir}」及其中 ${inside.length} 个文件将移入回收站，可在回收站恢复。`
+            : `「${dir}」是空文件夹，将被删除。`,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        for (const path of inside) {
+          // .keep 是我们自己放的占位符，没有恢复价值，直接删掉
+          if (path.endsWith('/.keep')) {
+            await io.remove(vault.localPath ?? '', path);
+            continue;
+          }
+          let trashRel = trashPathFor(path);
+          while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
+            trashRel = nextTrashName(trashRel);
+          }
+          // 与删单篇同样按字节搬：库里有图片和 PDF，走文本通道会把它们弄坏
+          const bytes = await io.readBinary(vault.localPath ?? '', path);
+          await io.writeBinary(vault.localPath ?? '', trashRel, bytes);
+          await io.remove(vault.localPath ?? '', path);
+          if (currentPath === path) {
+            setCurrentPath(null);
+            setDoc(null);
+          }
+          if (splitPath === path) closeSplit();
+        }
+        // 标签里可能还开着这个文件夹下的笔记。启动时那次 pruneTabs 每个库只跑
+        // 一次，指望不上——这里按"删完还剩哪些"显式清一遍，否则标签栏留着一排
+        // 点开是空白的死标签
+        pruneTabs(all.filter((p) => !p.startsWith(prefix)));
+        await refreshFiles();
+        void doSync();
+        toast(`已删除文件夹「${dir}」（${inside.length} 个文件已进回收站）`, 'ok');
+      } catch (e) {
+        toast(`删除文件夹失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, currentPath, splitPath, closeSplit, pruneTabs, refreshFiles, doSync, confirm, toast, errText]
   );
 
   /**
@@ -2388,6 +2454,7 @@ export default function App() {
         onCreateNote={() => void onCreateNote('')}
         onNewFolderNote={(folder) => void onCreateNote(folder)}
         onDeleteFile={(p) => void onDeleteFile(p)}
+        onDeleteFolder={(d) => void onDeleteFolder(d)}
         onMovePath={(src, dest, isDir) => void onMovePath(src, dest, isDir)}
         onRequestRename={(p) => void requestRename(p)}
         onCopyPath={(p) => void copyPath(p)}
