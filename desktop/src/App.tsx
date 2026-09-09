@@ -1273,6 +1273,31 @@ export default function App() {
     [doc, runAi, toast]
   );
 
+  /**
+   * 右键菜单里那一组 AI 动作。
+   *
+   * v0.11.18 把能力做出来了，入口却只挂在顶栏「⋯」的二级菜单和命令面板里——
+   * 用户装完的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
+   * 选中一段字之后，人的手就在右键上；这里才是这些动作的家。
+   */
+  const editorAiActions = useMemo(
+    () =>
+      AI_ACTIONS.map((a) => ({
+        id: a.id,
+        label: a.label,
+        hint: a.hint,
+        needsSelection: a.mode === 'replace',
+      })),
+    []
+  );
+  const onEditorAi = useCallback(
+    (id: string) => {
+      const spec = AI_ACTIONS.find((a) => a.id === id);
+      if (spec) startAi(spec);
+    },
+    [startAi]
+  );
+
   /** 应用：替换类换掉那一段（走撤销栈），产出类追加到文末 */
   const applyAi = useCallback(() => {
     const st = aiState;
@@ -2481,6 +2506,26 @@ export default function App() {
     [onCreateNote, onCreateFolder, sortMode, setSortMode, allDirs]
   );
 
+  const aiPanelEl = aiState.spec ? (
+    <AiPanel
+      spec={aiState.spec}
+      source={aiState.source}
+      result={aiState.result}
+      busy={aiState.busy}
+      error={aiState.error}
+      scope={aiState.scope}
+      onApply={aiState.spec === TIDY_SPEC ? applyTidy : applyAi}
+      onRetry={() => {
+        if (aiState.spec === TIDY_SPEC) tidyNote();
+        else if (aiState.spec) void runAi(aiState.spec, aiState.source, aiState.scope, aiState.range);
+      }}
+      onClose={() => {
+        aiAbort.current?.abort();
+        setAiState((st) => ({ ...st, spec: null, busy: false }));
+      }}
+    />
+  ) : null;
+
   const topBarEl = (
     <TopBar
       quick={quickActions}
@@ -2650,6 +2695,11 @@ export default function App() {
           }}
           onSelect={(p) => void openFile(p)}
           onEdit={onEdit}
+          exposeSelection={exposeSelection}
+          aiActions={editorAiActions}
+          onAi={onEditorAi}
+          onTidy={tidyNote}
+          aiPanel={aiPanelEl}
           onCreateNote={() => void onCreateNote('')}
           onDeleteFile={(p) => void onDeleteFile(p)}
           onRenameFile={(p, name) => void onRenameFile(p, name)}
@@ -2906,27 +2956,10 @@ export default function App() {
         searchSeed={sideSearchSeed}
         onOpenDaily={() => void openDailyNote()}
         exposeSelection={exposeSelection}
-        aiPanel={
-          aiState.spec ? (
-            <AiPanel
-              spec={aiState.spec}
-              source={aiState.source}
-              result={aiState.result}
-              busy={aiState.busy}
-              error={aiState.error}
-              scope={aiState.scope}
-              onApply={aiState.spec === TIDY_SPEC ? applyTidy : applyAi}
-              onRetry={() => {
-                if (aiState.spec === TIDY_SPEC) tidyNote();
-                else if (aiState.spec) void runAi(aiState.spec, aiState.source, aiState.scope, aiState.range);
-              }}
-              onClose={() => {
-                aiAbort.current?.abort();
-                setAiState((st) => ({ ...st, spec: null, busy: false }));
-              }}
-            />
-          ) : null
-        }
+        aiActions={editorAiActions}
+        onAi={onEditorAi}
+        onTidy={tidyNote}
+        aiPanel={aiPanelEl}
         collapsedDirs={collapsedDirs}
         onToggleDir={toggleDir}
         onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}

@@ -32,6 +32,12 @@ export interface MenuAction {
   checked?: boolean;
   /** 右侧快捷键提示，如 `Ctrl+B` */
   shortcut?: string;
+  /**
+   * 右侧一句灰字，说明这一项会做什么。
+   * 给 AI 那组用：「校对」「润色」「精简」光看名字分不清差别，
+   * 而这些动作会直接改用户的正文——点之前就得知道它要干嘛。
+   */
+  hint?: string;
   /** 二级菜单。有 submenu 就不该再有 run */
   submenu?: MenuItem[];
   run?(): void;
@@ -226,6 +232,7 @@ function MenuPanel({ items, x, y, flipFromX, focused, onCloseAll, onBack, depth 
                 ) : null}
               </span>
               <span className="ctx-label">{it.label}</span>
+              {it.hint && <span className="ctx-hint">{it.hint}</span>}
               {it.shortcut && <span className="ctx-shortcut">{it.shortcut}</span>}
               {it.submenu && (
                 <span className="ctx-arrow">

@@ -167,6 +167,61 @@ describe('buildEditorMenu', () => {
   });
 });
 
+/**
+ * v0.11.19：AI 入口。
+ *
+ * 能力在 v0.11.18 就做完了，入口却只挂在顶栏「⋯」的二级菜单和命令面板里——
+ * 用户装完的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
+ * 这几条锁住的是"入口在不在、在什么位置、没选区时是不是诚实地置灰"。
+ */
+describe('AI 组', () => {
+  const ai = [
+    { id: 'proofread', label: '校对', hint: '改错别字', needsSelection: true },
+    { id: 'summarize', label: '写摘要', hint: '三到五句', needsSelection: false },
+  ];
+
+  it('排在最上面——右键之前用户刚选完字，想的就是"把这段怎么样一下"', () => {
+    const items = buildEditorMenu({ ...base, aiActions: ai }, { ...actions(), ai: vi.fn(), tidy: vi.fn() });
+    expect(items[0]).toMatchObject({ id: 'ai', label: 'AI 助手' });
+  });
+
+  it('没选区时替换类置灰、产出类照常可点', () => {
+    const items = buildEditorMenu({ ...base, aiActions: ai }, { ...actions(), ai: vi.fn() });
+    expect(find(items, 'ai-proofread')?.disabled).toBe(true);
+    expect(find(items, 'ai-summarize')?.disabled).toBeFalsy();
+  });
+
+  it('每项都带一句说明——「校对/润色/精简」光看名字分不清，而它们会直接改正文', () => {
+    const items = buildEditorMenu({ ...base, aiActions: ai }, { ...actions(), ai: vi.fn() });
+    expect(find(items, 'ai-proofread')?.hint).toBe('改错别字');
+  });
+
+  it('点一项就把 id 交给外层', () => {
+    const onAi = vi.fn();
+    const items = buildEditorMenu({ ...base, hasSelection: true, aiActions: ai }, { ...actions(), ai: onAi });
+    find(items, 'ai-proofread')?.run?.();
+    expect(onAi).toHaveBeenCalledWith('proofread');
+  });
+
+  it('只读视图里没有 AI——那些动作都会改文档', () => {
+    const items = buildEditorMenu({ ...base, readOnly: true, aiActions: ai }, { ...actions(), ai: vi.fn() });
+    expect(find(items, 'ai')).toBeUndefined();
+  });
+
+  it('外层没接 AI 时整组不出现（宁可没有，也不能点了没反应）', () => {
+    const items = buildEditorMenu({ ...base, aiActions: ai }, actions());
+    expect(find(items, 'ai')).toBeUndefined();
+    expect(buildEditorMenu(base, { ...actions(), ai: vi.fn() }).find((i) => !isSeparator(i) && i.id === 'ai')).toBeUndefined();
+  });
+
+  it('「整理排版」是本地规则，跟着 AI 组一起出现', () => {
+    const tidy = vi.fn();
+    const items = buildEditorMenu({ ...base, aiActions: ai }, { ...actions(), ai: vi.fn(), tidy });
+    find(items, 'tidy')?.run?.();
+    expect(tidy).toHaveBeenCalled();
+  });
+});
+
 describe('blockSnippet', () => {
   it('表格给出可用的三行，光标落在第一个表头单元格', () => {
     const t = blockSnippet('table');

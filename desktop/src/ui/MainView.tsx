@@ -206,6 +206,10 @@ interface Props {
   exposeSelection?(api: import('./MarkdownEditor').SelectionApi | null): void;
   /** v0.11.18：AI 结果面板（贴在编辑区下方；null = 不显示） */
   aiPanel?: React.ReactNode;
+  /** v0.11.19：AI 动作进编辑器右键菜单与状态栏——只放在「⋯」里太深，用户根本没找到 */
+  aiActions?: { id: string; label: string; hint: string; needsSelection: boolean }[];
+  onAi?(id: string): void;
+  onTidy?(): void;
   /** v0.6.1 H6: add-device pairing */
   onAddDevice?(): void;
   /** v0.7.0 F3: wiki links */
@@ -688,6 +692,9 @@ export function MainView(props: Props) {
                    是彻头彻尾的死代码。状态栏那颗「插入图片」就靠它 */
                 exposeFormat={exposeFormat}
                 exposeSelection={props.exposeSelection}
+                aiActions={props.aiActions}
+                onAi={props.onAi}
+                onTidy={props.onTidy}
               />
             </div>
             {props.splitPath && (
@@ -741,6 +748,56 @@ export function MainView(props: Props) {
               >
                 <RibbonIcon name="image" size={13} />
                 插入图片
+              </button>
+            )}
+            {/*
+              **AI**。v0.11.18 做完能力之后，入口只有顶栏「⋯」的二级菜单和命令面板，
+              用户装完的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
+              这是这个仓库第七次「能力写好了、入口没接」——所以这一版给了两个明面上的
+              入口：编辑区右键（选中文字后手就在那儿）和这颗状态栏按钮。
+            */}
+            {props.aiActions && props.aiActions.length > 0 && props.currentPath && !props.pdfView && (
+              <button
+                className="st-item"
+                title="AI：校对、润色、精简、写摘要…（替换类动作要先选中一段文字）"
+                aria-label="AI"
+                onClick={(e) => {
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  const items: MenuAnchor['items'] = [];
+                  const replace = props.aiActions!.filter((a) => a.needsSelection);
+                  const produce = props.aiActions!.filter((a) => !a.needsSelection);
+                  for (const a of replace) {
+                    items.push({
+                      id: `ai-${a.id}`,
+                      label: a.label,
+                      hint: a.hint,
+                      run: () => props.onAi?.(a.id),
+                    });
+                  }
+                  if (replace.length > 0 && produce.length > 0) items.push({ type: 'sep', id: 's-ai1' });
+                  for (const a of produce) {
+                    items.push({
+                      id: `ai-${a.id}`,
+                      label: a.label,
+                      hint: a.hint,
+                      run: () => props.onAi?.(a.id),
+                    });
+                  }
+                  if (props.onTidy) {
+                    items.push({ type: 'sep', id: 's-ai2' });
+                    items.push({
+                      id: 'tidy',
+                      label: '整理排版',
+                      hint: '本地规则，不联网',
+                      icon: 'text-format',
+                      run: () => props.onTidy?.(),
+                    });
+                  }
+                  setMenu({ x: r.left, y: r.top, items });
+                }}
+              >
+                <RibbonIcon name="sparkle" size={13} />
+                AI
               </button>
             )}
             {props.onOpenSplit && !props.pdfView && props.currentPath && (

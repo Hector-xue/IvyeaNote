@@ -3,7 +3,7 @@
  * 替代 emoji 图标，对齐 Obsidian 的克制视觉。
  */
 export type IconName =
-  | 'graph' | 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search'
+  | 'graph' | 'sparkle' | 'tag' | 'folder' | 'trash' | 'moon' | 'sun' | 'file' | 'search'
   | 'bold' | 'italic' | 'heading' | 'list-ul' | 'list-ol' | 'task' | 'quote'
   | 'code' | 'link' | 'image' | 'eye' | 'edit' | 'settings'
   // v0.10.0 移动端重做新增。移动端此前整套用 emoji（☰ ↻ ✏️ 🗑 📂 🏷），
@@ -305,6 +305,13 @@ const PATHS: Record<IconName, React.ReactNode> = {
     <>
       <path d="M3 3h8l10 10-8 8L3 11V3z" />
       <circle cx="8" cy="8" r="1.5" />
+    </>
+  ),
+  /* AI：一大一小两颗四角星。别画机器人/灯泡——那是"聊天"和"点子"，不是"帮我改这段字" */
+  sparkle: (
+    <>
+      <path d="M11 3.5l1.7 4.3 4.3 1.7-4.3 1.7L11 15.5 9.3 11.2 5 9.5l4.3-1.7L11 3.5z" />
+      <path d="M17.5 14.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z" />
     </>
   ),
   graph: (

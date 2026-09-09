@@ -117,6 +117,14 @@ export interface MarkdownEditorProps {
    */
   exposeSelection?(api: SelectionApi | null): void;
   /**
+   * v0.11.19：右键菜单里的 AI 动作。
+   * 用户装完 v0.11.18 的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」
+   * ——能力当时只挂在顶栏「⋯」的二级菜单里。选中文字之后人的第一反应是右键。
+   */
+  aiActions?: { id: string; label: string; hint: string; needsSelection: boolean }[];
+  onAi?(id: string): void;
+  onTidy?(): void;
+  /**
    * v0.10.2：普通 Markdown 链接指向库内文件时的回调（已解析成库内相对路径）。
    * 不传则只处理外部链接与锚点——**外部链接必须处理**，
    * 否则 WebView 会带着整个应用导航走。
@@ -1257,8 +1265,11 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         imageSrc,
         canInsertImage: !!props.onInsertImage && !!props.currentPath,
         readOnly,
+        aiActions: props.aiActions,
       },
       {
+        ai: props.onAi,
+        tidy: props.onTidy,
         format: (key) => {
           const btn = TOOLS.find((b) => b.key === key);
           if (btn) applyEdit(btn.run);

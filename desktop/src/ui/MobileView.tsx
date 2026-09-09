@@ -10,7 +10,7 @@ import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
 import type { BaseNote } from '../lib/bases';
 import { RibbonIcon } from './Icons';
-import { MarkdownEditor } from './MarkdownEditor';
+import { MarkdownEditor, type SelectionApi } from './MarkdownEditor';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
 import { HtmlViewer } from './HtmlViewer';
@@ -99,6 +99,17 @@ interface Props {
    */
   trashList?: readonly string[];
   onOpenTrash?(): void;
+  /**
+   * v0.11.19：手机端的 AI 入口。
+   * v0.11.18 的 AI 只接了桌面，手机上连「⋯」里都没有——用户的原话是
+   * 「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
+   */
+  aiActions?: { id: string; label: string; hint: string; needsSelection: boolean }[];
+  onAi?(id: string): void;
+  onTidy?(): void;
+  /** AI 结果面板（贴在编辑区下方；null = 不显示） */
+  aiPanel?: React.ReactNode;
+  exposeSelection?(api: SelectionApi | null): void;
   onTrashRestore?(path: string): void;
   onTrashPurge?(path: string): void;
   /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
@@ -192,7 +203,7 @@ export function MobileView(props: Props) {
     setApplyFormat(() => fn);
   }, []);
   /** 当前打开的底部菜单：note=笔记动作 / app=应用与账号 / vault=库 / sort=排序 */
-  const [menu, setMenu] = useState<'note' | 'app' | 'vault' | 'sort' | null>(null);
+  const [menu, setMenu] = useState<'note' | 'app' | 'vault' | 'sort' | 'ai' | null>(null);
   const [query, setQuery] = useState('');
   const [sheet, setSheet] = useState<SheetState | null>(null); // P1 长按菜单
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(() => {
@@ -250,13 +261,38 @@ export function MobileView(props: Props) {
    * 四个底部菜单的内容。分组不是装饰——十几个动作平铺成一列时，
    * 人根本扫不出哪些是一类（这正是我们旧「长按操作单」只有三行还显得乱的原因）。
    */
-  const buildMenu = (which: 'note' | 'app' | 'vault' | 'sort'): SheetItem[][] => {
+  const buildMenu = (which: 'note' | 'app' | 'vault' | 'sort' | 'ai'): SheetItem[][] => {
     const cur = props.currentPath;
     if (which === 'sort') {
       return [[
         { key: 'name', icon: 'sort', label: '按名称', checked: props.sortMode === 'name', onClick: () => props.onSortChange('name') },
         { key: 'mtime', icon: 'sort', label: '按修改时间', checked: props.sortMode === 'mtime', onClick: () => props.onSortChange('mtime') },
       ]];
+    }
+    /*
+     * AI 单独一张纸，而不是把七个动作平铺进「⋯」。
+     * 那张单子本来就有大纲/日记/重命名/移动/删除/设置，再塞八行会把它拉成一屏——
+     * 上一版刚因为"这张纸太碎"被骂过（「这么多横线还长短不一，好难看」）。
+     */
+    if (which === 'ai') {
+      const mk = (need: boolean): SheetItem[] =>
+        (props.aiActions ?? [])
+          .filter((a) => a.needsSelection === need)
+          .map((a) => ({
+            key: `ai-${a.id}`,
+            icon: 'sparkle' as const,
+            label: a.label,
+            // 手机上没有"置灰的菜单项"这一说，把条件直接写进这一行
+            sub: need ? '要先选中一段文字' : a.hint,
+            onClick: () => props.onAi?.(a.id),
+          }));
+      return [
+        mk(true),
+        mk(false),
+        props.onTidy
+          ? [{ key: 'tidy', icon: 'text-format', label: '整理排版', sub: '本地规则，不联网', onClick: () => props.onTidy?.() }]
+          : [],
+      ];
     }
     if (which === 'vault') {
       // 库列表排在最上面：这张菜单是从库名旁边那个 ∨ 点开的，用户来这儿就是为了换库
@@ -366,11 +402,20 @@ export function MobileView(props: Props) {
     fileActions.push({ key: 'del', icon: 'trash', label: '删除', danger: true, onClick: () => props.onDeleteFile(cur) });
     // v0.10.2：不再有「阅读视图 / 编辑视图」两条——顶栏右边那个图标就是这个开关，
     // 一个模式在一屏里有两个切换入口，只会让人怀疑自己按错了地方
+    /*
+     * 手机上没有右键，「⋯」就是 AI 唯一的入口——桌面还能靠状态栏那颗按钮，
+     * 手机端漏了它就等于手机上没有 AI（v0.11.18 就是这样）。
+     */
+    const aiGroup: SheetItem[] =
+      (props.aiActions?.length ?? 0) > 0
+        ? [{ key: 'ai', icon: 'sparkle' as const, label: 'AI 助手', sub: '校对 / 润色 / 摘要…', onClick: () => setMenu('ai') }]
+        : [];
     return [
       [
         { key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) },
         ...dailyGroup,
       ],
+      aiGroup,
       fileActions,
       appGroup,
     ];
@@ -728,7 +773,9 @@ export function MobileView(props: Props) {
               onInsertImage={props.onInsertImage}
               resolveImage={props.resolveImage}
               onOpenPath={props.onOpenPath}
+              exposeSelection={props.exposeSelection}
             />
+            {props.aiPanel}
             {/* P5：反向链接区块 */}
             <BacklinksSection backlinks={props.backlinks ?? []} onSelect={props.onSelect} />
           </>
@@ -782,7 +829,9 @@ export function MobileView(props: Props) {
             ? props.currentPath
               ? (props.currentPath.split('/').pop() ?? '').replace(/\.(md|markdown)$/i, '')
               : props.vault.name
-            : menu === 'vault'
+            : menu === 'ai'
+              ? 'AI 助手'
+              : menu === 'vault'
               ? '笔记库'
               : menu === 'sort'
                 ? '排序方式'

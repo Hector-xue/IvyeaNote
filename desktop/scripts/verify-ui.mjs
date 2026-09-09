@@ -240,9 +240,40 @@ const menu = await evaluate(`(() => {
 })()`);
 check('编辑区右键弹出自己的菜单（不是 WebView 那三项）', !!menu, menu);
 check('菜单有分隔线 / 图标 / 二级菜单箭头',
-  menu && menu.seps >= 2 && menu.icons >= 8 && menu.arrows === 3, menu && { seps: menu.seps, icons: menu.icons, arrows: menu.arrows });
+  menu && menu.seps >= 2 && menu.icons >= 8 && menu.arrows === 4, menu && { seps: menu.seps, icons: menu.icons, arrows: menu.arrows });
 check('无选区时「剪切/复制」置灰', menu && menu.disabled.includes('剪切') && menu.disabled.includes('复制'), menu?.disabled);
+// v0.11.19：AI 的入口此前只在顶栏「⋯」的二级菜单里，用户直接说"没看到任何 AI 按钮"。
+// 右键菜单第一项就该是它——选完字手就在右键上。
+check('右键菜单第一项是「AI 助手」', menu && menu.items[0] === 'AI 助手', menu?.items?.slice(0, 3));
+check('菜单里有「整理排版（本地规则）」', menu && menu.items.includes('整理排版（本地规则）'), menu?.items);
 
+// 展开「AI 助手」子菜单：没选区时替换类动作必须是置灰的，而不是点了才弹一句"请先选中"
+const aiBox = await evaluate(`(() => {
+  const item = [...document.querySelectorAll('.ctx-item')].find(b => b.querySelector('.ctx-label')?.textContent === 'AI 助手');
+  if (!item) return null;
+  const r = item.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+})()`);
+if (aiBox) {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: aiBox.x - 30, y: aiBox.y - 24 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: aiBox.x, y: aiBox.y });
+  await new Promise((r) => setTimeout(r, 500));
+}
+const aiSub = await evaluate(`(() => {
+  const sub = document.querySelector('.ctx-sub-menu');
+  if (!sub) return null;
+  return {
+    labels: [...sub.querySelectorAll('.ctx-item')].map(b => b.querySelector('.ctx-label')?.textContent),
+    disabled: [...sub.querySelectorAll('.ctx-item')].filter(b => b.disabled).map(b => b.querySelector('.ctx-label')?.textContent),
+    hints: [...sub.querySelectorAll('.ctx-hint')].length,
+  };
+})()`);
+check('「AI 助手」子菜单列出了校对 / 润色 / 写摘要',
+  aiSub && ['校对', '润色', '写摘要'].every((x) => aiSub.labels.includes(x)), aiSub);
+check('无选区时替换类 AI 动作置灰、产出类可点',
+  aiSub && aiSub.disabled.includes('校对') && !aiSub.disabled.includes('写摘要'), aiSub?.disabled);
+check('每条 AI 动作都写了它会做什么', aiSub && aiSub.hints === aiSub.labels.length, aiSub?.hints);
+await shot('menu-ai.png');
 // 展开「文本格式」子菜单
 // React 的 onMouseEnter 是用 mouseover/mouseout 委托实现的，
 // 直接 dispatch 一个 'mouseenter' 事件根本不会触发它——必须真的把鼠标移过去
@@ -268,6 +299,42 @@ await shot('menu.png');
 // 关掉菜单
 await evaluate(`document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}))`);
 await new Promise((r) => setTimeout(r, 300));
+
+// ---------- 5.1 状态栏那颗「AI」 ----------
+/*
+ * v0.11.19：状态栏那颗「AI」。
+ *
+ * 右键菜单已经是主入口，但**右键是要先知道才会去按的**——状态栏这一条是明面上的
+ * 那个「按钮」，用户找的就是它（原话：「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」）。
+ */
+const aiBtn = await evaluate(`(() => {
+  const b = [...document.querySelectorAll('.status-bar .st-item')].find(x => x.textContent.trim() === 'AI');
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), hasIcon: !!b.querySelector('svg') };
+})()`);
+check('状态栏上有一颗看得见的「AI」按钮（右键要先知道才会按，这条是明面上的入口）',
+  !!aiBtn && aiBtn.hasIcon, aiBtn);
+if (aiBtn) {
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: aiBtn.x, y: aiBtn.y, button: 'left', clickCount: 1, buttons: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: aiBtn.x, y: aiBtn.y, button: 'left', clickCount: 1, buttons: 1 });
+  await new Promise((r) => setTimeout(r, 500));
+}
+const aiBtnMenu = await evaluate(`(() => {
+  const m = document.querySelector('.ctx-menu');
+  if (!m) return null;
+  const r = m.getBoundingClientRect();
+  return {
+    labels: [...m.querySelectorAll('.ctx-label')].map(x => x.textContent),
+    hints: m.querySelectorAll('.ctx-hint').length,
+    onScreen: r.top >= 0 && r.bottom <= window.innerHeight + 1,
+  };
+})()`);
+check('点它弹出的单子里有校对 / 写摘要 / 整理排版，且整张菜单在视口内（它贴着窗口底边）',
+  !!aiBtnMenu && ['校对', '写摘要', '整理排版'].every((x) => aiBtnMenu.labels.includes(x)) && aiBtnMenu.onScreen,
+  aiBtnMenu);
+await evaluate(`document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}))`);
+await new Promise((r) => setTimeout(r, 250));
 
 // ---------- 5.2 粘贴图片 ----------
 /*
@@ -2213,6 +2280,39 @@ await new Promise((r) => setTimeout(r, 2600));
   }
   check('按住把手下滑能把弹层关掉（把手此前是个假承诺，只能点遮罩关）',
     !!grip && !(await evaluate(`!!document.querySelector('.m-sheet2')`)), { grip });
+
+  /*
+   * v0.11.19：手机上没有右键，「⋯」是这些动作**唯一**的入口——
+   * v0.11.18 的 AI 只接了桌面，手机端连设置里都到不了。
+   */
+  await evaluate(`document.querySelector('.m-sheet-mask')?.dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+  await new Promise((r) => setTimeout(r, 300));
+  await evaluate(`[...document.querySelectorAll('.m-top-btn')].find(b => b.getAttribute('aria-label') === '更多')?.click()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const moreItems = await evaluate(`(() => [...document.querySelectorAll('.m-sheet2-label')].map(b => b.firstChild?.textContent?.trim()))()`);
+  check('手机端「⋯」里有「AI 助手」这一行（手机没有右键，这张单子是唯一入口）',
+    Array.isArray(moreItems) && moreItems.includes('AI 助手'), moreItems);
+  // 七个动作没有平铺进「⋯」——那张纸本来就长，上一版刚因为"太碎"挨过骂
+  check('AI 的动作没有平铺在「⋯」里（那张纸已经有大纲/日记/重命名/移动/删除/设置）',
+    Array.isArray(moreItems) && !moreItems.includes('校对'), moreItems);
+  await evaluate(`[...document.querySelectorAll('.m-sheet2-item')].find(b => b.textContent.trim().startsWith('AI 助手'))?.click()`);
+  await new Promise((r) => setTimeout(r, 450));
+  const mobileAi = await evaluate(`(() => {
+    const items = [...document.querySelectorAll('.m-sheet2-item')].map(b => ({
+      label: b.querySelector('.m-sheet2-label')?.firstChild?.textContent?.trim() ?? null,
+      sub: b.querySelector('.m-sheet2-sub')?.textContent ?? null,
+    }));
+    if (items.length === 0) return null;
+    return { title: document.querySelector('.m-sheet2-title')?.textContent ?? null, items };
+  })()`);
+  check('点进去是一张「AI 助手」的纸：校对 / 写摘要 / 整理排版都在',
+    !!mobileAi && mobileAi.title === 'AI 助手' &&
+    ['校对', '写摘要', '整理排版'].every((x) => mobileAi.items.some((i) => i.label === x)), mobileAi);
+  check('每一行都写了它会做什么；替换类写明"要先选中一段文字"（手机上没有置灰+悬停这一说）',
+    !!mobileAi && mobileAi.items.every((i) => !!i.sub) &&
+    mobileAi.items.find((i) => i.label === '校对')?.sub === '要先选中一段文字', mobileAi?.items);
+  await evaluate(`document.querySelector('.m-sheet-mask')?.dispatchEvent(new MouseEvent('click',{bubbles:true}))`);
+  await new Promise((r) => setTimeout(r, 300));
 
   // --- v0.11.13：标题不冻结 / 大纲弹层形状 / 底部四个键 ---
   await evaluate(`(() => {
