@@ -338,6 +338,60 @@ export function askVaultSpec(question: string): AiActionSpec {
   };
 }
 
+/**
+ * **存下来的自定义动作**：同一句指令用第二次，就不该再打一遍。
+ *
+ * 存的是**指令**，不是提示词工程——用户写的那句话原样进 `customSpec`，
+ * 所见即所得。`id` 前缀 `saved:` 是为了和内置动作永远不撞。
+ */
+export function savedSpec(saved: { id: string; label: string; instruction: string; mode: 'replace' | 'produce' }): AiActionSpec {
+  const base = customSpec(saved.instruction, saved.mode);
+  return { ...base, id: `saved:${saved.id}`, label: saved.label, hint: base.hint };
+}
+
+/**
+ * **今天 / 这周写了什么**：把这段时间动过的笔记，总结成一段能贴进日记的话。
+ *
+ * 日记写不下去的真实原因是想不起来白天动了什么，而这件事机器全知道（mtime）。
+ * 所以要求它**只根据给出的片段说事**，并把涉及的笔记标成 `[[路径]]`——
+ * 日记的价值在于第二天点得回去。
+ */
+export function recapSpec(range: 'day' | 'week'): AiActionSpec {
+  const word = range === 'day' ? '今天' : '最近一周';
+  return {
+    id: range === 'day' ? 'recap-day' : 'recap-week',
+    label: range === 'day' ? '今天写了什么' : '本周写了什么',
+    hint: '按改动过的笔记summarize成日记',
+    mode: 'produce',
+    system:
+      `下面是用户${word}改动过的若干篇笔记片段，每段前面有【路径】。` +
+      `请写一段${word}的小结：先用一两句话说${word}主要在做什么，再分点列出各篇的进展。` +
+      '每一点结尾用 `[[路径]]` 标出是哪一篇（去掉 .md 后缀）。' +
+      '**只根据给出的片段写**，不要发挥、不要评价、不要鼓励的话。直接输出正文，不要前言。',
+  };
+}
+
+/**
+ * **查询扩写**：把一句问话变成一串检索词。
+ *
+ * 本机检索是词法的——问「降价」找不到写着「打折」的那篇。真正的解法是语义向量，
+ * 但那要嵌入模型、要存索引、要随笔记增量更新，是另一个量级。
+ * 这里用一次极小的调用换到大部分收益：让模型给几个同义/相关词，再拿去本地检索。
+ *
+ * 只在**本机检索命中不足时**才调用——多数问题第一次就找到了，不该为此多花一次钱。
+ */
+export function expandQueryMessages(question: string): ChatMessage[] {
+  return [
+    {
+      role: 'system',
+      content:
+        '把用户的问题改写成用于全文检索的关键词。输出 5~10 个词，用空格分隔，只输出这一行。' +
+        '包含同义词与相关说法（例如「降价」也给出「打折」「定价」「折扣」）。不要解释，不要标点。',
+    },
+    { role: 'user', content: question },
+  ];
+}
+
 /** 把检索到的片段拼成一段给模型看的资料，每段带出处 */
 export function buildVaultContext(passages: readonly { path: string; text: string }[]): string {
   return passages.map((p) => `【出处：${p.path}】\n${p.text}`).join('\n\n---\n\n');

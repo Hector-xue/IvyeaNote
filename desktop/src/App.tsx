@@ -10,13 +10,19 @@ import {
   askVaultSpec,
   buildMessages,
   buildVaultContext,
+  chat,
   cleanReply,
   customSpec,
+  expandQueryMessages,
   isLlmConfigured,
+  recapSpec,
+  savedSpec,
   streamChat,
   type AiActionSpec,
 } from './lib/llm';
 import { retrieve, totalChars } from './lib/retrieve';
+import { mergeTags, parseTagReply } from './lib/noteTags';
+import { buildRecapSource, pickRecent, startOfDay, startOfWeek } from './lib/recap';
 import { aiSubmenu } from './lib/editorMenu';
 import { tidyMarkdown, describeTidy } from './lib/tidy';
 import { pickDensity } from './lib/density';
@@ -1220,15 +1226,28 @@ export default function App() {
     scope: string;
     /** 替换类动作要还原到哪一段；整篇替换时为 null */
     range: { from: number; to: number } | null;
+    /** 自定义指令的**用户原话**：存成动作时要原样存下来，不是存拼好的提示词 */
+    instruction?: string;
   }>({ spec: null, source: '', result: '', busy: false, error: null, scope: '', range: null });
   const aiAbort = useRef<AbortController | null>(null);
+  /**
+   * 「今天写了什么」要先打开今日日记，可 openDaily 是后面才由 useTemplates 给的。
+   * 用 ref 接一下，比把一大段 AI 逻辑挪到 hook 之后要好读。
+   */
+  const openDailyRef = useRef<null | (() => void | Promise<void>)>(null);
   const selectionApi = useRef<SelectionApi | null>(null);
   const exposeSelection = useCallback((api: SelectionApi | null) => {
     selectionApi.current = api;
   }, []);
 
   const runAi = useCallback(
-    async (spec: AiActionSpec, text: string, scope: string, range: { from: number; to: number } | null) => {
+    async (
+      spec: AiActionSpec,
+      text: string,
+      scope: string,
+      range: { from: number; to: number } | null,
+      instruction?: string
+    ) => {
       const cfg = { ...prefs.ai, temperature: spec.id === 'proofread' ? 0 : 0.3 };
       if (!isLlmConfigured(cfg)) {
         toast('还没配置大模型：设置 → AI，填接口地址与模型名', 'error');
@@ -1238,7 +1257,7 @@ export default function App() {
       aiAbort.current?.abort();
       const ac = new AbortController();
       aiAbort.current = ac;
-      setAiState({ spec, source: text, result: '', busy: true, error: null, scope, range });
+      setAiState({ spec, source: text, result: '', busy: true, error: null, scope, range, instruction });
       try {
         const full = await streamChat(
           cfg,
@@ -1301,14 +1320,14 @@ export default function App() {
     if (!instruction) return;
     const spec = customSpec(instruction.trim(), hasSel ? 'replace' : 'produce');
     if (hasSel) {
-      void runAi(spec, sel!.text, `选中的 ${sel!.text.length} 字`, { from: sel!.from, to: sel!.to });
+      void runAi(spec, sel!.text, `选中的 ${sel!.text.length} 字`, { from: sel!.from, to: sel!.to }, instruction.trim());
     } else {
       const text = doc ?? '';
       if (!text.trim()) {
         toast('这篇还是空的', 'error');
         return;
       }
-      void runAi(spec, text, '整篇笔记', null);
+      void runAi(spec, text, '整篇笔记', null, instruction.trim());
     }
   }, [doc, prompt, runAi, toast]);
 
@@ -1350,7 +1369,26 @@ export default function App() {
       validate: (v) => (v.trim().length < 2 ? '问题写清楚一点' : null),
     });
     if (!q) return;
-    const passages = retrieve(searchDocs, q.trim());
+    let passages = retrieve(searchDocs, q.trim());
+    /*
+     * 本机检索是**词法**的：问「降价」找不到写着「打折」的那篇。
+     * 真正的解法是语义向量，但那要嵌入模型、要存索引、要随笔记增量更新，
+     * 是另一个量级。这里用一次极小的调用换到大部分收益：**本机一个都没找到时**
+     * 让模型给一串同义/相关词，再拿去本地检索。
+     *
+     * 门槛刻意卡在"零命中"而不是"命中少"：已经找到相关笔记时再掺进一堆同义词，
+     * 只会把不相关的笔记也拽进材料里——**给错材料比少给材料更坏**，
+     * 而且那些笔记本来不该发出去。
+     */
+    if (passages.length === 0 && isLlmConfigured(prefs.ai)) {
+      try {
+        const words = await chat(prefs.ai, expandQueryMessages(q.trim()));
+        const widened = retrieve(searchDocs, `${q.trim()} ${words.trim()}`);
+        if (widened.length > passages.length) passages = widened;
+      } catch {
+        // 扩写失败不该让提问失败——它只是个加分项
+      }
+    }
     if (passages.length === 0) {
       toast('本机检索没找到相关的笔记——换个说法，或者用更具体的词', 'error');
       return;
@@ -1362,7 +1400,36 @@ export default function App() {
       `${passages.length} 篇 · 约 ${totalChars(passages)} 字：${names.join('、')}`,
       null
     );
-  }, [prompt, runAi, searchDocs, toast]);
+  }, [prefs.ai, prompt, runAi, searchDocs, toast]);
+
+  /**
+   * **今天 / 这周写了什么**。
+   *
+   * 日记写不下去的真实原因是**想不起来**白天动过什么，而这件事机器全知道（mtime）。
+   * 所以：先打开今日日记（结果就该落在这儿），再把这段时间改过的笔记截段送过去。
+   * 和「问整个笔记库」同一条规矩——只发截出来的那些段，面板上写明送了几篇多少字。
+   */
+  const startRecap = useCallback(
+    async (range: 'day' | 'week') => {
+      const byPath = new Map(searchDocs.map((d) => [d.path, d.content]));
+      const entries = mdStamps.map((m) => ({
+        path: m.path,
+        mtime: m.mtime,
+        content: byPath.get(m.path) ?? '',
+      }));
+      const since = range === 'day' ? startOfDay() : startOfWeek();
+      const pieces = pickRecent(entries, { since });
+      if (pieces.length === 0) {
+        toast(range === 'day' ? '今天还没有改动过任何笔记' : '最近七天没有改动过任何笔记', 'ok');
+        return;
+      }
+      // 结果要贴进日记，那就先把日记打开——不然「应用」会插进当前随便哪一篇
+      await openDailyRef.current?.();
+      const src = buildRecapSource(pieces);
+      void runAi(recapSpec(range), src, `${pieces.length} 篇 · 约 ${src.length} 字`, null);
+    },
+    [mdStamps, runAi, searchDocs, toast]
+  );
 
   /**
    * 右键菜单里那一组 AI 动作。
@@ -1381,22 +1448,39 @@ export default function App() {
         // 改写类和产出类分两组：前者会覆盖你选中的字，后者只会多给你一段东西
         group: a.mode === 'replace' ? ('edit' as const) : ('make' as const),
       })),
+      // 用户自己存下来的动作，和内置的并排——这才是"自定义"长期有用的形态
+      ...prefs.ai.actions.map((a) => ({
+        id: `saved:${a.id}`,
+        label: a.label,
+        hint: a.instruction.length > 20 ? `${a.instruction.slice(0, 20)}…` : a.instruction,
+        needsSelection: a.mode === 'replace',
+        group: 'saved' as const,
+      })),
       { id: 'custom', label: '自定义指令…', hint: '你说要怎么处理', needsSelection: false, group: 'ask' as const },
       { id: 'ask-note', label: '问这篇笔记…', hint: '答案只来自这一篇', needsSelection: false, group: 'ask' as const },
       { id: 'ask-vault', label: '问整个笔记库…', hint: '本机先检索，答案标出处', needsSelection: false, group: 'ask' as const },
+      { id: 'recap-day', label: '今天写了什么', hint: '按今天改过的笔记写小结', needsSelection: false, group: 'ask' as const },
+      { id: 'recap-week', label: '本周写了什么', hint: '最近七天的小结', needsSelection: false, group: 'ask' as const },
     ],
-    []
+    [prefs.ai.actions]
   );
   const onEditorAi = useCallback(
     (id: string) => {
-      // 三条要先问一句再跑，不在 AI_ACTIONS 里
+      // 这几条要先问一句、或者要先取材，都不在 AI_ACTIONS 里
       if (id === 'custom') return void startCustomAi();
       if (id === 'ask-note') return void askThisNote();
       if (id === 'ask-vault') return void askVault();
+      if (id === 'recap-day') return void startRecap('day');
+      if (id === 'recap-week') return void startRecap('week');
+      if (id.startsWith('saved:')) {
+        const saved = prefs.ai.actions.find((a) => `saved:${a.id}` === id);
+        if (saved) startAi(savedSpec(saved));
+        return;
+      }
       const spec = AI_ACTIONS.find((a) => a.id === id);
       if (spec) startAi(spec);
     },
-    [askThisNote, askVault, startAi, startCustomAi]
+    [askThisNote, askVault, prefs.ai.actions, startAi, startCustomAi, startRecap]
   );
 
   /** 应用：替换类换掉那一段（走撤销栈），产出类追加到文末 */
@@ -1410,6 +1494,19 @@ export default function App() {
         return;
       }
       toast(`已应用「${st.spec.label}」（Ctrl+Z 可撤销）`, 'ok');
+    } else if (st.spec.id === 'tags') {
+      /*
+       * 标签是**元数据**，该进 frontmatter，不该在正文末尾多一行井号——
+       * 那一行会跟着导出、打印、分享一起出去。合并只增不删（见 lib/noteTags）。
+       */
+      const { content, added } = mergeTags(doc ?? '', parseTagReply(st.result));
+      if (added.length === 0) {
+        toast('这些标签这篇已经都有了', 'ok');
+      } else {
+        setDoc(content);
+        onEdit(currentPath, content);
+        toast(`已写入 frontmatter：${added.map((t) => `#${t}`).join(' ')}`, 'ok');
+      }
     } else {
       const next = `${doc ?? ''}\n\n${st.result.trim()}\n`;
       setDoc(next);
@@ -2225,6 +2322,11 @@ export default function App() {
     errText,
   });
 
+  // 「今天写了什么」要用它先把日记打开（声明顺序所限，见上面 openDailyRef 那段）
+  useEffect(() => {
+    openDailyRef.current = openDailyNote;
+  }, [openDailyNote]);
+
   /**
    * v0.8.0 P1.4：命令面板 + 全局快捷键整块搬进 `hooks/useCommands`。
    * 这里只负责把「能干什么」交出去——hook 不认识 vault，也不碰 IO。
@@ -2619,6 +2721,44 @@ export default function App() {
         void navigator.clipboard?.writeText(text);
         toast('结果已复制', 'ok');
       }}
+      // 答案里的 [[出处]] 要能一路点回原文，否则出处只是装饰
+      onOpenNote={(target) => onOpenLinkPath(target)}
+      onSaveAction={
+        aiState.spec?.id === 'custom'
+          ? () => {
+              void (async () => {
+                const label = await prompt({
+                  title: '存为动作',
+                  description: '存下来之后，它会和内置动作并排出现在 AI 菜单里',
+                  placeholder: '给它起个短名字，比如「客户口吻」',
+                  initial: aiState.spec?.hint.replace(/…$/, '').slice(0, 12) ?? '',
+                  okText: '存',
+                  validate: (v) => (v.trim() ? null : '起个名字'),
+                });
+                if (!label || !aiState.spec) return;
+                // 存的是**用户原话**，不是拼好的提示词——所见即所得，以后也改得动
+                const instruction = aiState.instruction ?? '';
+                if (!instruction) return;
+                updatePrefs({
+                  ...prefs,
+                  ai: {
+                    ...prefs.ai,
+                    actions: [
+                      ...prefs.ai.actions,
+                      {
+                        id: `a${Date.now().toString(36)}`,
+                        label: label.trim(),
+                        instruction,
+                        mode: aiState.spec.mode,
+                      },
+                    ],
+                  },
+                });
+                toast(`已存为动作「${label.trim()}」`, 'ok');
+              })();
+            }
+          : undefined
+      }
       onClose={() => {
         aiAbort.current?.abort();
         setAiState((st) => ({ ...st, spec: null, busy: false }));

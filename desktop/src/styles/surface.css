@@ -2519,6 +2519,45 @@ button.st-item:hover {
  * 手机上这张面板落在 `.m-main` 的滚动流里，如果只当普通块，
  * 结果一出来人还得往下滚才看得见——所以贴在视口底部（底栏之上）。
  */
+.set-actions {
+  list-style: none;
+  margin: 0 0 var(--sp-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.set-action {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.set-action-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.set-action-name { max-width: 220px; }
+.set-action .set-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 结果里的 [[出处]]：看得出能点，但别抢正文的注意力 */
+.ai-cite {
+  border: 0;
+  padding: 0 2px;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.ai-cite:hover { opacity: 0.8; }
 .m-app .ai-panel {
   position: sticky;
   bottom: calc(var(--m-bottom-h) + env(safe-area-inset-bottom));

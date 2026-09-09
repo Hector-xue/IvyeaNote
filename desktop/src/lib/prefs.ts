@@ -55,9 +55,27 @@ export interface AiPrefs {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * v0.11.20：**存下来的自定义动作**。
+   *
+   * 「自定义指令」解决了"内置动作盖不全"，但同一句话用第二次还得重打一遍。
+   * 存下来的动作会和内置动作并排出现在右键菜单里——这是这个功能真正长期有用的形态。
+   */
+  actions: SavedAiAction[];
 }
 
-export const AI_DEFAULTS: AiPrefs = { baseUrl: '', apiKey: '', model: '' };
+export interface SavedAiAction {
+  /** 建的时候生成，只用来做 key 与路由 */
+  id: string;
+  /** 菜单里显示的名字 */
+  label: string;
+  /** 用户原话，原样进提示词 */
+  instruction: string;
+  /** 会不会覆盖选中的文字 */
+  mode: 'replace' | 'produce';
+}
+
+export const AI_DEFAULTS: AiPrefs = { baseUrl: '', apiKey: '', model: '', actions: [] };
 
 export const PREF_DEFAULTS: Prefs = {
   defaultView: 'edit',
@@ -89,6 +107,19 @@ export function loadPrefs(): Prefs {
         baseUrl: typeof raw.ai?.baseUrl === 'string' ? raw.ai.baseUrl : '',
         apiKey: typeof raw.ai?.apiKey === 'string' ? raw.ai.apiKey : '',
         model: typeof raw.ai?.model === 'string' ? raw.ai.model : '',
+        // 逐条校验：手改坏的一条不该让其余几条一起消失
+        actions: Array.isArray(raw.ai?.actions)
+          ? raw.ai.actions
+              .filter(
+                (a): a is SavedAiAction =>
+                  !!a &&
+                  typeof a.id === 'string' &&
+                  typeof a.label === 'string' &&
+                  typeof a.instruction === 'string' &&
+                  (a.mode === 'replace' || a.mode === 'produce')
+              )
+              .slice(0, 50)
+          : [],
       },
     };
   } catch {

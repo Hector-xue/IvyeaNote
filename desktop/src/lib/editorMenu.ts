@@ -62,16 +62,17 @@ export interface EditorMenuActions {
 /**
  * 右键菜单里的一条 AI 动作。
  *
- * `group` 决定它落在哪一段——**这三段的区别是"它会对你的文件做什么"**，
- * 不是功能分类：`edit` 覆盖你选中的字、`make` 只多给一段东西、`ask` 什么都不写。
- * 十五条平铺在一列里，人扫不出哪些会动到自己的正文。
+ * `group` 决定它落在哪一段——**分段的依据是"它会对你的文件做什么"**，
+ * 不是功能分类：`edit` 覆盖你选中的字、`make` 只多给一段东西、`ask` 什么都不写，
+ * `saved` 是用户自己存下来的（改不改正文看它自己的 mode）。
+ * 十几二十条平铺在一列里，人扫不出哪些会动到自己的正文。
  */
 export interface AiMenuAction {
   id: string;
   label: string;
   hint: string;
   needsSelection: boolean;
-  group?: 'edit' | 'make' | 'ask';
+  group?: 'edit' | 'make' | 'saved' | 'ask';
 }
 
 /** 按 group 分段（段间插分隔线），需要选区的在没选区时置灰 */

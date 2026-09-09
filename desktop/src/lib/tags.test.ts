@@ -28,4 +28,13 @@ describe('buildTagIndex', () => {
     expect(idx.get('运营')).toEqual(['a.md', 'b.md']);
     expect(idx.get('广告')).toEqual(['a.md']);
   });
+
+  /*
+   * v0.11.20：`tags:` 块状写法写在 frontmatter **最末尾**时曾整块解析不出来——
+   * 原实现用了 `\Z`（JS 正则里没这个东西，它是字面量 Z），
+   * 于是必须后面还跟着别的字段才认。表现是"标签写了，标签面板里没有"。
+   */
+  it('块状 tags 写在 frontmatter 末尾也解析得出来', () => {
+    expect(extractTags('---\ntags:\n  - 定价\n  - 毛利率\n---\n\n正文')).toEqual(['定价', '毛利率']);
+  });
 });

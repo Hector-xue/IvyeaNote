@@ -1684,9 +1684,17 @@ await new Promise((r) => setTimeout(r, 2600));
       if (!u.includes('fake-llm.test')) return real(url, init);
       window.__aiCalls.push({ url: u, body: init && init.body ? String(init.body) : '' });
       const enc = new TextEncoder();
+      /*
+       * 全库问答的回复要带 [[出处]]——这一版要验"出处点得回去"。
+       * ⚠️ 别用 '出处' 当判据：校对动作的提示词里有「只输**出处**理后的正文」，
+       * 中文子串就这么撞上了，于是校对也拿到了问答的回复（第一版就这么红的）。
+       */
+      const pieces = String(init && init.body || '').includes('【出处：')
+        ? ['结论在这里：', '毛利率目标 70%。', '[[商业/定价策略]]']
+        : ['这段话', '没有错别字', '了。'];
       const body = new ReadableStream({
         start(c) {
-          for (const piece of ['这段话', '没有错别字', '了。']) {
+          for (const piece of pieces) {
             c.enqueue(enc.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: piece } }] }) + String.fromCharCode(10, 10)));
           }
           c.enqueue(enc.encode('data: [DONE]' + String.fromCharCode(10, 10)));
@@ -1844,8 +1852,103 @@ await new Promise((r) => setTimeout(r, 2600));
     asked.dialog && asked.calls === 1 && asked.hasTarget && asked.hasCite && !asked.leakedUnrelated, asked);
   check('面板上如实写出这次送了几篇、多少字（用户有权知道自己的资料出去了多少）',
     !!asked.scope && /篇/.test(asked.scope) && /字/.test(asked.scope), asked.scope);
+  /*
+   * ⑤ 答案里的 `[[出处]]` 要**点得回去**（v0.11.20）。
+   * 出处不是装饰：它是用户唯一能核对的凭据。摆成纯文本，人还得自己再搜一遍，
+   * 这条链就断在最后一步。
+   */
+  const cite = await evaluate(`(() => {
+    const b = document.querySelector('.ai-result .ai-cite');
+    return b ? { text: b.textContent, tag: b.tagName } : null;
+  })()`);
+  check('全库问答的答案里 [[出处]] 是可点的按钮，不是一段死文字',
+    !!cite && cite.tag === 'BUTTON' && cite.text.includes('定价'), cite);
+  await evaluate(`(() => { document.querySelector('.ai-result .ai-cite')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  // 看正文，不看标题栏：正文出现那篇的内容才叫"真的打开了"
+  const opened = await evaluate(`(() => ({
+    body: (document.querySelector('.cm-content')?.innerText ?? document.querySelector('.md-body')?.innerText ?? '').slice(0, 60),
+    tabs: [...document.querySelectorAll('.tb-tab')].map(t => t.textContent.trim()),
+  }))()`);
+  check('点出处真的把那篇笔记打开了', opened.body.includes('三档订阅'), opened);
+
+  /*
+   * ⑥ **自定义指令 → 存为动作**（v0.11.20）。
+   * 同一句话用第二次还得重打一遍，这个功能就废了一半。存下来的动作要出现在菜单里。
+   */
+  await evaluate(`(() => { window.__aiCalls = []; return true })()`);
+  /*
+   * 先把选区收掉。上一段用例选过一行，留着的话「自定义指令」会走**替换**分支——
+   * 这条要验的是"没选中时结果只会附到文末"，模式不能碰运气。
+   */
+  const collapseAt = await evaluate(`(() => {
+    const c = document.querySelector('.cm-content');
+    if (!c) return null;
+    const r = c.getBoundingClientRect();
+    return { x: Math.round(r.left + 30), y: Math.round(r.top + 12) };
+  })()`);
+  if (collapseAt) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: collapseAt.x, y: collapseAt.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  await openAiMenu('自定义指令');
+  await new Promise((r) => setTimeout(r, 600));
+  const custom = await evaluate(`(async () => {
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { dialog: false };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '改成给客户看的口吻');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('开始'))?.click();
+    await new Promise(r => setTimeout(r, 1400));
+    const calls = window.__aiCalls || [];
+    return {
+      dialog: true,
+      calls: calls.length,
+      // 用户那句话原样进了提示词
+      inPrompt: (calls[0]?.body ?? '').includes('改成给客户看的口吻'),
+      saveBtn: [...document.querySelectorAll('.ai-foot button')].some(b => b.textContent.trim() === '存为动作'),
+    };
+  })()`);
+  check('「自定义指令」把用户原话原样送进提示词，面板上给出「存为动作」',
+    custom.dialog && custom.calls === 1 && custom.inPrompt && custom.saveBtn, custom);
+  const saved = await evaluate(`(async () => {
+    [...document.querySelectorAll('.ai-foot button')].find(b => b.textContent.trim() === '存为动作')?.click();
+    await new Promise(r => setTimeout(r, 500));
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { dialog: false };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '客户口吻');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('存'))?.click();
+    await new Promise(r => setTimeout(r, 600));
+    const prefs = JSON.parse(localStorage.getItem('ivnote.prefs') || '{}');
+    return { dialog: true, actions: prefs.ai?.actions ?? [] };
+  })()`);
+  check('存下来的是**用户原话**（不是拼好的提示词），存进了本机偏好',
+    saved.dialog && saved.actions.length === 1 && saved.actions[0].instruction === '改成给客户看的口吻' &&
+    saved.actions[0].label === '客户口吻' && saved.actions[0].mode === 'produce', saved);
   await evaluate(`(() => { document.querySelector('.ai-head [aria-label="关闭"]')?.click(); return true })()`);
   await new Promise((r) => setTimeout(r, 400));
+  const inMenu = await evaluate(`(async () => {
+    document.querySelector('.top-bar button[aria-label="更多操作"]')?.click();
+    await new Promise(r => setTimeout(r, 300));
+    const item = [...document.querySelectorAll('.ctx-item')].find(b => (b.querySelector('.ctx-label')?.textContent ?? '') === 'AI 助手');
+    if (!item) return null;
+    const r = item.getBoundingClientRect();
+    item.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientX: r.left + 10, clientY: r.top + 8 }));
+    await new Promise(r2 => setTimeout(r2, 500));
+    const labels = [...document.querySelectorAll('.ctx-sub-menu .ctx-label')].map(x => x.textContent);
+    document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    return labels;
+  })()`);
+  check('存下来的动作和内置动作并排出现在 AI 菜单里',
+    Array.isArray(inMenu) && inMenu.includes('客户口吻'), inMenu);
+  await new Promise((r) => setTimeout(r, 300));
 }
 
 // ---------- 7.875 HTML 在应用内看（v0.11.18）----------
