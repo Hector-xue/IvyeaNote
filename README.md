@@ -5,6 +5,33 @@
 
 桌面端（Windows / macOS / Linux）、安卓 App、以及由同步服务端自己托管的网页版，**共用同一份代码**。
 
+![Ivyea Note 桌面端：顶栏标签页、左侧文件树、中间正文、右侧大纲与反向链接](docs/assets/shot-desktop.png)
+
+---
+
+## 交流与反馈
+
+欢迎扫码加入微信群，反馈 Bug、交流 Ivyea Note 使用经验、AI 工具与亚马逊运营相关知识。**也欢迎提改进建议**——功能需求、交互优化、文档纠错都行，可在群里直接说，或到 GitHub 提 [Issue](https://github.com/Hector-xue/IvyeaNote/issues) / PR。群二维码可能会过期；如果扫码失效，可先关注公众号，再获取最新群二维码。
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/assets/wechat-group-qr.png" alt="Ivyea 微信交流群二维码" width="300" />
+      <br />
+      <strong>微信群：Ivyea 的精神股东们</strong>
+      <br />
+      <sub>反馈 Bug / 交流 AI 与运营 / 提改进建议</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/assets/wechat-official-account-qr.jpg" alt="Ivyea 公众号二维码" width="220" />
+      <br />
+      <strong>公众号</strong>
+      <br />
+      <sub>群二维码失效时，关注后获取最新版</sub>
+    </td>
+  </tr>
+</table>
+
 ---
 
 ## 为什么会有它
@@ -86,16 +113,16 @@ IVNOTE_DOMAIN=note.example.com sudo -E deploy/install.sh
 实时预览（编辑态直接渲染标题/加粗/引用/表格/callout/脚注/分隔线/**图片**）· 阅读模式 · 左右分栏 · 内联标题（文件名即标题）· 软换行 · 文内查找替换 · 编辑区完整右键菜单（文本格式 / 段落设置 / 插入 三个二级菜单）· 格式快捷键 · 中文排版规则（标题不用负字距、只用两档字重）
 
 **组织**
-多层文件树（显示库里全部文件，非 Markdown 带类型角标）· 拖拽移动（可撤销）· `[[双链]]` 与补全 · 反向链接 · 大纲 · 标签 · 模板 · 每日笔记 · 回收站 · 从 Obsidian 一键导入
+多层文件树（显示库里全部文件，非 Markdown 带类型角标）· 拖拽移动（可撤销）· **标签页**（侧栏点笔记在当前标签里换，Ctrl / 中键才新开，顶栏 `+` 是新标签页）· `[[双链]]` 与补全 · 反向链接 · 大纲 · **标签与回收站都是左栏的面板** · 模板 · 每日笔记（ribbon 上的日历图标）· Obsidian `.base` 表格视图 · 从 Obsidian 一键导入
 
 **检索**
 倒排索引 + BM25（不是全文 `includes` 扫）· 中文二元组分词 · 命令面板 · 侧栏搜索带上下文预览 · 快速切换
 
 **图谱**
-占满窗口的力导向图，可缩放/平移/拖节点 · 搜索过滤与悬停聚焦 · 局部图可调跳数 · `[[双链]]` 和普通 Markdown 链接都算边
+开在主区（和正文并排切换，不是一个要退出去才能回来的整屏页面）· 力导向布局，可缩放 / 平移 / 拖节点 · 搜索过滤与悬停聚焦 · 局部图可调跳数 · `[[双链]]` 和普通 Markdown 链接都算边
 
-**附件**
-拖入/粘贴图片自动落盘并插入引用 · 附件位置可选（跟随笔记 / 统一目录）· **应用内 PDF 阅读器**（pdf.js，按需渲染 / 页码 / 缩放，三端一致）· 图片全屏查看
+**附件与导出**
+拖入/粘贴图片自动落盘并插入引用 · 附件位置可选（跟随笔记 / 统一目录）· **应用内 PDF 阅读器**（pdf.js，按需渲染 / 页码 / 缩放，三端一致）· 图片全屏查看 · **导出为 PDF**：选个位置直接出文件，不经打印机，输出是矢量的（文字可选中可搜索）
 
 **同步**
 增量 push/pull · 三方 diff3 合并 · 冲突副本不覆盖 · 删改复活 · 墓碑去重 · WebSocket 实时触发 + 30 秒兜底轮询 · 同步状态面板说得出「现在还差什么」
@@ -134,6 +161,7 @@ npm run dev            # 浏览器里跑（OPFS 当本地库）
 npm run tauri dev      # 桌面端
 npm test               # vitest
 npm run build && npm run verify:ui   # 真实产物 + headless Chrome 断言 computed 值并出截图
+npm run shots -- /要放截图的目录     # 按当前产物重拍官网与 README 用的产品截图
 ```
 
 ```bash
@@ -153,6 +181,27 @@ scripts/conformance.sh         # 同步一致性场景 C1~C8
 - 「这台电脑当服务器」要求手机与电脑在同一局域网；路由器的 AP 隔离、访客 WiFi、双频独立子网都会挡住它（诊断面板会指出来）。
 - 无边框圆角窗口目前只在 Windows 生效，macOS 保留原生红绿灯、Linux 保留原生边框。
 - 代码块语法高亮尚未做。
+
+---
+
+## ☕ 请作者喝杯咖啡
+
+Ivyea Note 是免费开源的，没有会员、没有内购，同步服务器也在你自己手里。如果它帮你把笔记安顿好了，欢迎请作者喝杯咖啡——一杯咖啡就是下个版本的动力。当然，点个 Star、提个 Issue、写篇使用心得，同样是很大的支持。
+
+- **公众号**：Ivyea 的精神股东们（版本更新、用法与踩坑复盘都发在这里）
+- **作者**：薛海涛
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/assets/wechat-pay-qr.png" alt="微信收款码" width="300" />
+      <br />
+      <strong>微信扫码 · 支持作者</strong>
+      <br />
+      <sub>金额随意，心意都收到了</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 

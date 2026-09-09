@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "verify:ui": "node scripts/verify-ui.mjs dist",
+    "shots": "node scripts/portal-shots.mjs dist",
     "typecheck:e2e": "tsc -p tsconfig.e2e.json --noEmit",
     "test:e2e": "vitest run src/lib/sync.e2e.test.ts"
   },
