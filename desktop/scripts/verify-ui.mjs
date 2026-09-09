@@ -1550,6 +1550,83 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('sidebar-head.png');
 }
 
+// ---------- 7.87 导出 PDF：真的打一份出来，逐页数有没有字（v0.11.17）----------
+/*
+ * 用户拿到的 PDF「只有第一页，总页数还多出那么多」。我把他同步到服务器上的那份
+ * 捞下来数过：78 页里 77 页内容流是 0 字节。所以这条用例不看样式、不看 DOM——
+ * **真的用 CDP 打一份 PDF 出来，数每一页有没有内容**（CDP 与 WebView2 的
+ * PrintToPdf 是同一条 Skia 打印管线）。
+ */
+{
+  // 造一篇长到必然跨页的笔记
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      const lines = ['# 导出样张', ''];
+      for (let i = 1; i <= 80; i++) lines.push('## 第 ' + i + ' 节', '', '正文第' + i + '段：这一段必须出现在 PDF 里。', '');
+      const fh = await h.getFileHandle('导出样张.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode(lines.join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('导出样张'));
+    const row = el?.closest('.ft-file'); row?.scrollIntoView({ block: 'center' }); row?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+
+  /*
+   * 导出跑完会把那份临时文档删掉（应该的）。这里临时拦住它的 remove，
+   * 好在**导出那一刻的排版**上打印。拦的是测试这一侧，产物代码一个字没动。
+   */
+  const exported = await evaluate(`(async () => {
+    const orig = Element.prototype.remove;
+    Element.prototype.remove = function () {
+      if (this.id === 'print-doc') return;
+      return orig.call(this);
+    };
+    window.__printed = 0;
+    window.print = () => { window.__printed++; };
+    const more = document.querySelector('.top-bar button[aria-label="更多操作"]');
+    more?.click();
+    await new Promise(r => setTimeout(r, 300));
+    const item = [...document.querySelectorAll('.ctx-item')].find(b => (b.querySelector('.ctx-label')?.textContent ?? '').includes('导出为 PDF'));
+    item?.click();
+    await new Promise(r => setTimeout(r, 1500));
+    document.documentElement.classList.add('printing');
+    const doc = document.getElementById('print-doc');
+    return {
+      printed: window.__printed,
+      hasDoc: !!doc,
+      imgs: doc ? doc.querySelectorAll('img').length : 0,
+      crashed: !!document.querySelector('.err-wrap'),
+    };
+  })()`);
+  const printed = await send('Page.printToPDF', { printBackground: false });
+  const pdf = Buffer.from(printed.data, 'base64');
+  fs.writeFileSync(path.join(OUT, 'export.pdf'), pdf);
+  const raw = pdf.toString('latin1');
+  const pages = (raw.match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+  // 空白页的内容流长度就是 0——用户那份 78 页里有 77 个这种
+  const blanks = (raw.match(/\/Length\s+0[\s>\/]/g) ?? []).length;
+  check('导出的 PDF 每一页都有内容（此前 78 页里 77 页是空的）',
+    exported.printed === 1 && !exported.crashed && pages >= 6 && blanks === 0,
+    { ...exported, pages, blanks, bytes: pdf.length });
+  // 收拾现场：把临时文档摘掉，别影响后面的用例
+  await evaluate(`(() => {
+    document.documentElement.classList.remove('printing');
+    const d = document.getElementById('print-doc');
+    if (d && d.parentNode) d.parentNode.removeChild(d);
+    return true })()`);
+  await new Promise((r) => setTimeout(r, 300));
+}
+
 // ---------- 7.86 导出 PDF：浏览器里退回打印面板（v0.11.16）----------
 /*
  * Windows 上这条路走的是 WebView2 的 PrintToPdf（直接落文件、不弹打印机），
@@ -1832,6 +1909,30 @@ await new Promise((r) => setTimeout(r, 2600));
    * 「登录后同步」——此前它在这种状态下叫「立即同步」，点下去调的却是一个
    * 第一行就 return 的函数：没反应、没提示、没动效（用户点名问它是干什么的）。
    */
+  /*
+   * v0.11.17：对着 Obsidian 移动端改的两处——顶栏与底栏都不画分隔线（层次靠留白，
+   * 不靠线），底部图标再往下压一点（原来是 52px 行高 + 整个安全区，图标浮在半空）。
+   */
+  const mobileChrome = await evaluate(`(() => {
+    const top = document.querySelector('.m-top');
+    const wrap = document.querySelector('.m-bottom-wrap');
+    const nav = document.querySelector('.m-bottom');
+    if (!top || !wrap || !nav) return null;
+    const cs = getComputedStyle(top), cw = getComputedStyle(wrap);
+    const r = nav.getBoundingClientRect();
+    return {
+      topBorder: cs.borderBottomWidth,
+      bottomBorder: cw.borderTopWidth,
+      navH: Math.round(r.height),
+      // 图标行底边到屏幕底边还剩多少（越小越贴底）
+      gapToBottom: Math.round(window.innerHeight - r.bottom),
+    };
+  })()`);
+  check('手机端顶栏与底栏都不再画那条横线，底部图标离屏幕底边不超过 12px',
+    !!mobileChrome && parseFloat(mobileChrome.topBorder) === 0 &&
+    parseFloat(mobileChrome.bottomBorder) === 0 && mobileChrome.gapToBottom <= 12 &&
+    mobileChrome.navH <= 48, mobileChrome);
+
   check('底部四个键：搜索 / 新建 / 大纲 / 同步；没登录时最后一颗明说是"登录后同步"',
     JSON.stringify(bottom.labels) === JSON.stringify(['搜索', '新建笔记', '大纲', '登录后同步']), bottom);
 

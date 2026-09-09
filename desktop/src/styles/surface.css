@@ -2362,3 +2362,29 @@ button.st-item:hover {
   width: 34px;
   height: 34px;
 }
+
+/* ---- 手机端：去掉顶栏/底栏那两条横线，底部按钮下沉（v0.11.17）---- */
+/*
+ * 用户对着 Obsidian 的截图说：「顶部和底部的那两条横线，把他删掉，底部的几个按钮
+ * 距离屏幕底部也有点太高了，可以再往下移动一点」。
+ *
+ * Obsidian 移动端的顶栏与底栏都不画分隔线——层次靠留白和字重，不靠线。
+ * 一条通栏的横线在手机上尤其重，它把一屏切成三段。
+ */
+.m-app .m-top {
+  border-bottom: none;
+}
+.m-app .m-bottom-wrap {
+  border-top: none;
+}
+/*
+ * 底部按钮再往下压一点：原来是 52px 行高 + 整个安全区内边距，
+ * 手势导航的机器上安全区本身就有 20 多 px，两者叠起来图标就浮在半空。
+ * 行高收到 46，安全区只让出一半（最少 4px，保证不压在手势条上）。
+ */
+.m-app {
+  --m-bottom-h: 46px;
+}
+.m-bottom-wrap {
+  padding-bottom: max(4px, calc(env(safe-area-inset-bottom) / 2));
+}

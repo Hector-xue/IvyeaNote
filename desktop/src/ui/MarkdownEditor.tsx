@@ -376,6 +376,39 @@ function renderProps(props: [string, string][]): string {
  */
 const ExternalDoc = Annotation.define<boolean>();
 
+/**
+ * 把一段渲染好的 HTML 里的图片相对路径换成能真正显示的 URL（v0.11.17 抽出）。
+ *
+ * 阅读视图和**导出 PDF** 用的是同一份规则：先按笔记自己的位置解析，
+ * 失败再按库根兜一次（v0.10.6 及以前的存量笔记是库根相对）。
+ * 抽出来是因为导出那条路要用它——两份实现迟早漂移，而"图片在应用里看得见、
+ * 导出的 PDF 里却是空的"正是那种会被当成玄学的漂移。
+ */
+export async function resolveImagesIn(
+  root: HTMLElement,
+  currentPath: string | null,
+  resolveImage: (rel: string) => Promise<string | null>
+): Promise<void> {
+  for (const img of Array.from(root.querySelectorAll('img'))) {
+    const src = img.getAttribute('src') ?? '';
+    img.dataset.src = src;
+    if (/^(https?:|data:|blob:)/.test(src)) continue;
+    const noteRel = resolveVaultPath(currentPath, src);
+    let url: string | null = null;
+    try {
+      url = await resolveImage(noteRel);
+    } catch {
+      try {
+        url = await resolveImage(decodeURIComponent(src));
+      } catch {
+        url = null;
+      }
+    }
+    if (url) img.src = url;
+    else img.alt = `${img.alt}（图片加载失败：${src}）`;
+  }
+}
+
 export function renderMarkdown(md: string): string {
   const { props, body } = splitFrontmatter(md);
   const raw = marked.parse(body, { async: false }) as string;

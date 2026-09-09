@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoginView } from './ui/LoginView';
 import { SetupGuide } from './ui/SetupGuide';
 import { MainView, type SidebarTab } from './ui/MainView';
+import { renderMarkdown, resolveImagesIn } from './ui/MarkdownEditor';
+import { isSameTitle } from './ui/InlineTitle';
 import { MobileView } from './ui/MobileView';
 import { useDialog } from './ui/Dialog';
 import { useUpdater } from './hooks/useUpdater';
@@ -494,49 +496,6 @@ export default function App() {
    * 其它平台没有这条原生路，仍然退回打印对话框（macOS 的打印面板自带「存储为 PDF」），
    * 而且**先问支不支持再决定要不要弹保存框**——不能让人选完位置才说做不到。
    */
-  const exportPdf = useCallback(async () => {
-    if (!currentPath) return;
-    setViewMode('read');
-    // 等阅读视图真的渲染出来再导出：两帧足够 React 提交 + 浏览器排版
-    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-    const fallbackPrint = () => {
-      try {
-        window.print();
-      } catch (e) {
-        toast(`导出失败：${errText(e)}`, 'error');
-      }
-    };
-    if (!isTauri) {
-      // 浏览器里只有打印这一条路（没有文件系统，也没有 WebView2 接口）
-      fallbackPrint();
-      return;
-    }
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const native = await invoke<boolean>('export_pdf_supported');
-      if (!native) {
-        toast('这个平台还没有原生导出，已打开打印面板（在里面选「另存为 PDF」）', 'ok');
-        fallbackPrint();
-        return;
-      }
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const target = await save({
-        defaultPath: `${titleOfPath(currentPath)}.pdf`,
-        filters: [{ name: 'PDF', extensions: ['pdf'] }],
-      });
-      if (!target) return; // 用户自己取消了，不该弹任何提示
-      await invoke('export_pdf', { path: target });
-      toast(`已导出 PDF：${target}`, 'ok');
-    } catch (e) {
-      /*
-       * 失败要说得出原因，并且**留一条能走的路**——静默失败这个仓库付过四轮返工的账。
-       * 老版本 WebView2 运行时没有 PrintToPdf，这里正好接住。
-       */
-      toast(`导出 PDF 失败：${errText(e)}；已改用打印面板`, 'error');
-      fallbackPrint();
-    }
-  }, [currentPath, toast, errText]);
-
   const onAuthExpired = useCallback(() => {
     setSessionExpired(true);
     if (!expiredNotified.current) {
@@ -606,6 +565,89 @@ export default function App() {
     attachMode: prefs.attachMode,
   });
 
+
+  /**
+   * 导出为 PDF（v0.11.17 重做第二版）。
+   *
+   * # 上一版错在哪
+   *
+   * v0.11.16 是"切到阅读视图 → 让 WebView2 把**当前页面**打成 PDF"。用户拿到的是
+   * 「只有第一页有字、总页数还多出一大堆」。我把他同步到服务器上的那份
+   * `IvyeaNote.pdf` 捞下来数过：**78 页里 77 页是全空的**（内容流 0 字节），
+   * 第 1 页正好是一屏的量。
+   *
+   * 真因不止一个，全是"拿应用外壳去打印"带来的：
+   * ① 打印样式里那条 `.editor-host { display:block !important }` 会把**阅读模式下
+   *    靠 inline `display:none` 藏起来的 CodeMirror 又拽回来**——它是虚拟滚动的，
+   *    DOM 里只有视口那一屏，高度却是整篇的，于是"页数够、字只有一页"；
+   * ② `html, body { height: 100% }` 在打印里就是"一页纸那么高"，正文溢出后不参与分页；
+   * ③ 正文到 body 之间全是 flex 容器，而 Chromium **不会把 flex item 拆到下一页**。
+   *
+   * # 这一版怎么做
+   *
+   * 干脆**不打应用外壳**：把当前笔记单独渲染成一份干净的文档（只有正文），
+   * 打印时把整个 `#root` 藏掉、只留它。这个形状是拿 CDP 真的打出 PDF、
+   * 逐页数过字数验证的（9 页 9 页都有字），而不是"看着应该行"。
+   * 顺带它还解决了另外两件事：在编辑模式直接 Ctrl+P 也能出完整的 PDF，
+   * 以及导出的内容不再受侧栏/分栏/右栏这些跟正文无关的布局影响。
+   */
+  const exportPdf = useCallback(async () => {
+    if (!currentPath || doc === null) return;
+    const title = titleOfPath(currentPath);
+    const host = document.createElement('div');
+    host.id = 'print-doc';
+    host.className = 'md-preview print-doc';
+    /*
+     * 文件名即标题（应用里它是正文上方那一层，不在 md-preview 里）。
+     * 正文首行已经是同一个标题时不再顶一行——和内联标题那条去重规则同源。
+     */
+    const body = renderMarkdown(doc);
+    host.innerHTML = isSameTitle(title, doc)
+      ? body
+      : `<h1>${title.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c] ?? c)}</h1>${body}`;
+    document.body.appendChild(host);
+    document.documentElement.classList.add('printing');
+    const fallbackPrint = () => {
+      try {
+        window.print();
+      } catch (e) {
+        toast(`导出失败：${errText(e)}`, 'error');
+      }
+    };
+    try {
+      // 图片要和阅读视图同一套解析规则，否则导出的 PDF 里全是"图片加载失败"
+      await resolveImagesIn(host, currentPath, resolveImage);
+      // 让浏览器把这份文档真的排一遍版再打印（两帧足够提交 + 排版）
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      if (!isTauri) {
+        fallbackPrint();
+        return;
+      }
+      const { invoke } = await import('@tauri-apps/api/core');
+      const native = await invoke<boolean>('export_pdf_supported');
+      if (!native) {
+        toast('这个平台还没有原生导出，已打开打印面板（在里面选「另存为 PDF」）', 'ok');
+        fallbackPrint();
+        return;
+      }
+      const { save } = await import('@tauri-apps/plugin-dialog');
+      const target = await save({
+        defaultPath: `${title}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (!target) return; // 用户自己取消了，不该弹任何提示
+      await invoke('export_pdf', { path: target });
+      toast(`已导出 PDF：${target}`, 'ok');
+    } catch (e) {
+      // 失败要说得出原因，并且留一条能走的路——静默失败这个仓库付过四轮返工的账
+      toast(`导出 PDF 失败：${errText(e)}；已改用打印面板`, 'error');
+      fallbackPrint();
+    } finally {
+      // 无论走哪条路都要收拾干净：这份文档留在 body 里会让下一次打印重影
+      document.documentElement.classList.remove('printing');
+      host.remove();
+    }
+  }, [currentPath, doc, resolveImage, toast, errText]);
 
   // ---------- 登录 / 注册 ----------
 
