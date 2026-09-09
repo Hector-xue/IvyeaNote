@@ -320,6 +320,41 @@ describe('登录态过期要能被认出来（v0.11.8）', () => {
     expect(r.authExpired).toBe(true);
   });
 
+  /*
+   * 2026-09-09：手机上偶尔弹一段「拉取失败：连不上服务器（Failed to fetch）」。
+   * 这一类和上面两种正相反——它多半过一会儿自己就好了，所以要能被单独认出来，
+   * 上层才敢在**自动**同步时把它压成一句「离线」（见 hooks/useSyncEngine）。
+   */
+  it('fetch 压根没发出去（network_error）→ offline，且不与另外两个标记混淆', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { pullPage: () => Promise<never> }).pullPage = async () => {
+      throw new ApiError(0, 'network_error', '连不上服务器（Failed to fetch）。排查提示…');
+    };
+    const r = await run(newVaultMeta(1, 'v'), memIO(new Map()), server);
+    expect(r.offline).toBe(true);
+    expect(r.authExpired).toBeFalsy();
+    expect(r.unlinked).toBeFalsy();
+    expect(r.errors.length).toBe(1); // 报告里照旧留着原因，压不压是上层的事
+  });
+
+  it('推送阶段的网络错误同样算数', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      throw new ApiError(0, 'network_error', '连不上服务器（Failed to fetch）。排查提示…');
+    };
+    const r = await run(newVaultMeta(1, 'v'), memIO(new Map([['a.md', 'x']])), server);
+    expect(r.offline).toBe(true);
+  });
+
+  it('服务端明确拒绝（403）不算离线——重试一万次也是同一条', async () => {
+    const server = mockServer({ changes: [] });
+    (server as unknown as { push: () => Promise<never> }).push = async () => {
+      throw new ApiError(403, 'forbidden', 'vault 不存在或不属于你');
+    };
+    const r = await run(newVaultMeta(1, 'v'), memIO(new Map([['a.md', 'x']])), server);
+    expect(r.offline).toBeFalsy();
+  });
+
   it('403 只是库没接上，不是登录过期', async () => {
     const server = mockServer({ changes: [] });
     (server as unknown as { push: () => Promise<never> }).push = async () => {

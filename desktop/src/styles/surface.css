@@ -1941,3 +1941,168 @@ button.st-item:hover {
   overflow: visible;
   flex: none;
 }
+
+/* ============================================================ v0.11.14
+   手机端：第一层 UI 钉住、弹层是一整张纸；桌面端：标签长在页面上。 */
+
+/*
+ * **顶栏不再跟着正文滚走。**
+ *
+ * 用户原话：「我想要的是冻结到有图标的第一层 UI 那里，不是全部都滑走，
+ * 我想点击左上角的侧边栏按钮还得滑到最顶部」。
+ *
+ * v0.11.13 把滚动交给 `.m-main` 是对的（标题该跟着正文走），错在**顶栏当时还在
+ * `.m-main` 里面**——滚的是包含顶栏的那一层。现在顶栏是 `.m-app` 的直接子元素，
+ * 所以这里把 `.m-app` 从横向 flex 改成纵向：顶栏一行、主区吃掉剩下的高度并自己滚。
+ * 抽屉与底部栏都是 fixed/absolute，不在这条主轴上，不受影响。
+ */
+.m-app {
+  flex-direction: column;
+}
+.m-app .m-top {
+  flex: 0 0 auto;
+  z-index: 6;
+}
+.m-app .m-main {
+  flex: 1 1 auto;
+}
+
+/* 自动同步撞上网络不通时的那一行。它不是错误，所以不给红底——
+   红色留给"你得做点什么"的事（登录过期、冲突），网络抖动人做不了任何事。 */
+.m-offline {
+  padding: 6px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+/*
+ * **底部弹层是一整张纸，不是几张飘在虚化正文上的卡片。**
+ *
+ * 用户原话：「整个弹窗没有背景色，所以看起来还是有空隙感」。
+ * 此前 `.m-sheet2` 只是个透明外壳，只有分组卡片有底色——卡片之间那两道缝里
+ * 露出的是模糊的正文，于是这几张卡看起来不属于同一个东西。
+ * 改成：外壳自己就是纸（贴底、上两角圆、投影），分组退回成纸上的分区，
+ * 靠一条分隔线区分。遮罩同时压一层暗底：没有暗底，"纸"和背景的层次全靠模糊撑，
+ * 浅色主题下几乎看不出来。
+ */
+.m-sheet-mask {
+  background: rgba(0, 0, 0, 0.32);
+}
+.m-sheet2 {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--panel);
+  border-radius: var(--r-4) var(--r-4) 0 0;
+  box-shadow: var(--shadow-pop);
+  max-height: 82vh;
+}
+.m-sheet2-scroll {
+  gap: 0;
+  padding-bottom: 6px;
+}
+.m-sheet2-group {
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* 组与组之间一条通栏线（组**内**的线从文字处起画，见上面 50px 那条）——
+   两种线粗细相同、缩进不同，正好说明"这是另一组"而不是"这是下一行" */
+.m-sheet2-group + .m-sheet2-group {
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+/* 大纲那张同样是整纸；标题与把手已经居中，这里只把滚动区撑开 */
+.m-outline2 .m-sheet2-scroll {
+  padding-bottom: 10px;
+}
+
+/* ---- 桌面端：标签长在页面上（v0.11.14）---- */
+/*
+ * 用户原话：「桌面端的标签栏，你可以参考一下浏览器和 obsidian 的这种，标签是和
+ * 页面连在一起的」。
+ *
+ * 此前 `.tb-tabs` 横跨整条顶栏：当前标签可能停在侧栏的正上方，而它代表的那一页
+ * 在右边——"这个标签属于哪块内容"根本对不上。浏览器与 Obsidian 的做法都是
+ * 标签只占内容区那一段，当前标签与页面同色、底边相接，看起来是同一张纸的舌头。
+ *
+ * 分三步：① 顶栏左边留出一格，宽度 = ribbon + 侧栏（--side-w 由 MainView 实时写入）；
+ * ② 标签整体沉到顶栏底边；③ 当前标签用页面的底色（--panel）、上两角圆、底边不封口。
+ */
+:root {
+  --ribbon-w: 42px;
+  /* 侧栏没渲染时（欢迎页 / 手机）也得有个值，否则 calc 整条失效 */
+  --side-w: 0px;
+}
+.ribbon {
+  width: var(--ribbon-w);
+  box-sizing: border-box;
+}
+/*
+ * 左格整体：折叠按钮 + 常用按钮。宽度**正好等于** ribbon + 侧栏，右边界因此
+ * 落在侧栏右边界上；顶栏自己不再给子元素留 gap，否则标签会被那点间距推歪。
+ */
+.top-bar {
+  gap: 0;
+  padding-left: 0;
+}
+.tb-left {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  box-sizing: border-box;
+  /* 6px 让折叠按钮的中心落在 x=21，与它正下方 ribbon 那列图标对齐 */
+  padding-left: 6px;
+  width: calc(var(--ribbon-w) + var(--side-w));
+  transition: width var(--dur-2) var(--ease);
+}
+/* 没有侧栏的场景（欢迎页、未选库）：左格只有折叠按钮，别让它塌成 0 */
+.tb-left:only-child,
+.tb-left > .tb-btn:only-child {
+  flex: 0 0 auto;
+}
+.tb-crumb {
+  padding-left: var(--sp-2);
+}
+.tb-btn.tb-quick {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  margin-right: 0;
+}
+/* 标签沉到底：顶栏与页面之间不留缝，当前标签才接得上 */
+.tb-tabs {
+  align-items: flex-end;
+  height: 100%;
+  padding: 0;
+  gap: 0;
+}
+.tb-tab {
+  height: 30px;
+  border-radius: var(--r-2) var(--r-2) 0 0;
+  padding: 0 6px 0 12px;
+}
+/*
+ * 当前标签 = 页面。同一种底色、底边不封口，中间没有描边把它们切开——
+ * 这就是"连在一起"的全部做法（Obsidian 与浏览器都不给它画外框）。
+ */
+.tb-tab.on {
+  background: var(--panel);
+  box-shadow: none;
+}
+.tb-tab.on::before {
+  display: none;
+}
+/* 非当前标签退到底色里，鼠标扫过才浮起来一点 */
+.tb-tab:hover:not(.on) {
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+}
+.tb-tab-new {
+  align-self: center;
+  margin-left: 4px;
+}

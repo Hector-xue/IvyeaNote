@@ -123,6 +123,15 @@ html.frameless #root {
 }
 .sidebar.collapsed {
   visibility: hidden;
+  /*
+   * v0.11.14：**内边距与右边框也要收掉。**
+   * 侧栏是 border-box，宽度写 0 之后左右各 12px 的内边距加 1px 描边仍然占着
+   * 25px——收起后正文左边界比"ribbon 右边"多出这 25px，顶栏那条标签就对不上
+   * 它底下的页面了（标签左边界 42、页面左边界 67）。收起时它不该占任何宽度。
+   */
+  padding-left: 0;
+  padding-right: 0;
+  border-right-width: 0;
   transition:
     width 0.18s ease,
     min-width 0.18s ease,

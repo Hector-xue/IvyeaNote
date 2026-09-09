@@ -19,7 +19,7 @@
  *   窗口顶边本来就是所有人下意识去拖的地方。
  */
 import { useEffect, useRef, useState } from 'react';
-import { RibbonIcon } from './Icons';
+import { RibbonIcon, type IconName } from './Icons';
 import { ContextMenu, type MenuAnchor, type MenuItem } from './ContextMenu';
 import { needsCustomChrome } from './WindowChrome';
 
@@ -53,6 +53,27 @@ export interface TopBarProps {
   onSelectTab?(path: string): void;
   onCloseTab?(path: string): void;
   onNewTab?(): void;
+  /**
+   * v0.11.14：**侧栏正上方那一格**里的常用动作。
+   *
+   * 用户原话：「标签是和页面连在一起的，但是侧边栏在打开的时候侧边栏的上面就
+   * 没法放标签了，要不然侧边栏上面用一些常用的功能按钮填充一下，侧边栏收起的
+   * 时候连带这些功能按钮一起收起」。
+   *
+   * 所以顶栏分成两段：左边这一格宽度**跟着侧栏走**（收起时归零，按钮一起没），
+   * 标签从内容区的左边界起画，于是当前标签正好落在它那一页的正上方。
+   * 这些按钮是从侧栏里那行 `.side-actions` 搬上来的，不是新增的第二份入口。
+   */
+  quick?: QuickAction[];
+}
+
+/** 顶栏左格里的一颗按钮：要么直接执行，要么点开一个小菜单（排序那种） */
+export interface QuickAction {
+  id: string;
+  icon: IconName;
+  title: string;
+  run?(): void;
+  items?: MenuItem[];
 }
 
 /** 标签上显示的名字：只留文件名、去扩展名（完整路径在 title 里） */
@@ -166,17 +187,41 @@ export function TopBar(props: TopBarProps) {
     // 整条都是拖拽区。属性打在容器与各个"空白"子元素上：
     // 按钮是子元素、不带这个属性，点击照常工作
     <header className="top-bar" data-tauri-drag-region>
-      {props.onToggleSidebar && (
-        <button
-          className="tb-btn tb-side"
-          title={props.sidebarOpen ? '收起侧边栏（Ctrl+\\）' : '展开侧边栏（Ctrl+\\）'}
-          aria-label="切换侧边栏"
-          aria-pressed={props.sidebarOpen ?? true}
-          onClick={props.onToggleSidebar}
-        >
-          <RibbonIcon name="sidebar" size={16} />
-        </button>
-      )}
+      {/*
+        左格：折叠按钮永远在（对着 ribbon 那列），后面跟着常用按钮。
+        整格的宽度 = ribbon + 侧栏（CSS 里按 --side-w 算），侧栏一收，这一格缩到
+        只剩折叠按钮，常用按钮被裁掉——"连带这些功能按钮一起收起"。
+        标签因此总是从内容区的左边界起画。
+      */}
+      <div className="tb-left" data-tauri-drag-region>
+        {props.onToggleSidebar && (
+          <button
+            className="tb-btn tb-side"
+            title={props.sidebarOpen ? '收起侧边栏（Ctrl+\\）' : '展开侧边栏（Ctrl+\\）'}
+            aria-label="切换侧边栏"
+            aria-pressed={props.sidebarOpen ?? true}
+            onClick={props.onToggleSidebar}
+          >
+            <RibbonIcon name="sidebar" size={16} />
+          </button>
+        )}
+        {props.quick?.map((q) => (
+          <button
+            key={q.id}
+            className="tb-btn tb-quick"
+            title={q.title}
+            aria-label={q.title}
+            onClick={(e) => {
+              if (q.items && q.items.length > 0) {
+                const r = e.currentTarget.getBoundingClientRect();
+                setMenu({ x: r.left, y: r.bottom + 4, items: q.items });
+              } else q.run?.();
+            }}
+          >
+            <RibbonIcon name={q.icon} size={17} />
+          </button>
+        ))}
+      </div>
       {props.tabs && props.tabs.length > 0 ? (
         /* 标签之间的缝隙、以及右侧余白都要能拖窗口：v0.11.3 丢过一次"顶栏不能拖"，
            那次用户的原话是「点哪都拖不动」。标签本身是子元素，不受影响。 */

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import logoUrl from '../assets/logo.png';
 import { MarkdownEditor } from './MarkdownEditor';
 import { FileTree, buildFileTree } from './FileTree';
@@ -245,43 +245,30 @@ export function MainView(props: Props) {
     setMenu({ x: r.left, y: r.bottom + 4, items });
   };
 
-  const openSortMenu = (el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    setMenu({
-      x: r.left,
-      y: r.bottom + 4,
-      items: [
-        // 打勾走 checked，不再往标签里塞一个 ✓——那样两种排序的文字长度都不一样
-        { id: 'name', label: '按名称', checked: props.sortMode === 'name', run: () => props.onSortChange('name') },
-        {
-          id: 'mtime',
-          label: '按修改时间',
-          checked: props.sortMode === 'mtime',
-          run: () => props.onSortChange('mtime'),
-        },
-      ],
-    });
-  };
-
-  /** 全部折叠：把树里所有目录塞进折叠集合 */
-  const collapseAll = () => {
-    if (!props.onToggleDir) return;
-    const dirs: string[] = [];
-    const walk = (ns: TreeNode[]) => {
-      for (const n of ns) {
-        if (n.type === 'dir') {
-          dirs.push(n.path);
-          walk(n.children ?? []);
-        }
-      }
-    };
-    walk(fileTree);
-    // 已折叠的跳过，否则会把它们又切回展开
-    for (const d of dirs) if (!props.collapsedDirs?.has(d)) props.onToggleDir(d);
-  };
+  /*
+   * v0.11.14：`openSortMenu` / `collapseAll` 跟着那行按钮一起搬到 App 了
+   * （顶栏左格要用它们，而顶栏由 App 渲染）。留在这儿会是两份实现。
+   */
   /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */
   const [sidebarTab, setSidebarTab] = useState<'files' | 'search'>('files');
   const sideOpen = props.sidebarOpen ?? true;
+
+  /*
+   * v0.11.14：把侧栏当前宽度写到根元素上。
+   *
+   * 顶栏（由 App 渲染，不在这棵子树里）要照着它决定左格有多宽——标签必须从
+   * 内容区的左边界起画，当前标签才会落在它那一页的正上方。宽度归 usePanelWidth
+   * 持有、还能拖，除了一个 CSS 变量没有别的办法把它交出去。
+   * 收起时写 0：那一格连同里面的按钮一起消失，正是用户要的"一起收起来"。
+   */
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    root.style.setProperty('--side-w', `${sideOpen ? sideW.width : 0}px`);
+    return () => {
+      root.style.removeProperty('--side-w');
+    };
+  }, [sideOpen, sideW.width]);
 
   /** 右键菜单条目：文件与文件夹给不同的动作集 */
   const openMenu = (node: TreeNode, x: number, y: number) => {
@@ -323,6 +310,13 @@ export function MainView(props: Props) {
   const stats = useMemo(() => countWords(props.doc ?? ''), [props.doc]);
   /** 上一次同步报告里有错 = 现在的状态不是"已同步"。别再一律写「已同步」 */
   const syncFailed = !props.syncDisabled && (props.lastReport?.errors.length ?? 0) > 0;
+  /*
+   * v0.11.14：**离线是一种状态，不是一次失败。**
+   * 自动同步撞上"连不上服务器"时引擎会把错误吞掉、只留 offline 标记
+   * （见 hooks/useSyncEngine 的 quiet）——状态栏照说实话，但用的是"离线"这个词：
+   * 它准确、不吓人，而且明确指向"等网络回来"，而不是"你得去查服务端"。
+   */
+  const offline = !props.syncDisabled && !syncFailed && !!props.lastReport?.offline;
   /**
    * 一份同步报告都还没有 = 这个会话里**一次都没同步成功过**，同样说不出「已同步」。
    *
@@ -431,28 +425,13 @@ export function MainView(props: Props) {
           一指宽——用户看到的就是"同一个功能有两个按钮"。ribbon 是 Obsidian 的
           面板切换器，留它一个就够，侧栏还能多出一行文件树的高度。
         */}
-        {/* Obsidian 式图标操作条：新建笔记 / 新建文件夹 / 排序 / 全部折叠。
-            此前这些是侧栏底部的 2×2 emoji 按钮格，和文件树离得最远、还最抢眼 */}
-        {sidebarTab === 'files' && (
-        <div className="side-actions">
-          <button className="icon-btn" title="新建笔记" onClick={props.onCreateNote}>
-            <RibbonIcon name="file-plus" size={17} />
-          </button>
-          <button className="icon-btn" title="新建文件夹" onClick={() => props.onCreateFolder('')}>
-            <RibbonIcon name="folder-plus" size={17} />
-          </button>
-          <button
-            className="icon-btn"
-            title={props.sortMode === 'name' ? '排序：按名称' : '排序：按修改时间'}
-            onClick={(e) => openSortMenu(e.currentTarget)}
-          >
-            <RibbonIcon name="sort" size={17} />
-          </button>
-          <button className="icon-btn" title="全部折叠" onClick={collapseAll}>
-            <RibbonIcon name="collapse" size={17} />
-          </button>
-        </div>
-        )}
+        {/*
+          v0.11.14：这行「新建笔记 / 新建文件夹 / 排序 / 全部折叠」**搬到顶栏
+          侧栏正上方那一格**去了（见 ui/TopBar 的 quick）。原因是标签页要和它
+          底下那一页对齐，而侧栏上方那块地方装不下标签——用它装这四颗常用按钮，
+          侧栏一收，这一格连按钮一起收掉。搬走而不是复制：同一个功能出现两次，
+          正是这个仓库被点过名的毛病。
+        */}
 
         {props.importProgress && (
           <div className="import-progress" title="正在导入 Obsidian 笔记">
@@ -681,7 +660,9 @@ export function MainView(props: Props) {
                     ? '同步中…'
                     : syncFailed
                       ? `上次同步失败：${props.lastReport?.errors[0]}（点击查看还有什么没上去）`
-                      : syncPending
+                      : offline
+                        ? '连不上服务器；网络恢复后会自动同步，点击立即重试'
+                        : syncPending
                         ? '这台设备还没同步过；点击立即同步一次'
                         : '已自动同步；点击立即同步一次'
               }
@@ -698,9 +679,11 @@ export function MainView(props: Props) {
                   ? '同步中'
                   : syncFailed
                     ? '同步失败'
-                    : syncPending
-                      ? '待同步'
-                      : '已同步'}
+                    : offline
+                      ? '离线'
+                      : syncPending
+                        ? '待同步'
+                        : '已同步'}
             </button>
             {/*
               v0.11.2：**打开 PDF 时不再显示「0 词 · 0 字符」**——那是当前笔记的字数，

@@ -412,6 +412,8 @@ export function MobileView(props: Props) {
   };
   const report = props.lastReport;
   const hasError = report && report.errors.length > 0;
+  /** 自动同步撞上网络不通：引擎把错误吞掉只留这个标记，见下面那条 m-offline */
+  const offline = !!report?.offline && !hasError;
 
   /* v0.8.3 的全文搜索、v0.5.0 的文件树渲染，v0.10.0 起都搬进了 ui/mobile/Drawer。
      这里只留状态（query / collapsedDirs），渲染归组件。 */
@@ -499,7 +501,12 @@ export function MobileView(props: Props) {
         files={props.files}
         pdfs={props.pdfs}
         allFiles={props.allFiles}
-        onOpenAttachment={props.onOpenAttachment}
+        /* 点开图片/附件同样收起抽屉——和点笔记、点 PDF 一致；
+           图片是全屏看的，抽屉留在底下只会在关掉图片后显得莫名其妙 */
+        onOpenAttachment={(p) => {
+          props.onOpenAttachment?.(p);
+          setDrawerOpen(false);
+        }}
         emptyDirs={props.emptyDirs ?? []}
         currentPath={props.currentPath}
         collapsedDirs={collapsedDirs}
@@ -528,17 +535,27 @@ export function MobileView(props: Props) {
         onClose={() => setDrawerOpen(false)}
       />
 
+      {/*
+        v0.11.14：**顶栏在滚动容器外面。**
+
+        v0.11.13 把滚动交给 `.m-main` 是对的（标题该跟着正文走），但顶栏当时还
+        渲染在 `.m-main` **里面**——滚的是包含顶栏的那一层，于是图标栏一起划走了，
+        想点左上角的侧栏按钮得先滚回最顶（用户原话）。
+        顶栏提出来当 `.m-app` 的直接子元素，`.m-app` 改成纵向 flex：
+        第一层 UI 钉住，标题与正文在下面那层滚。这也是 Obsidian 移动端的分层。
+      */}
+      <TopBar
+        path={props.currentPath}
+        vaultName={props.vault.name}
+        mode={mode}
+        syncing={props.syncing}
+        onOpenDrawer={() => setDrawerOpen(true)}
+        onToggleMode={() => setMode(mode === 'edit' ? 'read' : 'edit')}
+        onMore={() => setMenu('note')}
+      />
+
       {/* 主区 */}
       <main className="m-main" ref={mainRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        <TopBar
-          path={props.currentPath}
-          vaultName={props.vault.name}
-          mode={mode}
-          syncing={props.syncing}
-          onOpenDrawer={() => setDrawerOpen(true)}
-          onToggleMode={() => setMode(mode === 'edit' ? 'read' : 'edit')}
-          onMore={() => setMenu('note')}
-        />
         {/*
           登录过期要给**出路**，不能只把服务端那句原话贴出来。
           手机端 2026-09-08 就卡在「拉取失败：refresh token 无效或已过期」这条红条上：
@@ -551,8 +568,21 @@ export function MobileView(props: Props) {
               重新登录
             </button>
           </div>
+        ) : hasError ? (
+          <div className="m-error">⚠ {report!.errors[0]}</div>
         ) : (
-          hasError && <div className="m-error">⚠ {report!.errors[0]}</div>
+          /*
+           * v0.11.14：**连不上服务器不再是一条红条。**
+           *
+           * 手机上「网络这一刻不通」是常态：刚解锁、切回前台、VPN 在重连——
+           * 而自动同步恰好在启动 2s / 每次切回前台 / 每 60s 各跑一次。此前每撞上
+           * 一次就把「拉取失败：连不上服务器（Failed to fetch）+ 三条排查提示」
+           * 整段贴在正文上方，直到下一次成功才消失（用户：「偶尔的这个报错是怎么回事」）。
+           * 那三条提示是给"服务端装错了"准备的，对一次网络抖动毫无意义。
+           * 现在自动同步撞上网络错误只留这一行，联网后自己就没了；
+           * 手动点同步仍然给完整的红条与排查提示（那时人就是来看原因的）。
+           */
+          offline && <div className="m-offline">离线，联网后自动同步</div>
         )}
 
         {props.baseDoc ? (

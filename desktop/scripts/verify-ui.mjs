@@ -1108,6 +1108,68 @@ await new Promise((r) => setTimeout(r, 2600));
     afterClose.active !== null && afterClose.hasEditor, afterClose);
   await shot('tabs.png');
 
+  /*
+   * v0.11.14：**标签要和它底下那一页连在一起**（用户点名"参考浏览器和 obsidian"）。
+   * 判据是量出来的三件事，不是"看着像"：
+   * ① 标签条的左边界 = 内容区的左边界（此前标签横跨整条顶栏，当前标签可能停在
+   *    侧栏正上方，而它代表的那一页在右边）；
+   * ② 当前标签的底色 = 页面的底色，且两者之间没有缝；
+   * ③ 侧栏正上方那一格装的是常用按钮，侧栏一收，它连按钮一起收掉。
+   */
+  const tabAlign = await evaluate(`(() => {
+    const strip = document.querySelector('.tb-tabs');
+    const pane = document.querySelector('.editor-pane');
+    const on = document.querySelector('.tb-tab.on');
+    const left = document.querySelector('.tb-left');
+    const bar = document.querySelector('.top-bar');
+    if (!strip || !pane || !on || !left || !bar) return null;
+    const s = strip.getBoundingClientRect(), p = pane.getBoundingClientRect();
+    const t = on.getBoundingClientRect(), b = bar.getBoundingClientRect();
+    return {
+      stripLeft: Math.round(s.left),
+      paneLeft: Math.round(p.left),
+      leftZoneW: Math.round(left.getBoundingClientRect().width),
+      quick: left.querySelectorAll('.tb-quick').length,
+      tabBg: getComputedStyle(on).backgroundColor,
+      paneBg: getComputedStyle(document.querySelector('.editor-host') ?? pane).backgroundColor,
+      gapUnderTab: Math.round(b.bottom - t.bottom),
+      sideActionsInSidebar: document.querySelectorAll('.sidebar .side-actions').length,
+    };
+  })()`);
+  check('标签条从内容区的左边界起画（当前标签正落在它那一页的上方）',
+    !!tabAlign && Math.abs(tabAlign.stripLeft - tabAlign.paneLeft) <= 2, tabAlign);
+  check('当前标签与页面同底色、底边相接（中间不留缝，也不画外框）',
+    !!tabAlign && tabAlign.tabBg === tabAlign.paneBg && tabAlign.gapUnderTab === 0, tabAlign);
+  check('侧栏上方那一格装着常用按钮，且侧栏里不再有第二份',
+    !!tabAlign && tabAlign.quick === 4 && tabAlign.sideActionsInSidebar === 0, tabAlign);
+  await shot('tabs-aligned.png');
+
+  // 收起侧栏：那一格缩到只剩折叠按钮，标签跟着页面一起往左顶
+  await evaluate(`(() => { document.querySelector('.top-bar button[aria-label="切换侧边栏"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const collapsed = await evaluate(`(() => {
+    const strip = document.querySelector('.tb-tabs');
+    const pane = document.querySelector('.editor-pane');
+    const left = document.querySelector('.tb-left');
+    if (!strip || !pane || !left) return null;
+    const quick = [...left.querySelectorAll('.tb-quick')];
+    const lz = left.getBoundingClientRect();
+    return {
+      stripLeft: Math.round(strip.getBoundingClientRect().left),
+      paneLeft: Math.round(pane.getBoundingClientRect().left),
+      leftZoneW: Math.round(lz.width),
+      // 按钮还在 DOM 里（宽度过渡靠裁切），但已经被那一格切在外面 = 看不见也点不到
+      quickVisible: quick.filter((q) => q.getBoundingClientRect().right <= lz.right + 1).length,
+      sideVar: getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim(),
+    };
+  })()`);
+  check('侧栏收起时那一格连按钮一起收掉，标签仍贴着内容区左边界',
+    !!collapsed && collapsed.sideVar === '0px' && collapsed.quickVisible === 0 &&
+    Math.abs(collapsed.stripLeft - collapsed.paneLeft) <= 2, collapsed);
+  await shot('tabs-sidebar-collapsed.png');
+  await evaluate(`(() => { document.querySelector('.top-bar button[aria-label="切换侧边栏"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+
   // --- 正文配色：量 computed 值，别靠眼睛 ---
   await evaluate(`(() => {
     const t = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('配色样张'));
@@ -1245,15 +1307,25 @@ await new Promise((r) => setTimeout(r, 2600));
   }
   const sheet = await evaluate(`(() => {
     const g = document.querySelector('.m-sheet2-group');
-    if (!g) return null;
-    const gs = getComputedStyle(g);
+    const sheetEl = document.querySelector('.m-sheet2');
+    if (!g || !sheetEl) return null;
+    const ss = getComputedStyle(sheetEl);
+    const mask = getComputedStyle(document.querySelector('.m-sheet-mask'));
+    const r = sheetEl.getBoundingClientRect();
     const items = [...g.querySelectorAll('.m-sheet2-item')];
     const it = items[0] ? items[0].getBoundingClientRect() : null;
     const sep = items[1] ? getComputedStyle(items[1], '::before') : null;
     return {
       groups: document.querySelectorAll('.m-sheet2-group').length,
-      radius: gs.borderTopLeftRadius,
-      shadow: gs.boxShadow !== 'none',
+      radius: ss.borderTopLeftRadius,
+      // v0.11.14：底色长在整张纸上，不再是几张飘着的卡片
+      sheetBg: ss.backgroundColor,
+      transparentSheet: /rgba\(0, 0, 0, 0\)|transparent/.test(ss.backgroundColor),
+      maskDim: mask.backgroundColor,
+      maskTransparent: /rgba\(0, 0, 0, 0\)|transparent/.test(mask.backgroundColor),
+      left: Math.round(r.left),
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.bottom),
       itemH: it ? Math.round(it.height) : null,
       sepLeft: sep ? sep.left : null,
       icons: g.querySelectorAll('.m-sheet2-ico svg').length,
@@ -1266,9 +1338,10 @@ await new Promise((r) => setTimeout(r, 2600));
       row: ${JSON.stringify(row)},
     }))()`)));
   }
-  check('底部菜单是分组圆角卡片，行高够按，分隔线从文字处起画（不横穿图标栏）',
-    !!sheet && parseFloat(sheet.radius) >= 12 && sheet.shadow && (sheet.itemH ?? 0) >= 48 &&
-    parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
+  check('底部菜单是一整张贴边的纸（有底色、上两角圆、遮罩压暗），行高够按、分隔线从文字处起画',
+    !!sheet && parseFloat(sheet.radius) >= 12 && !sheet.transparentSheet && !sheet.maskTransparent &&
+    sheet.left === 0 && sheet.right === 0 && sheet.bottom === 0 &&
+    (sheet.itemH ?? 0) >= 48 && parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
   await shot('mobile-sheet.png');
 
   // --- v0.11.13：标题不冻结 / 大纲弹层形状 / 底部四个键 ---
@@ -1337,6 +1410,32 @@ await new Promise((r) => setTimeout(r, 2600));
     !!title && !title.missing && title.scrollable && after !== null && after < title.before - 200,
     { ...title, after });
 
+  /*
+   * v0.11.14：**滚的是标题，不是顶栏。**
+   * v0.11.13 把滚动交给 .m-main 时顶栏还在它里面，于是那排图标一起划走了，
+   * 用户想点左上角的侧栏按钮得先滚回最顶。这条量的就是"滚完之后顶栏还在原位、
+   * 而且那颗按钮真的能点到"——只看它 top===0 不够，被别的东西盖住也是点不到。
+   */
+  const topFrozen = await evaluate(`(() => {
+    const bar = document.querySelector('.m-top');
+    const btn = document.querySelector('.m-top button[aria-label="打开文件列表"]');
+    const main = document.querySelector('.m-main');
+    if (!bar || !btn || !main) return null;
+    const b = bar.getBoundingClientRect(), k = btn.getBoundingClientRect();
+    const hit = document.elementFromPoint(Math.round(k.left + k.width / 2), Math.round(k.top + k.height / 2));
+    return {
+      barTop: Math.round(b.top),
+      barBottom: Math.round(b.bottom),
+      scrolled: Math.round(main.scrollTop),
+      mainTop: Math.round(main.getBoundingClientRect().top),
+      btnHit: !!(hit && hit.closest('.m-top')),
+    };
+  })()`);
+  check('滚下去之后顶栏还钉在最上面，左上角那颗侧栏按钮仍然点得到',
+    !!topFrozen && topFrozen.scrolled > 100 && topFrozen.barTop === 0 && topFrozen.btnHit &&
+    topFrozen.mainTop >= topFrozen.barBottom, topFrozen);
+  await shot('mobile-scrolled.png');
+
   // 大纲：贴底、上面两角圆、有把手
   await evaluate(`(() => {
     const b = [...document.querySelectorAll('.m-bottom .m-nav-btn')].find(x => x.getAttribute('aria-label') === '大纲');
@@ -1345,22 +1444,79 @@ await new Promise((r) => setTimeout(r, 2600));
   const outline = await evaluate(`(() => {
     const el = document.querySelector('.m-outline2');
     if (!el) return null;
-    // 圆角在卡片上，m-sheet2 只是个透明外壳（和底部菜单同一套结构）
-    const card = el.querySelector('.m-sheet2-group') ?? el;
-    const cs = getComputedStyle(card);
+    // v0.11.14：圆角与底色都在整张纸上（和底部菜单同一套结构）
+    const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
     return {
       radius: cs.borderTopLeftRadius,
+      opaque: !/rgba\(0, 0, 0, 0\)|transparent/.test(cs.backgroundColor),
       grip: !!el.querySelector('.m-sheet2-grip'),
       items: el.querySelectorAll('.m-outline-item').length,
       bottomGap: Math.round(window.innerHeight - r.bottom),
       onScreen: r.top > 0 && r.bottom <= window.innerHeight + 2,
     };
   })()`);
-  check('大纲是贴底的圆角卡片（不再是浮在半空的直角块）',
-    !!outline && parseFloat(outline.radius) >= 12 && outline.grip && outline.items > 0 &&
-    outline.onScreen && outline.bottomGap <= 24, outline);
+  check('大纲是贴底的圆角卡片、有自己的底色（不再是浮在半空的直角块）',
+    !!outline && parseFloat(outline.radius) >= 12 && outline.opaque && outline.grip &&
+    outline.items > 0 && outline.onScreen && outline.bottomGap <= 24, outline);
   await shot('mobile-outline.png');
+
+  /*
+   * v0.11.14：**手机上点一张图片要真的能看到它。**
+   * 用户原话：「手机端无法直接打开图片，显示图片」。真因是 imageViewEl（那层
+   * 全屏图片）只挂在桌面分支上——手机点了以后 resolveImage 照样解析出 blob、
+   * setState 也照样发生，然后什么都不渲染。所以这里非量到那层不可。
+   */
+  await evaluate(`(async () => {
+    const bin = atob(${JSON.stringify(PNG_1X1)});
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('单图.png', { create: true });
+      const w = await fh.createWritable();
+      await w.write(bytes);
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const tappedImg = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('单图'));
+    if (!el) return { found: false };
+    const row = el.closest('.m-tree-row') ?? el;
+    row.scrollIntoView({ block: 'center' });
+    row.click();
+    return { found: true };
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const viewer = await evaluate(`(() => {
+    const v = document.querySelector('.img-view');
+    if (!v) return { open: false, toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|') };
+    const img = v.querySelector('img');
+    const r = img ? img.getBoundingClientRect() : null;
+    return {
+      open: true,
+      // 图真的解码出来了才算数：挂个坏 blob 上去同样"有元素"
+      natural: img ? img.naturalWidth : 0,
+      onScreen: !!r && r.width > 0 && r.height > 0,
+      name: v.querySelector('.img-view-name')?.textContent ?? null,
+      drawerClosed: !document.querySelector('.m-drawer2.open'),
+    };
+  })()`);
+  check('手机端点开一张图片，全屏图片层真的出现并解出了图，抽屉跟着收起（此前只挂在桌面分支）',
+    tappedImg.found && viewer.open && viewer.natural > 0 && viewer.onScreen && viewer.drawerClosed,
+    { tappedImg, viewer });
+  await shot('mobile-image.png');
+  await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 300));
 
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');

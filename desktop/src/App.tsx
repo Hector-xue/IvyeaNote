@@ -17,7 +17,7 @@ import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
 import { linkVaults } from './lib/vaultLink';
 import { baseNameOf, openWithSystem } from './lib/openExternal';
-import { TopBar } from './ui/TopBar';
+import { TopBar, type QuickAction } from './ui/TopBar';
 import type { MenuItem } from './ui/ContextMenu';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient, sha256Hex } from './lib/api';
@@ -486,6 +486,7 @@ export default function App() {
     lastReport,
     setLastReport,
     sync: doSync,
+    autoSync: doAutoSync,
     upload: doUpload,
     download: doDownload,
   } = useSyncEngine({
@@ -659,22 +660,31 @@ export default function App() {
     // 登录态过期时不再自动重试：refresh 已经废了，重试一万次也是同一条错，
     // 只会把红条刷得更频繁。等用户重新登录。
     if (!client || !prefs.autoSync || sessionExpired) return;
-    const timer = window.setTimeout(() => void doSync(), 2000); // 启动拉取一次
+    /*
+     * v0.11.14：这四个时机走 `doAutoSync`——没人点过任何按钮，一次网络抖动就
+     * 不该在正文上方贴一段带排查提示的红字。手机上「刚解锁 / 切回前台 / VPN
+     * 正在重连」恰好全落在这些时机上（见 useSyncEngine 的 quiet）。
+     */
+    const timer = window.setTimeout(() => void doAutoSync(), 2000); // 启动拉取一次
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void doSync();
+      if (document.visibilityState === 'visible') void doAutoSync();
     };
+    // 网络回来的那一刻补一次：否则要等下一轮 60s 轮询，中间那段一直显示"离线"
+    const onOnline = () => void doAutoSync();
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
+    window.addEventListener('online', onOnline);
     const poll = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void doSync();
+      if (document.visibilityState === 'visible') void doAutoSync();
     }, 60_000);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(poll);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
+      window.removeEventListener('online', onOnline);
     };
-  }, [client, prefs.autoSync, doSync, sessionExpired]);
+  }, [client, prefs.autoSync, doAutoSync, sessionExpired]);
 
   /*
    * Ctrl+\\ 收起 / 展开侧边栏（和 Obsidian 同一个键位）。
@@ -2008,8 +2018,56 @@ export default function App() {
    * 漏挂哪一支，那一屏就关不掉窗口。抽成变量而不是复制四遍，正是这个仓库
    * 「弹层挂错树」那条老毛病的解法。移动端不挂：MobileView 自带顶栏。
    */
+  /**
+   * v0.11.14：顶栏「侧栏正上方那一格」里的四颗按钮。
+   *
+   * 它们是从侧栏那行 `.side-actions` **搬**上来的，不是新增的第二份入口——
+   * 标签页要和它底下那一页左边界对齐，侧栏上方那块位置就空了出来，用户点名
+   * 用常用按钮填上，并且「侧边栏收起的时候连带这些功能按钮一起收起」。
+   */
+  const quickActions: QuickAction[] = useMemo(
+    () => [
+      { id: 'new-note', icon: 'file-plus', title: '新建笔记', run: () => void onCreateNote('') },
+      {
+        id: 'new-folder',
+        icon: 'folder-plus',
+        title: '新建文件夹',
+        run: () => void onCreateFolder(''),
+      },
+      {
+        id: 'sort',
+        icon: 'sort',
+        title: sortMode === 'name' ? '排序：按名称' : '排序：按修改时间',
+        items: [
+          { id: 'name', label: '按名称', checked: sortMode === 'name', run: () => setSortMode('name') },
+          {
+            id: 'mtime',
+            label: '按修改时间',
+            checked: sortMode === 'mtime',
+            run: () => setSortMode('mtime'),
+          },
+        ],
+      },
+      {
+        id: 'collapse',
+        icon: 'collapse',
+        title: '全部折叠',
+        run: () =>
+          setCollapsedDirs((cur) => {
+            // 已折叠的跳过是多余的：这里是"全部折叠"，直接并进去就行（toggle 才需要跳过）
+            const next = new Set(cur);
+            for (const d of allDirs) next.add(d);
+            saveCollapsed(next);
+            return next;
+          }),
+      },
+    ],
+    [onCreateNote, onCreateFolder, sortMode, setSortMode, allDirs]
+  );
+
   const topBarEl = (
     <TopBar
+      quick={quickActions}
       tabs={openTabs}
       onSelectTab={(p) => void openFileInTab(p)}
       onCloseTab={(p) => {
@@ -2206,6 +2264,16 @@ export default function App() {
           />
         )}
         {settingsEl}
+        {/*
+          v0.11.14：**图片查看层在手机上没挂过。**
+
+          `onOpenAttachment` 点图片时会 `resolveImage` 出一个 blob URL 再
+          `setImageView`——然后什么都不会发生，因为 `imageViewEl` 只写在下面的
+          桌面分支里（用户：「手机端无法直接打开图片、显示图片」）。
+          它上面那行注释早就写着"桌面和移动是两棵树，只挂一边就是点了没反应"，
+          而它自己正是只挂了一边。
+        */}
+        {imageViewEl}
         {/* 这三个弹层此前只挂在桌面分支上：手机点「生成配对码」什么都不出现，
             冲突和同步状态在手机上则完全没有出口 */}
         {pairEl}
