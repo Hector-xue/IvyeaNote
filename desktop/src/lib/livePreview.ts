@@ -90,8 +90,26 @@ export function scanFences(lines: Iterable<string>): Map<number, 'open' | 'body'
 
 export const livePreviewTheme = {
   '.cm-line': { lineHeight: '1.7' },
-  '.cm-live-h1': { fontSize: '1.75em', fontWeight: '700', lineHeight: '1.3', marginTop: '0.4em' },
-  '.cm-live-h2': { fontSize: '1.45em', fontWeight: '700', lineHeight: '1.35', marginTop: '0.35em' },
+  /*
+   * v0.11.15：**行级装饰一律不能用 margin，只能用 padding。**
+   *
+   * 用户报「用键盘方向键无法移动到大标题，用鼠标也无法点击到大标题，
+   * 上方向键经常跳到很上面」。真因在这两行：CodeMirror 量行高走的是
+   * `getBoundingClientRect()`，**外边距不在盒子里**——每个标题多出来的这
+   * 0.4em 它一概不知道。于是它算出来的坐标从第一个标题起就开始比实际偏，
+   * 标题越多偏得越远：点在标题上落到别的行、上键一按跳过一整段，
+   * 都是同一个偏移在作祟。padding 在盒子里，量得到。
+   */
+  /*
+   * **标题行不设 line-height。** 实测（真实产物 + CDP 逐条抹样式）：只要在
+   * `.cm-line` 上改 line-height，CodeMirror 的高度模型就和真实 DOM 对不上，
+   * 于是上下方向键会**整行跳过标题**、坐标命中也跟着偏——用户原话
+   * 「用键盘的方向键无法移动到大标题，用鼠标也无法点击到大标题，
+   * 上方向键经常跳到很上面」。抹掉 line-height 之后方向键逐行走，字号照旧。
+   * 同理不能用 margin（不在盒子里，量不到），要留白只能用 padding。
+   */
+  '.cm-live-h1': { fontSize: '1.75em', fontWeight: '700', paddingTop: '0.4em' },
+  '.cm-live-h2': { fontSize: '1.45em', fontWeight: '700', paddingTop: '0.35em' },
   '.cm-live-h3': { fontSize: '1.2em', fontWeight: '650' },
   '.cm-live-h4, .cm-live-h5, .cm-live-h6': { fontSize: '1.05em', fontWeight: '650' },
   '.cm-live-bold': { fontWeight: '700' },
@@ -117,7 +135,8 @@ export const livePreviewTheme = {
     borderRadius: 'var(--r-1, 6px)',
     verticalAlign: 'text-bottom',
   },
-  '.cm-live-img.alone': { display: 'block', margin: '6px 0' },
+  // 同上：图片独占一行时用 padding 让出上下留白，margin 会从行盒里漏出去
+  '.cm-live-img.alone': { display: 'block', padding: '6px 0' },
   '.cm-live-img-missing': {
     display: 'inline-block',
     padding: '2px 8px',
@@ -183,7 +202,8 @@ export const livePreviewTheme = {
   '.cm-live-hr': {
     borderBottom: '1px solid var(--border, #ccc)',
     height: '0.9em',
-    margin: '0.5em 0',
+    // 同上：这里原来是 margin，分隔线一多，下面所有行的坐标就一起往下漂
+    padding: '0.5em 0',
   },
   // 表格：等宽才对得齐；表头加重，|---| 分隔行淡出（它是语法不是内容）
   '.cm-live-table': {
@@ -217,13 +237,35 @@ export const livePreviewTheme = {
     opacity: '0.92',
   },
   '.cm-live-marker': { color: 'transparent', fontSize: '0px' },
-  // 链接：颜色 + 手型即可。下划线留给 hover——满屏下划线会把正文切碎
+  /*
+   * 无序列表的 `-` 画成圆点（Obsidian 的 Live Preview 就是这样）。
+   *
+   * 走 widget 替换那**一个字符**，和任务复选框同一条路：先试过
+   * `visibility:hidden` + `::before` 绝对定位，圆点会吊在字符盒的上沿、还压着
+   * 后面的字——内联元素的百分比定位算的是外层容器，对不齐。替换只换渲染，
+   * 文档里那个 `-` 一个字节都没动。
+   */
+  '.cm-live-bullet': {
+    display: 'inline-block',
+    width: '1ch',
+    color: 'var(--muted, #888)',
+  },
+  /*
+   * 链接：颜色 + **一条淡下划线**。
+   *
+   * 原来只给颜色（"满屏下划线会把正文切碎"），实测的代价是用户根本认不出它是链接——
+   * 拿 Obsidian 的截图对比时的原话是「也没有自动识别链接」。折中：下划线用
+   * 链接色的半透明、压到基线以下 2px，扫一眼知道是链接，又不会把整段切碎；
+   * hover 时补成实色。
+   */
   '.cm-live-link': {
     color: 'var(--accent, #4a8)',
     cursor: 'pointer',
-    textDecoration: 'none',
+    textDecoration: 'underline',
+    textDecorationColor: 'color-mix(in srgb, var(--accent, #4a8) 45%, transparent)',
+    textUnderlineOffset: '2px',
   },
-  '.cm-live-link:hover': { textDecoration: 'underline' },
+  '.cm-live-link:hover': { textDecorationColor: 'var(--accent, #4a8)' },
   '.cm-task-checkbox': {
     border: '1.5px solid color-mix(in srgb, var(--accent, #3f6b45) 55%, var(--muted, #999))',
     borderRadius: '3px',
@@ -289,6 +331,23 @@ export function parseTaskLine(
     textFrom: lineFrom + m[0].length,
     checked: m[3].toLowerCase() === 'x',
   };
+}
+
+/**
+ * 无序列表符号（`- ` / `* ` / `+ `）在行内的位置，相对行首。
+ *
+ * Obsidian 的 Live Preview 把它画成实心圆点，我们此前原样露着一个 `-`——
+ * 用户拿两边的截图对比时第一句话就是「很多符号都没有正常显示」。
+ * 返回的是**符号本身那一个字符**的区间：渲染只把它盖成圆点，不动文档内容，
+ * 光标偏移和源码都保持原样（这是本文件的通例，见行内链接那段注释）。
+ *
+ * 任务行（`- [ ] …`）不走这里：它由 parseTaskLine 连符号一起换成复选框。
+ * 分隔线（`---`）也不算列表——先判它，否则 `- - -` 会被当成列表项。
+ */
+export function parseBullet(lineText: string): { from: number; to: number } | null {
+  const m = /^(\s*)([-*+])(\s)/.exec(lineText);
+  if (!m) return null;
+  return { from: m[1].length, to: m[1].length + 1 };
 }
 
 /** 分隔线：整行只有 3 个以上的 - * _（允许其间有空格）。返回 true 表示这行是 hr */
@@ -444,6 +503,19 @@ class ImageWidget extends WidgetType {
   /** 点击图片要能选中/放大，不该被编辑器吞掉 */
   override ignoreEvent() {
     return false;
+  }
+}
+
+/** 无序列表的圆点。替换的是列表符号那**一个字符**，宽度也按一个字符给 */
+class BulletWidget extends WidgetType {
+  override eq() {
+    return true;
+  }
+  override toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-live-bullet';
+    span.textContent = '•';
+    return span;
   }
 }
 
@@ -728,6 +800,21 @@ export const livePreview = ViewPlugin.fromClass(
            * 3. **整行做悬挂缩进。** 折行后的文字要对齐第一行的文本，而不是顶到
            *    复选框下面（`.cm-live-task` 那条 CSS）。
            */
+          /*
+           * ---- 无序列表的圆点（v0.11.15）----
+           * 放在任务行之前判定：`- [ ] …` 由下面那段连符号一起换成复选框，
+           * 两个都画就会既有圆点又有复选框。分隔线 `---` 在上面已经 continue 掉了。
+           */
+          const bullet = parseTaskLine(t, line.from) ? null : parseBullet(t);
+          if (bullet) {
+            decos.push(
+              Decoration.replace({ widget: new BulletWidget() }).range(
+                line.from + bullet.from,
+                line.from + bullet.to
+              )
+            );
+          }
+
           const task = parseTaskLine(t, line.from);
           if (task) {
             /*

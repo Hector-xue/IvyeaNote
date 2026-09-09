@@ -732,6 +732,89 @@ await new Promise((r) => setTimeout(r, 2600));
   check('点表里的一行会打开那篇笔记（表随之关闭）', await evaluate(`(() => {
     return !document.querySelector('.base-view') && !!document.querySelector('.cm-content');
   })()`));
+
+  /*
+   * v0.11.15：**`.base` 的数据源是"库里的文件"，不是"库里的笔记"。**
+   *
+   * 用户原话：「个人空间统计不完全啊，图片，pdf，个人空间本身的 .base 文件都没有
+   * 在个人空间里面体现」。此前喂给它的是正文索引（只含 .md），于是一张按文件夹
+   * 筛的表里，图片 / PDF / 这个 .base 自己全都不见。这里造一个只按文件夹筛的表，
+   * 数它到底数全了没有。
+   */
+  await evaluate(`(async () => {
+    const bin = atob(${JSON.stringify(PNG_1X1)});
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const dir = await handle.getDirectoryHandle('资料', { create: true });
+      const NL = String.fromCharCode(10);
+      const put = async (n, text) => {
+        const fh = await dir.getFileHandle(n, { create: true });
+        const w = await fh.createWritable();
+        await w.write(new TextEncoder().encode(text));
+        await w.close();
+      };
+      await put('说明.md', ['# 说明', '', '正文', ''].join(NL));
+      await put('全部.base', [
+        'filters:', '  and:', '    - file.inFolder("资料")',
+        'views:', '  - type: table', '    name: 全部', '    order:', '      - file.name', '      - file.ext', '',
+      ].join(NL));
+      const ih = await dir.getFileHandle('插图.png', { create: true });
+      const iw = await ih.createWritable();
+      await iw.write(bytes);
+      await iw.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  // 文件夹可能是收起的：找不到里面的文件就先展开它，再找一次
+  const openedAll = await evaluate(`(async () => {
+    const findFile = () => [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('全部'));
+    if (!findFile()) {
+      const dir = [...document.querySelectorAll('.ft-dir-name')].find(x => x.textContent === '资料');
+      dir?.closest('.ft-dir')?.click();
+      await new Promise(r => setTimeout(r, 400));
+    }
+    const el = findFile();
+    const row = el?.closest('.ft-file');
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return {
+      clicked: !!row,
+      tree: [...document.querySelectorAll('.ft-file-name, .ft-dir-name')].map(x => x.textContent).slice(0, 24),
+    };
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const allFilesTable = await evaluate(`(() => {
+    const v = document.querySelector('.base-view');
+    if (!v) return null;
+    const rows = [...v.querySelectorAll('.base-table tbody tr')].map(r => r.innerText.replace(/\s+/g, ' ').trim());
+    return { count: v.querySelector('.base-count')?.textContent ?? '', rows };
+  })()`);
+  check('.base 表里图片 / .base 自己都在（数据源是库里的文件，不是只有笔记）',
+    openedAll.clicked && !!allFilesTable &&
+    allFilesTable.rows.some((r) => r.includes('插图')) &&
+    allFilesTable.rows.some((r) => r.includes('全部')) &&
+    allFilesTable.rows.some((r) => r.includes('说明')), { ...allFilesTable, ...openedAll });
+  await shot('base-all-files.png');
+
+  // 点图片那一行：要开图片层，而不是拿文本通道去读 PNG 然后炸掉
+  await evaluate(`(() => {
+    const link = [...document.querySelectorAll('.base-table .base-link')].find(a => a.textContent.includes('插图'));
+    link?.click(); return !!link })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const imgFromBase = await evaluate(`(() => {
+    const v = document.querySelector('.img-view');
+    return { open: !!v, natural: v?.querySelector('img')?.naturalWidth ?? 0, err: !!document.querySelector('.err-wrap') };
+  })()`);
+  check('点表里的图片一行会打开图片预览（不是当成笔记去读，也不该把应用打进错误页）',
+    imgFromBase.open && imgFromBase.natural > 0 && !imgFromBase.err, imgFromBase);
+  await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
 }
 
 // ---------- 7.5b 右栏大纲（v0.11.11）----------
@@ -1108,6 +1191,68 @@ await new Promise((r) => setTimeout(r, 2600));
     afterClose.active !== null && afterClose.hasEditor, afterClose);
   await shot('tabs.png');
 
+  /*
+   * v0.11.14：**标签要和它底下那一页连在一起**（用户点名"参考浏览器和 obsidian"）。
+   * 判据是量出来的三件事，不是"看着像"：
+   * ① 标签条的左边界 = 内容区的左边界（此前标签横跨整条顶栏，当前标签可能停在
+   *    侧栏正上方，而它代表的那一页在右边）；
+   * ② 当前标签的底色 = 页面的底色，且两者之间没有缝；
+   * ③ 侧栏正上方那一格装的是常用按钮，侧栏一收，它连按钮一起收掉。
+   */
+  const tabAlign = await evaluate(`(() => {
+    const strip = document.querySelector('.tb-tabs');
+    const pane = document.querySelector('.editor-pane');
+    const on = document.querySelector('.tb-tab.on');
+    const left = document.querySelector('.tb-left');
+    const bar = document.querySelector('.top-bar');
+    if (!strip || !pane || !on || !left || !bar) return null;
+    const s = strip.getBoundingClientRect(), p = pane.getBoundingClientRect();
+    const t = on.getBoundingClientRect(), b = bar.getBoundingClientRect();
+    return {
+      stripLeft: Math.round(s.left),
+      paneLeft: Math.round(p.left),
+      leftZoneW: Math.round(left.getBoundingClientRect().width),
+      quick: left.querySelectorAll('.tb-quick').length,
+      tabBg: getComputedStyle(on).backgroundColor,
+      paneBg: getComputedStyle(document.querySelector('.editor-host') ?? pane).backgroundColor,
+      gapUnderTab: Math.round(b.bottom - t.bottom),
+      sideActionsInSidebar: document.querySelectorAll('.sidebar .side-actions').length,
+    };
+  })()`);
+  check('标签条从内容区的左边界起画（当前标签正落在它那一页的上方）',
+    !!tabAlign && Math.abs(tabAlign.stripLeft - tabAlign.paneLeft) <= 2, tabAlign);
+  check('当前标签与页面同底色、底边相接（中间不留缝，也不画外框）',
+    !!tabAlign && tabAlign.tabBg === tabAlign.paneBg && tabAlign.gapUnderTab === 0, tabAlign);
+  check('侧栏上方那一格装着常用按钮，且侧栏里不再有第二份',
+    !!tabAlign && tabAlign.quick === 4 && tabAlign.sideActionsInSidebar === 0, tabAlign);
+  await shot('tabs-aligned.png');
+
+  // 收起侧栏：那一格缩到只剩折叠按钮，标签跟着页面一起往左顶
+  await evaluate(`(() => { document.querySelector('.top-bar button[aria-label="切换侧边栏"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const collapsed = await evaluate(`(() => {
+    const strip = document.querySelector('.tb-tabs');
+    const pane = document.querySelector('.editor-pane');
+    const left = document.querySelector('.tb-left');
+    if (!strip || !pane || !left) return null;
+    const quick = [...left.querySelectorAll('.tb-quick')];
+    const lz = left.getBoundingClientRect();
+    return {
+      stripLeft: Math.round(strip.getBoundingClientRect().left),
+      paneLeft: Math.round(pane.getBoundingClientRect().left),
+      leftZoneW: Math.round(lz.width),
+      // 按钮还在 DOM 里（宽度过渡靠裁切），但已经被那一格切在外面 = 看不见也点不到
+      quickVisible: quick.filter((q) => q.getBoundingClientRect().right <= lz.right + 1).length,
+      sideVar: getComputedStyle(document.documentElement).getPropertyValue('--side-w').trim(),
+    };
+  })()`);
+  check('侧栏收起时那一格连按钮一起收掉，标签仍贴着内容区左边界',
+    !!collapsed && collapsed.sideVar === '0px' && collapsed.quickVisible === 0 &&
+    Math.abs(collapsed.stripLeft - collapsed.paneLeft) <= 2, collapsed);
+  await shot('tabs-sidebar-collapsed.png');
+  await evaluate(`(() => { document.querySelector('.top-bar button[aria-label="切换侧边栏"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+
   // --- 正文配色：量 computed 值，别靠眼睛 ---
   await evaluate(`(() => {
     const t = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('配色样张'));
@@ -1187,6 +1332,119 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('colors-edit.png');
 }
 
+// ---------- 7.9 编辑态：列表圆点 / 链接 / 标题上的光标（v0.11.15）----------
+/*
+ * 用户拿 Obsidian 的截图逐条对比：「很多符号都没有正常显示，也没有自动识别链接」
+ * 「这种文档，我用键盘的方向键无法移动到大标题，用鼠标也无法点击到大标题，
+ * 上方向键经常跳到很上面」。
+ *
+ * 后一条的真因是**行级装饰改了行高**（line-height / margin）：CodeMirror 的
+ * 高度模型量的是 getBoundingClientRect，外边距不在盒子里、line-height 它也不认，
+ * 于是坐标从第一个标题起就开始偏，标题越多偏得越远。这类问题只有在**真实产物里
+ * 真的按键、真的点击**才量得到，纯函数测不到一个字节。
+ */
+{
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      const fh = await handle.getFileHandle('排版样张.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode([
+        '## 教育经历', '', '河南经贸职业学院 | 工商企业管理 | 大专', '',
+        '## GitHub / 项目', '',
+        '- **IvyeaOps**', '  - https://github.com/Hector-xue/IvyeaOps',
+        '- [github.com/Hector-xue/ivyea-agent](https://github.com/Hector-xue/ivyea-agent)', '',
+        '## 早期创业经历', '',
+        '- 从实际经营问题出发参与蜂蜜品牌定位', '- 探索直播电商、传统电商等线上销售渠道', '',
+      ].join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2500));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('排版样张'));
+    const row = el?.closest('.ft-file'); row?.scrollIntoView({ block: 'center' }); row?.click(); return !!el })()`);
+  await new Promise((r) => setTimeout(r, 1000));
+  await evaluate(`(() => { document.querySelector('.cm-content')?.blur(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+
+  const marks = await evaluate(`(() => {
+    const bullets = [...document.querySelectorAll('.cm-live-bullet')];
+    const links = [...document.querySelectorAll('.cm-live-link')];
+    const cs = links[0] ? getComputedStyle(links[0]) : null;
+    return {
+      bullets: bullets.length,
+      bulletText: bullets[0]?.textContent ?? null,
+      // 圆点是渲染层的事：文档里那个 - 必须原样还在（改成 replace 也不该动内容）
+      rawDash: (document.querySelector('.cm-content')?.innerText ?? '').includes(String.fromCharCode(45) + ' 从实际经营'),
+      links: links.map(a => a.textContent),
+      underline: cs ? cs.textDecorationLine : null,
+      linkColor: cs ? cs.color : null,
+      bodyColor: getComputedStyle(document.querySelector('.cm-content')).color,
+    };
+  })()`);
+  check('无序列表在编辑态画成圆点（Obsidian 同款），源码里的 - 一个字节没动',
+    marks.bullets >= 4 && marks.bulletText === '•' && !marks.rawDash, marks);
+  check('链接看得出是链接：品牌色 + 一条下划线（此前只有颜色，用户说"没有自动识别链接"）',
+    marks.links.length >= 2 && marks.underline === 'underline' && marks.linkColor !== marks.bodyColor,
+    marks);
+  await shot('live-marks.png');
+
+  // --- 鼠标点标题：光标必须落在标题那一行 ---
+  const clickHead = await evaluate(`(() => {
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.innerText.includes('早期创业经历'));
+    if (!line) return null;
+    const r = line.getBoundingClientRect();
+    return { x: Math.round(r.left + 60), y: Math.round(r.top + r.height / 2) };
+  })()`);
+  if (clickHead) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: clickHead.x, y: clickHead.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  const landed = await evaluate(`(() => {
+    const s = getSelection();
+    const n = s.anchorNode;
+    const line = n && (n.nodeType === 1 ? n : n.parentElement)?.closest('.cm-line');
+    return line ? line.innerText.slice(0, 16) : null;
+  })()`);
+  check('鼠标点在大标题上，光标就落在那一行（行级装饰用 margin/line-height 时会落到别的行）',
+    !!landed && landed.includes('早期创业经历'), { landed });
+
+  // --- 上方向键：逐行走，不跳过标题行 ---
+  await evaluate(`(() => {
+    const line = [...document.querySelectorAll('.cm-line')].find(l => l.innerText.includes('从实际经营'));
+    const r = line.getBoundingClientRect();
+    window.__up = { x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) };
+    return true })()`);
+  const upPt = await evaluate(`window.__up`);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: upPt.x, y: upPt.y, button: 'left', clickCount: 1, buttons: 1 });
+  }
+  await new Promise((r) => setTimeout(r, 300));
+  const trail = [];
+  for (let i = 0; i < 3; i++) {
+    await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 });
+    await new Promise((r) => setTimeout(r, 180));
+    trail.push(await evaluate(`(() => {
+      const s = getSelection();
+      const n = s.anchorNode;
+      const line = n && (n.nodeType === 1 ? n : n.parentElement)?.closest('.cm-line');
+      return line ? line.innerText.slice(0, 12) : null;
+    })()`));
+  }
+  // 文档顺序：## 早期创业经历 / 空行 / - 从实际经营… ，所以往上两步必须踩到标题
+  check('连按上方向键逐行往上走，会停在大标题那一行（此前整行跳过去）',
+    trail.some((x) => (x ?? '').includes('早期创业经历')), trail);
+}
+
 // ---------- 7.6 手机端：抽屉圆角与底部菜单（v0.11.10）----------
 /*
  * 用户报的是「侧边栏展开的直角改为 R 角」「按钮弹窗也不好看」。
@@ -1245,15 +1503,25 @@ await new Promise((r) => setTimeout(r, 2600));
   }
   const sheet = await evaluate(`(() => {
     const g = document.querySelector('.m-sheet2-group');
-    if (!g) return null;
-    const gs = getComputedStyle(g);
+    const sheetEl = document.querySelector('.m-sheet2');
+    if (!g || !sheetEl) return null;
+    const ss = getComputedStyle(sheetEl);
+    const mask = getComputedStyle(document.querySelector('.m-sheet-mask'));
+    const r = sheetEl.getBoundingClientRect();
     const items = [...g.querySelectorAll('.m-sheet2-item')];
     const it = items[0] ? items[0].getBoundingClientRect() : null;
     const sep = items[1] ? getComputedStyle(items[1], '::before') : null;
     return {
       groups: document.querySelectorAll('.m-sheet2-group').length,
-      radius: gs.borderTopLeftRadius,
-      shadow: gs.boxShadow !== 'none',
+      radius: ss.borderTopLeftRadius,
+      // v0.11.14：底色长在整张纸上，不再是几张飘着的卡片
+      sheetBg: ss.backgroundColor,
+      transparentSheet: /rgba\(0, 0, 0, 0\)|transparent/.test(ss.backgroundColor),
+      maskDim: mask.backgroundColor,
+      maskTransparent: /rgba\(0, 0, 0, 0\)|transparent/.test(mask.backgroundColor),
+      left: Math.round(r.left),
+      right: Math.round(window.innerWidth - r.right),
+      bottom: Math.round(window.innerHeight - r.bottom),
       itemH: it ? Math.round(it.height) : null,
       sepLeft: sep ? sep.left : null,
       icons: g.querySelectorAll('.m-sheet2-ico svg').length,
@@ -1266,9 +1534,10 @@ await new Promise((r) => setTimeout(r, 2600));
       row: ${JSON.stringify(row)},
     }))()`)));
   }
-  check('底部菜单是分组圆角卡片，行高够按，分隔线从文字处起画（不横穿图标栏）',
-    !!sheet && parseFloat(sheet.radius) >= 12 && sheet.shadow && (sheet.itemH ?? 0) >= 48 &&
-    parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
+  check('底部菜单是一整张贴边的纸（有底色、上两角圆、遮罩压暗），行高够按、分隔线从文字处起画',
+    !!sheet && parseFloat(sheet.radius) >= 12 && !sheet.transparentSheet && !sheet.maskTransparent &&
+    sheet.left === 0 && sheet.right === 0 && sheet.bottom === 0 &&
+    (sheet.itemH ?? 0) >= 48 && parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
   await shot('mobile-sheet.png');
 
   // --- v0.11.13：标题不冻结 / 大纲弹层形状 / 底部四个键 ---
@@ -1308,8 +1577,31 @@ await new Promise((r) => setTimeout(r, 2600));
   const bottom = await evaluate(`(() => ({
     labels: [...document.querySelectorAll('.m-bottom .m-nav-btn')].map(b => b.getAttribute('aria-label')),
   }))()`);
-  check('底部四个键换成手机上真正高频的：搜索 / 新建 / 大纲 / 同步（格式条改由焦点触发）',
-    JSON.stringify(bottom.labels) === JSON.stringify(['搜索', '新建笔记', '大纲', '立即同步']), bottom);
+  /*
+   * v0.11.15：验证台跑的是**没登录**的本地模式，所以最右边那颗键的名字是
+   * 「登录后同步」——此前它在这种状态下叫「立即同步」，点下去调的却是一个
+   * 第一行就 return 的函数：没反应、没提示、没动效（用户点名问它是干什么的）。
+   */
+  check('底部四个键：搜索 / 新建 / 大纲 / 同步；没登录时最后一颗明说是"登录后同步"',
+    JSON.stringify(bottom.labels) === JSON.stringify(['搜索', '新建笔记', '大纲', '登录后同步']), bottom);
+
+  // 点它必须**有事发生**：本地模式下弹登录页
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.m-bottom .m-nav-btn')].pop();
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const afterSyncTap = await evaluate(`(() => ({
+    login: !!document.querySelector('.login-wrap'),
+    body: (document.body.innerText || '').slice(0, 40),
+  }))()`);
+  check('点最右边那颗键真的有反应（本地模式下把登录页叫出来，而不是静默什么都不做）',
+    afterSyncTap.login, afterSyncTap);
+  await shot('mobile-sync-tap.png');
+  // 退回主界面，后面的用例以"开着一篇笔记"为前提
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.login-wrap button')].find(x => /取消|返回/.test(x.textContent ?? ''));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 600));
 
   // 标题：把主区滚下去，标题应当跟着走（不再钉在顶上）
   const title = await evaluate(`(() => {
@@ -1337,6 +1629,32 @@ await new Promise((r) => setTimeout(r, 2600));
     !!title && !title.missing && title.scrollable && after !== null && after < title.before - 200,
     { ...title, after });
 
+  /*
+   * v0.11.14：**滚的是标题，不是顶栏。**
+   * v0.11.13 把滚动交给 .m-main 时顶栏还在它里面，于是那排图标一起划走了，
+   * 用户想点左上角的侧栏按钮得先滚回最顶。这条量的就是"滚完之后顶栏还在原位、
+   * 而且那颗按钮真的能点到"——只看它 top===0 不够，被别的东西盖住也是点不到。
+   */
+  const topFrozen = await evaluate(`(() => {
+    const bar = document.querySelector('.m-top');
+    const btn = document.querySelector('.m-top button[aria-label="打开文件列表"]');
+    const main = document.querySelector('.m-main');
+    if (!bar || !btn || !main) return null;
+    const b = bar.getBoundingClientRect(), k = btn.getBoundingClientRect();
+    const hit = document.elementFromPoint(Math.round(k.left + k.width / 2), Math.round(k.top + k.height / 2));
+    return {
+      barTop: Math.round(b.top),
+      barBottom: Math.round(b.bottom),
+      scrolled: Math.round(main.scrollTop),
+      mainTop: Math.round(main.getBoundingClientRect().top),
+      btnHit: !!(hit && hit.closest('.m-top')),
+    };
+  })()`);
+  check('滚下去之后顶栏还钉在最上面，左上角那颗侧栏按钮仍然点得到',
+    !!topFrozen && topFrozen.scrolled > 100 && topFrozen.barTop === 0 && topFrozen.btnHit &&
+    topFrozen.mainTop >= topFrozen.barBottom, topFrozen);
+  await shot('mobile-scrolled.png');
+
   // 大纲：贴底、上面两角圆、有把手
   await evaluate(`(() => {
     const b = [...document.querySelectorAll('.m-bottom .m-nav-btn')].find(x => x.getAttribute('aria-label') === '大纲');
@@ -1345,22 +1663,79 @@ await new Promise((r) => setTimeout(r, 2600));
   const outline = await evaluate(`(() => {
     const el = document.querySelector('.m-outline2');
     if (!el) return null;
-    // 圆角在卡片上，m-sheet2 只是个透明外壳（和底部菜单同一套结构）
-    const card = el.querySelector('.m-sheet2-group') ?? el;
-    const cs = getComputedStyle(card);
+    // v0.11.14：圆角与底色都在整张纸上（和底部菜单同一套结构）
+    const cs = getComputedStyle(el);
     const r = el.getBoundingClientRect();
     return {
       radius: cs.borderTopLeftRadius,
+      opaque: !/rgba\(0, 0, 0, 0\)|transparent/.test(cs.backgroundColor),
       grip: !!el.querySelector('.m-sheet2-grip'),
       items: el.querySelectorAll('.m-outline-item').length,
       bottomGap: Math.round(window.innerHeight - r.bottom),
       onScreen: r.top > 0 && r.bottom <= window.innerHeight + 2,
     };
   })()`);
-  check('大纲是贴底的圆角卡片（不再是浮在半空的直角块）',
-    !!outline && parseFloat(outline.radius) >= 12 && outline.grip && outline.items > 0 &&
-    outline.onScreen && outline.bottomGap <= 24, outline);
+  check('大纲是贴底的圆角卡片、有自己的底色（不再是浮在半空的直角块）',
+    !!outline && parseFloat(outline.radius) >= 12 && outline.opaque && outline.grip &&
+    outline.items > 0 && outline.onScreen && outline.bottomGap <= 24, outline);
   await shot('mobile-outline.png');
+
+  /*
+   * v0.11.14：**手机上点一张图片要真的能看到它。**
+   * 用户原话：「手机端无法直接打开图片，显示图片」。真因是 imageViewEl（那层
+   * 全屏图片）只挂在桌面分支上——手机点了以后 resolveImage 照样解析出 blob、
+   * setState 也照样发生，然后什么都不渲染。所以这里非量到那层不可。
+   */
+  await evaluate(`(async () => {
+    const bin = atob(${JSON.stringify(PNG_1X1)});
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('单图.png', { create: true });
+      const w = await fh.createWritable();
+      await w.write(bytes);
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 700));
+  const tappedImg = await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('单图'));
+    if (!el) return { found: false };
+    const row = el.closest('.m-tree-row') ?? el;
+    row.scrollIntoView({ block: 'center' });
+    row.click();
+    return { found: true };
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const viewer = await evaluate(`(() => {
+    const v = document.querySelector('.img-view');
+    if (!v) return { open: false, toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|') };
+    const img = v.querySelector('img');
+    const r = img ? img.getBoundingClientRect() : null;
+    return {
+      open: true,
+      // 图真的解码出来了才算数：挂个坏 blob 上去同样"有元素"
+      natural: img ? img.naturalWidth : 0,
+      onScreen: !!r && r.width > 0 && r.height > 0,
+      name: v.querySelector('.img-view-name')?.textContent ?? null,
+      drawerClosed: !document.querySelector('.m-drawer2.open'),
+    };
+  })()`);
+  check('手机端点开一张图片，全屏图片层真的出现并解出了图，抽屉跟着收起（此前只挂在桌面分支）',
+    tappedImg.found && viewer.open && viewer.natural > 0 && viewer.onScreen && viewer.drawerClosed,
+    { tappedImg, viewer });
+  await shot('mobile-image.png');
+  await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 300));
 
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');

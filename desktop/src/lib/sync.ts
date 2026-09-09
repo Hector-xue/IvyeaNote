@@ -50,6 +50,16 @@ export interface SyncReport {
    * 而应用既不提示要重登、也不给入口（2026-09-08 手机端就卡在这里）。
    */
   authExpired?: boolean;
+  /**
+   * 请求压根没发出去（`fetch` 抛 `TypeError: Failed to fetch`）——网络不通、
+   * 服务器没起来、跨域被拦，浏览器不会告诉 JS 是哪一种。
+   *
+   * 和上面两个一样，它需要被**区别对待**，但方向相反：这是唯一一类"过一会儿
+   * 多半自己就好了"的失败。手机上尤其如此——刚解锁、切回前台、VPN 在重连，
+   * 而自动同步正好在这些时刻各跑一次。上层据此决定：自动同步撞上它只留一句
+   * 「离线」，手动同步才给完整的排查提示（见 hooks/useSyncEngine）。
+   */
+  offline?: boolean;
 }
 
 const MAX_BATCH = 200;
@@ -88,6 +98,14 @@ function markAuthExpired(e: unknown, report: SyncReport): void {
   if (e instanceof ApiError && (e.code === 'refresh_invalid' || e.status === 401)) {
     report.authExpired = true;
   }
+}
+
+/**
+ * `fetch` 直接抛 = 请求没发出去。`SyncClient.req` 把它统一包成
+ * `ApiError(0, 'network_error', …)`，这里只认那一种，别的失败照旧当真错误。
+ */
+function markOffline(e: unknown, report: SyncReport): void {
+  if (e instanceof ApiError && e.code === 'network_error') report.offline = true;
 }
 
 function isTextNote(path: string): boolean {
@@ -175,6 +193,8 @@ export async function syncVault(
     errors: [...a.errors, ...b.errors],
     unlinked: a.unlinked || b.unlinked,
     authExpired: a.authExpired || b.authExpired,
+    // 合并报告时漏掉哪个标记，上层就等于没有它——offline 也一样
+    offline: a.offline || b.offline,
   };
 }
 
@@ -221,6 +241,7 @@ export async function pushOnly(
     try {
       await client.putBlob(bytes);
     } catch (e) {
+      markOffline(e, report);
       report.errors.push(`${path} 内容上传失败：${msg(e)}`);
       continue; // 这一篇传不上去就别推它的指针，避免服务端指向不存在的 blob
     }
@@ -255,6 +276,7 @@ export async function pushOnly(
     try {
       await client.putBlob(bytes);
     } catch (e) {
+      markOffline(e, report);
       report.errors.push(`${path} 上传失败：${msg(e)}`);
       continue;
     }
@@ -310,6 +332,7 @@ export async function pushOnly(
     } catch (e) {
       markUnlinked(e, report);
       markAuthExpired(e, report);
+      markOffline(e, report);
       report.errors.push(`推送失败：${msg(e)}`);
       break;
     }
@@ -342,6 +365,7 @@ export async function pullOnly(
     } catch (e) {
       markUnlinked(e, report);
       markAuthExpired(e, report);
+      markOffline(e, report);
       report.errors.push(`拉取失败：${msg(e)}`);
       break;
     }
@@ -351,6 +375,7 @@ export async function pullOnly(
         await applyRemote(client, meta, io, vaultPath, ch, report);
       } catch (e) {
         markAuthExpired(e, report);
+        markOffline(e, report);
         report.errors.push(`应用 ${ch.path} 失败：${msg(e)}`);
       }
     }

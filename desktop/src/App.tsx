@@ -17,7 +17,7 @@ import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
 import { linkVaults } from './lib/vaultLink';
 import { baseNameOf, openWithSystem } from './lib/openExternal';
-import { TopBar } from './ui/TopBar';
+import { TopBar, type QuickAction } from './ui/TopBar';
 import type { MenuItem } from './ui/ContextMenu';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient, sha256Hex } from './lib/api';
@@ -325,6 +325,7 @@ export default function App() {
     mdStamps,
     emptyDirs,
     allPaths,
+    metaOf,
     sortMode,
     setSortMode,
     refresh: refreshFiles,
@@ -343,6 +344,26 @@ export default function App() {
    */
   const noteIndex = useNoteIndex(io, vault?.localPath ?? '', mdStamps);
   const searchDocs = noteIndex.docs;
+
+  /**
+   * v0.11.15：**`.base` 视图要看到库里的全部文件，不只是笔记。**
+   *
+   * 此前喂给它的是 `searchDocs`——那是**正文索引**，只含 `.md`。于是一张按文件夹
+   * 筛选的表里，图片、PDF、乃至这个 `.base` 文件自己全都不见（用户原话：
+   * 「个人空间统计不完全啊，图片，pdf，个人空间本身的 .base 文件都没有在个人
+   * 空间里面体现」）。Obsidian 的 Bases 数据源是"库里的文件"，不是"库里的笔记"。
+   *
+   * 非笔记没有正文，`content` 给空串即可：`buildCtx` 由此得到空的 frontmatter
+   * 与空的标签/链接，而 `file.name / ext / folder / mtime / size` 照常可用——
+   * 按文件夹、按扩展名筛选的表因此立刻完整。
+   */
+  const baseFiles = useMemo(() => {
+    const text = new Map(searchDocs.map((d) => [d.path, d.content]));
+    return allFiles.map((path) => {
+      const m = metaOf(path);
+      return { path, content: text.get(path) ?? '', mtime: m?.mtime, size: m?.size };
+    });
+  }, [allFiles, searchDocs, metaOf]);
 
 
   /** 执行一轮完整同步（推送本地增量 + 拉取远端变更） */
@@ -486,6 +507,7 @@ export default function App() {
     lastReport,
     setLastReport,
     sync: doSync,
+    autoSync: doAutoSync,
     upload: doUpload,
     download: doDownload,
   } = useSyncEngine({
@@ -659,22 +681,31 @@ export default function App() {
     // 登录态过期时不再自动重试：refresh 已经废了，重试一万次也是同一条错，
     // 只会把红条刷得更频繁。等用户重新登录。
     if (!client || !prefs.autoSync || sessionExpired) return;
-    const timer = window.setTimeout(() => void doSync(), 2000); // 启动拉取一次
+    /*
+     * v0.11.14：这四个时机走 `doAutoSync`——没人点过任何按钮，一次网络抖动就
+     * 不该在正文上方贴一段带排查提示的红字。手机上「刚解锁 / 切回前台 / VPN
+     * 正在重连」恰好全落在这些时机上（见 useSyncEngine 的 quiet）。
+     */
+    const timer = window.setTimeout(() => void doAutoSync(), 2000); // 启动拉取一次
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void doSync();
+      if (document.visibilityState === 'visible') void doAutoSync();
     };
+    // 网络回来的那一刻补一次：否则要等下一轮 60s 轮询，中间那段一直显示"离线"
+    const onOnline = () => void doAutoSync();
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('focus', onVisible);
+    window.addEventListener('online', onOnline);
     const poll = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void doSync();
+      if (document.visibilityState === 'visible') void doAutoSync();
     }, 60_000);
     return () => {
       window.clearTimeout(timer);
       window.clearInterval(poll);
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onVisible);
+      window.removeEventListener('online', onOnline);
     };
-  }, [client, prefs.autoSync, doSync, sessionExpired]);
+  }, [client, prefs.autoSync, doAutoSync, sessionExpired]);
 
   /*
    * Ctrl+\\ 收起 / 展开侧边栏（和 Obsidian 同一个键位）。
@@ -1048,6 +1079,14 @@ export default function App() {
       base = base.replace(/\.(md|markdown)$/i, '') + '.md';
       const target = `${dir}${base}`;
       if (target === path) return;
+      /*
+       * 源文件不在了 = 这次改名**已经被别人做过了**（同一个提交走了两遍）。
+       * 这不是失败，不该弹红字——用户 2026-09-09 看到的「已重命名：untitled → 测试」
+       * 和「重命名失败：… untitled.md … 系统找不到指定的文件」正是这么来的。
+       * 真正的重复提交在 ui/InlineTitle 里堵掉了，这里是第二道闸：
+       * 手机端长按菜单、命令面板都能触发改名，谁都可能撞上同一件事。
+       */
+      if (!(await io.exists(vault.localPath ?? '', path).catch(() => true))) return;
       try {
         let final = target;
         if (await io.exists(vault.localPath ?? '', final)) {
@@ -1261,6 +1300,64 @@ export default function App() {
       }
     },
     [vault, io, currentPath, splitPath, closeSplit, refreshFiles, doSync, confirm, toast]
+  );
+
+  /**
+   * v0.11.15：**删除文件夹**。
+   *
+   * 侧栏右键点文件夹此前只有"新建 / 移动 / 复制路径"——没有删除（用户点名）。
+   * 语义与删一篇笔记一致：整个文件夹里的文件逐个搬进回收站，可原路恢复；
+   * 不做物理删除。空文件夹的 `.keep` 占位一并搬走，否则删完那个空壳还在树里。
+   */
+  const onDeleteFolder = useCallback(
+    async (dir: string) => {
+      if (!vault || !dir) return;
+      const prefix = dir.endsWith('/') ? dir : `${dir}/`;
+      const all = await io.list(vault.localPath ?? '');
+      const inside = all.filter((p) => p.startsWith(prefix));
+      const ok = await confirm({
+        title: '删除文件夹',
+        description:
+          inside.length > 0
+            ? `「${dir}」及其中 ${inside.length} 个文件将移入回收站，可在回收站恢复。`
+            : `「${dir}」是空文件夹，将被删除。`,
+        okText: '删除',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        for (const path of inside) {
+          // .keep 是我们自己放的占位符，没有恢复价值，直接删掉
+          if (path.endsWith('/.keep')) {
+            await io.remove(vault.localPath ?? '', path);
+            continue;
+          }
+          let trashRel = trashPathFor(path);
+          while (await io.exists(vault.localPath ?? '', trashRel).catch(() => false)) {
+            trashRel = nextTrashName(trashRel);
+          }
+          // 与删单篇同样按字节搬：库里有图片和 PDF，走文本通道会把它们弄坏
+          const bytes = await io.readBinary(vault.localPath ?? '', path);
+          await io.writeBinary(vault.localPath ?? '', trashRel, bytes);
+          await io.remove(vault.localPath ?? '', path);
+          if (currentPath === path) {
+            setCurrentPath(null);
+            setDoc(null);
+          }
+          if (splitPath === path) closeSplit();
+        }
+        // 标签里可能还开着这个文件夹下的笔记。启动时那次 pruneTabs 每个库只跑
+        // 一次，指望不上——这里按"删完还剩哪些"显式清一遍，否则标签栏留着一排
+        // 点开是空白的死标签
+        pruneTabs(all.filter((p) => !p.startsWith(prefix)));
+        await refreshFiles();
+        void doSync();
+        toast(`已删除文件夹「${dir}」（${inside.length} 个文件已进回收站）`, 'ok');
+      } catch (e) {
+        toast(`删除文件夹失败：${errText(e)}`, 'error');
+      }
+    },
+    [vault, io, currentPath, splitPath, closeSplit, pruneTabs, refreshFiles, doSync, confirm, toast, errText]
   );
 
   /**
@@ -2008,8 +2105,56 @@ export default function App() {
    * 漏挂哪一支，那一屏就关不掉窗口。抽成变量而不是复制四遍，正是这个仓库
    * 「弹层挂错树」那条老毛病的解法。移动端不挂：MobileView 自带顶栏。
    */
+  /**
+   * v0.11.14：顶栏「侧栏正上方那一格」里的四颗按钮。
+   *
+   * 它们是从侧栏那行 `.side-actions` **搬**上来的，不是新增的第二份入口——
+   * 标签页要和它底下那一页左边界对齐，侧栏上方那块位置就空了出来，用户点名
+   * 用常用按钮填上，并且「侧边栏收起的时候连带这些功能按钮一起收起」。
+   */
+  const quickActions: QuickAction[] = useMemo(
+    () => [
+      { id: 'new-note', icon: 'file-plus', title: '新建笔记', run: () => void onCreateNote('') },
+      {
+        id: 'new-folder',
+        icon: 'folder-plus',
+        title: '新建文件夹',
+        run: () => void onCreateFolder(''),
+      },
+      {
+        id: 'sort',
+        icon: 'sort',
+        title: sortMode === 'name' ? '排序：按名称' : '排序：按修改时间',
+        items: [
+          { id: 'name', label: '按名称', checked: sortMode === 'name', run: () => setSortMode('name') },
+          {
+            id: 'mtime',
+            label: '按修改时间',
+            checked: sortMode === 'mtime',
+            run: () => setSortMode('mtime'),
+          },
+        ],
+      },
+      {
+        id: 'collapse',
+        icon: 'collapse',
+        title: '全部折叠',
+        run: () =>
+          setCollapsedDirs((cur) => {
+            // 已折叠的跳过是多余的：这里是"全部折叠"，直接并进去就行（toggle 才需要跳过）
+            const next = new Set(cur);
+            for (const d of allDirs) next.add(d);
+            saveCollapsed(next);
+            return next;
+          }),
+      },
+    ],
+    [onCreateNote, onCreateFolder, sortMode, setSortMode, allDirs]
+  );
+
   const topBarEl = (
     <TopBar
+      quick={quickActions}
       tabs={openTabs}
       onSelectTab={(p) => void openFileInTab(p)}
       onCloseTab={(p) => {
@@ -2169,7 +2314,7 @@ export default function App() {
             void onOpenPdf(p);
           }}
           baseDoc={baseDoc}
-          baseNotes={searchDocs}
+          baseNotes={baseFiles}
           onCloseBase={() => setBaseDoc(null)}
           onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
           pdfView={pdfView}
@@ -2206,6 +2351,16 @@ export default function App() {
           />
         )}
         {settingsEl}
+        {/*
+          v0.11.14：**图片查看层在手机上没挂过。**
+
+          `onOpenAttachment` 点图片时会 `resolveImage` 出一个 blob URL 再
+          `setImageView`——然后什么都不会发生，因为 `imageViewEl` 只写在下面的
+          桌面分支里（用户：「手机端无法直接打开图片、显示图片」）。
+          它上面那行注释早就写着"桌面和移动是两棵树，只挂一边就是点了没反应"，
+          而它自己正是只挂了一边。
+        */}
+        {imageViewEl}
         {/* 这三个弹层此前只挂在桌面分支上：手机点「生成配对码」什么都不出现，
             冲突和同步状态在手机上则完全没有出口 */}
         {pairEl}
@@ -2320,6 +2475,7 @@ export default function App() {
         onCreateNote={() => void onCreateNote('')}
         onNewFolderNote={(folder) => void onCreateNote(folder)}
         onDeleteFile={(p) => void onDeleteFile(p)}
+        onDeleteFolder={(d) => void onDeleteFolder(d)}
         onMovePath={(src, dest, isDir) => void onMovePath(src, dest, isDir)}
         onRequestRename={(p) => void requestRename(p)}
         onCopyPath={(p) => void copyPath(p)}
@@ -2344,7 +2500,7 @@ export default function App() {
             void onOpenPdf(p);
           }}
         baseDoc={baseDoc}
-        baseNotes={searchDocs}
+        baseNotes={baseFiles}
         onCloseBase={() => setBaseDoc(null)}
         onOpenBaseExternal={(p: string) => void openWithSystemApp(p)}
         pdfView={pdfView}

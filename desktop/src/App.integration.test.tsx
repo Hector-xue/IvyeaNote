@@ -91,6 +91,8 @@ const api = vi.hoisted(() => ({
   remote: [] as { id: number; name: string }[],
   /** 让同步请求以「登录态过期」失败（401 + refresh_invalid） */
   authExpired: false,
+  /** 让同步请求以「连不上服务器」失败（fetch 压根没发出去，api.ts 包成 network_error） */
+  offline: false,
 }));
 vi.mock('./lib/api', async (orig) => {
   const real = await orig<typeof import('./lib/api')>();
@@ -110,10 +112,12 @@ vi.mock('./lib/api', async (orig) => {
     }
     async push() {
       if (api.authExpired) throw new real.ApiError(401, 'refresh_invalid', 'refresh token 无效或已过期');
+      if (api.offline) throw new real.ApiError(0, 'network_error', '连不上服务器（Failed to fetch）。排查提示…');
       return { results: [] };
     }
     async pullPage(_id: number, cursor: number) {
       if (api.authExpired) throw new real.ApiError(401, 'refresh_invalid', 'refresh token 无效或已过期');
+      if (api.offline) throw new real.ApiError(0, 'network_error', '连不上服务器（Failed to fetch）。排查提示…');
       return { changes: [], next_cursor: cursor };
     }
     async putBlob() {}
@@ -173,6 +177,7 @@ beforeEach(() => {
   api.calls = { listVaults: 0, createVault: [] };
   api.remote = [];
   api.authExpired = false;
+  api.offline = false;
 });
 
 /** jsdom 没有 DataTransfer：给拖拽事件造一个够用的替身 */
@@ -431,7 +436,9 @@ describe('右键上下文菜单（E3）', () => {
     });
     const labels = [...screen.getAllByRole('menuitem')].map((b) => b.textContent);
     // v0.8.3：文件夹也能「移动到…」（不能移进自己的子孙，由 MoveDialog 守卫）
-    expect(labels).toEqual(['在此新建笔记', '在此新建子文件夹', '移动到…', '复制路径']);
+    // v0.11.15：文件夹也能删（用户点名"文件夹右键点击没有删除选项"）；
+    // 文案是「删除文件夹」而不是「删除笔记」——它删的是一整个目录
+    expect(labels).toEqual(['在此新建笔记', '在此新建子文件夹', '移动到…', '复制路径', '删除文件夹']);
   });
 
   it('Esc 关闭菜单', async () => {
@@ -976,5 +983,168 @@ describe('顶栏与侧栏（v0.11.8）', () => {
     // 阅读/编辑与分栏在别处已经有按钮了，菜单里不再重复一遍
     expect(labels).not.toContain('阅读视图');
     expect(labels).not.toContain('分栏');
+  });
+});
+
+/*
+ * 2026-09-09 手机端：正文上方**偶尔**出现一整段红字——「拉取失败：连不上服务器
+ * （Failed to fetch）」外加三条排查提示，用户问「这个偶尔的报错是怎么回事」。
+ *
+ * 真因不在同步本身：自动同步在启动 2s / 每次切回前台 / 每 60s 各跑一次，手机上
+ * 「刚解锁、切回前台、VPN 在重连」正好落在这些时刻。人什么也没点，却收到一段
+ * 讲"服务端版本太旧/域名解析失败/防火墙"的说明——那三条对一次网络抖动毫无用处。
+ *
+ * 所以这里守的是两条线：**自动同步撞上网络错误不刷红条**，
+ * 而**手动点同步照旧给完整原因**（那时人就是来看原因的），绝不静默。
+ */
+describe('连不上服务器：自动同步安静重试，手动同步照说原因（v0.11.14）', () => {
+  const loginAs = () => {
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'https://example.test',
+          email: 'u@example.test',
+          userId: 9,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: {
+          '1': { id: 1, name: '云端库', localPath: '/data/notes', cursor: 0, versions: {}, bases: {} },
+        },
+      })
+    );
+    localStorage.setItem('ivnote.activeVault', '1');
+    api.remote = [{ id: 1, name: '云端库' }];
+  };
+
+  const statusText = () => document.querySelector('.status-bar')?.textContent ?? '';
+  const syncBtn = () =>
+    [...document.querySelectorAll('.status-bar button')].find((b) =>
+      /同步|离线|本地模式/.test(b.textContent ?? '')
+    ) as HTMLElement | undefined;
+
+  it('自动同步（切回前台）撞上 Failed to fetch：不出现红条与排查提示', async () => {
+    loginAs();
+    api.offline = true;
+    memFiles.set('a.md', '# A');
+    render(<App />);
+    await waitFor(() => {
+      if (!syncBtn()) throw new Error(`状态栏还没出来：${statusText()}`);
+    });
+
+    // 切回前台 = 自动同步的三个时机之一
+    fireEvent(window, new Event('focus'));
+    await waitFor(
+      () => {
+        if (!/离线/.test(statusText())) throw new Error(`状态栏没进入离线：${statusText()}`);
+      },
+      { timeout: 4000 }
+    );
+    expect(statusText()).not.toMatch(/同步失败/);
+    expect(document.body.textContent).not.toMatch(/Failed to fetch/);
+    expect(document.body.textContent).not.toMatch(/服务端版本太旧/);
+  });
+
+  it('手动点同步撞上同一个错误：原因照旧摆出来，不静默', async () => {
+    loginAs();
+    api.offline = true;
+    memFiles.set('a.md', '# A');
+    render(<App />);
+    await waitFor(() => {
+      if (!syncBtn()) throw new Error(`状态栏还没出来：${statusText()}`);
+    });
+
+    fireEvent.click(syncBtn()!);
+    await waitFor(
+      () => {
+        if (!/同步失败/.test(statusText())) throw new Error(`手动同步没报错：${statusText()}`);
+      },
+      { timeout: 4000 }
+    );
+    // 原因要能被拿到（状态栏那颗按钮的 title 里写着上次失败的原文）
+    expect(syncBtn()?.getAttribute('title') ?? '').toMatch(/连不上服务器/);
+  });
+});
+
+/*
+ * 2026-09-09 用户：「桌面端的标签栏……标签是和页面连在一起的，但是侧边栏在打开的
+ * 时候侧边栏的上面就没法放标签了，要不然侧边栏上面用一些常用的功能按钮填充一下，
+ * 侧边栏收起的时候连带这些功能按钮一起收起」。
+ */
+describe('顶栏左格：侧栏正上方的常用按钮（v0.11.14）', () => {
+  const sideToggle = () =>
+    document.querySelector<HTMLElement>('.top-bar button[aria-label="切换侧边栏"]');
+  const quick = () => [...document.querySelectorAll('.top-bar .tb-quick')];
+
+  it('四颗常用按钮长在顶栏左格里，而且侧栏里不再有第二份', async () => {
+    await renderApp({ 'a.md': '# A' });
+    expect(quick().map((b) => b.getAttribute('aria-label'))).toEqual([
+      '新建笔记',
+      '新建文件夹',
+      '排序：按名称',
+      '全部折叠',
+    ]);
+    // 搬走而不是复制：侧栏里那行 .side-actions 必须没了
+    expect(document.querySelector('.sidebar .side-actions')).toBeNull();
+  });
+
+  it('侧栏收起时这一格跟着缩到只剩折叠按钮（--side-w 归零）', async () => {
+    await renderApp({ 'a.md': '# A' });
+    expect(document.documentElement.style.getPropertyValue('--side-w')).not.toBe('0px');
+    fireEvent.click(sideToggle()!);
+    await waitFor(() => {
+      const v = document.documentElement.style.getPropertyValue('--side-w');
+      if (v !== '0px') throw new Error(`--side-w 没归零：${v}`);
+    });
+    // 按钮本身还在 DOM 里（宽度过渡靠 CSS 裁切），但那一格已经没有可用宽度
+    expect(document.querySelector('.tb-left')).toBeTruthy();
+  });
+});
+
+/*
+ * 2026-09-09 用户：「文件夹右键点击没有删除选项」。
+ * 侧栏里文件那一支从 v0.7.9 起就有删除，文件夹那一支一直只有"新建 / 移动 /
+ * 复制路径"——想删一个文件夹只能一篇篇删完，还剩个空壳在树里。
+ */
+describe('文件夹右键能删除（v0.11.15）', () => {
+  const dirRow = (name: string) =>
+    [...document.querySelectorAll('.ft-dir-name')]
+      .find((el) => el.textContent === name)
+      ?.closest('.ft-dir') as HTMLElement | undefined;
+  const menuItem = (label: string) =>
+    [...document.querySelectorAll('.ctx-item')].find(
+      (b) => b.querySelector('.ctx-label')?.textContent === label
+    ) as HTMLElement | undefined;
+
+  it('右键文件夹有「删除文件夹」，确认后里面的文件进回收站', async () => {
+    await renderApp({ '资料/a.md': '# A', '资料/b.md': '# B', 'c.md': '# C' });
+    fireEvent.contextMenu(dirRow('资料')!);
+    await waitFor(() => {
+      if (!menuItem('删除文件夹')) {
+        throw new Error(
+          `菜单里没有删除：${[...document.querySelectorAll('.ctx-label')].map((x) => x.textContent).join('/')}`
+        );
+      }
+    });
+    fireEvent.click(menuItem('删除文件夹')!);
+
+    // 确认框：说清楚会删几个文件
+    await waitFor(() => {
+      if (!document.querySelector('.dlg-mask')) throw new Error('没有弹确认框');
+    });
+    expect(document.querySelector('.dlg-mask')?.textContent).toMatch(/2 个文件/);
+    const okBtn = [...document.querySelectorAll('.dlg-mask button')].find((b) =>
+      (b.textContent ?? '').includes('删除')
+    ) as HTMLElement;
+    fireEvent.click(okBtn);
+
+    await waitFor(() => {
+      if (memFiles.has('资料/a.md') || memFiles.has('资料/b.md')) throw new Error('文件还在原处');
+    });
+    // 进的是回收站，不是物理删除——用户点错了还能捞回来
+    const trashed = [...memFiles.keys()].filter((p) => p.startsWith('.trash/'));
+    expect(trashed.length).toBe(2);
+    expect(memFiles.get('c.md')).toBe('# C'); // 文件夹外的一律不动
   });
 });

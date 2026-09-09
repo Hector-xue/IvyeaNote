@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pullOnly, pushOnly, syncVault, type FileIO, type SyncReport } from '../lib/sync';
-import type { SyncClient } from '../lib/api';
+import { ApiError, type SyncClient } from '../lib/api';
 import type { VaultMeta } from '../lib/store';
 
 export type SyncMode = 'full' | 'push' | 'pull';
@@ -51,10 +51,36 @@ export interface SyncEngine {
   setLastReport: React.Dispatch<React.SetStateAction<SyncReport | null>>;
   /** 推 + 拉 */
   sync(): Promise<void>;
+  /**
+   * 推 + 拉，但**是应用自己发起的**（启动 / 切回前台 / 60s 轮询 / 恢复联网）。
+   *
+   * 与 `sync()` 的唯一区别是「连不上服务器」怎么呈现：没人点过任何按钮，
+   * 就不该因为一次网络抖动在正文上方贴一段带三条排查提示的红字——手机上
+   * 刚解锁、切回前台、VPN 重连都会撞上它（用户：「偶尔的这个报错是怎么回事」）。
+   * 这里把这一类失败压成 `offline` 标记，UI 只留一句「离线」，联网后自己消失。
+   * 其它失败（403 / 登录过期 / 服务端拒收）照旧原样报出来。
+   */
+  autoSync(): Promise<void>;
   /** 只推 */
   upload(): Promise<void>;
   /** 只拉 */
   download(): Promise<void>;
+}
+
+/** `fetch` 压根没发出去（跨域被拦 / 没网 / 服务器没起来）——api.ts 统一包成这个 code */
+function isNetworkError(e: unknown): boolean {
+  return e instanceof ApiError && e.code === 'network_error';
+}
+
+/**
+ * 自动同步撞上「连不上服务器」时，把错误文案吞掉、只留 `offline` 标记。
+ *
+ * 只吞这一类：`unlinked`（403 要重接）、`authExpired`（要重新登录）、服务端拒收
+ * 都是**重试不会好**的事，压下去就成了静默失败——这个仓库为静默失败付过四轮返工。
+ */
+function quiet(report: SyncReport, auto: boolean): SyncReport {
+  if (!auto || !report.offline || report.authExpired || report.unlinked) return report;
+  return { ...report, errors: [] };
 }
 
 export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
@@ -71,13 +97,32 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
   const [resyncAt, setResyncAt] = useState(0);
 
   const run = useCallback(
-    async (mode: SyncMode) => {
+    async (mode: SyncMode, auto = false) => {
       if (!client || !vault || !deviceId || running.current) return;
+      /*
+       * 浏览器/WebView 已经知道没网时，自动同步连试都不用试：一次必然失败的
+       * 请求换来的只有一条红条。手动同步不受这个闸门管——navigator.onLine 只
+       * 保证"没网时为 false"，反过来不可靠（连着 WiFi 但出不去也报 true），
+       * 用户点了按钮就该真的去试一次。
+       */
+      if (auto && typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setLastReport((prev) => ({
+          pushed: 0,
+          pulled: 0,
+          merged: 0,
+          conflicts: [],
+          errors: [],
+          offline: true,
+          // 上一轮的冲突/统计已经没意义了，但别把"登录过期"这种仍然成立的状态抹掉
+          authExpired: prev?.authExpired,
+        }));
+        return;
+      }
       running.current = true;
       setSyncing(true);
       try {
         const report = await RUNNERS[mode](client, vault, io, deviceId, vault.localPath ?? '');
-        setLastReport(report);
+        setLastReport(quiet(report, auto));
         if (report.authExpired) onAuthExpired?.();
         if (report.unlinked && onUnlinked && !relinked.current) {
           relinked.current = true;
@@ -99,13 +144,19 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
         persist();
       } catch (e) {
         // 失败也要出一份报告：静默失败会让用户以为同步成功了
-        setLastReport({
-          pushed: 0,
-          pulled: 0,
-          merged: 0,
-          conflicts: [],
-          errors: [errText(e)],
-        });
+        setLastReport(
+          quiet(
+            {
+              pushed: 0,
+              pulled: 0,
+              merged: 0,
+              conflicts: [],
+              errors: [errText(e)],
+              offline: isNetworkError(e),
+            },
+            auto
+          )
+        );
       } finally {
         running.current = false;
         setSyncing(false);
@@ -123,8 +174,9 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
   }, [resyncAt]);
 
   const sync = useCallback(() => run('full'), [run]);
+  const autoSync = useCallback(() => run('full', true), [run]);
   const upload = useCallback(() => run('push'), [run]);
   const download = useCallback(() => run('pull'), [run]);
 
-  return { syncing, lastReport, setLastReport, sync, upload, download };
+  return { syncing, lastReport, setLastReport, sync, autoSync, upload, download };
 }

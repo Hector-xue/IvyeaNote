@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
+import type { BaseNote } from '../lib/bases';
 import { RibbonIcon } from './Icons';
 import { MarkdownEditor } from './MarkdownEditor';
 import { PdfViewer } from './PdfViewer';
@@ -110,7 +111,11 @@ interface Props {
    */
   /** v0.11.10：`.base` 表格视图（手机上同样能开，不再只能"交给 Obsidian"） */
   baseDoc?: { path: string; text: string } | null;
-  baseNotes?: { path: string; content: string }[];
+  /**
+   * v0.11.15：喂给 `.base` 的是**库里的全部文件**（含图片 / PDF / 别的 .base），
+   * 不再只是笔记——非笔记的 content 是空串，靠 file.* 那组属性参与筛选。
+   */
+  baseNotes?: BaseNote[];
   onCloseBase?(): void;
   onOpenBaseExternal?(path: string): void;
   pdfView?: string | null;
@@ -178,6 +183,19 @@ export function MobileView(props: Props) {
     }
   });
   const [showOutline, setShowOutline] = useState(false); // P6 大纲浮层
+  /*
+   * v0.11.15：**手点同步要有回执。**
+   *
+   * 用户原话：「手机端底部的最右边的按钮是干什么的？点了之后看不到反应啊，
+   * 也没个动效，也没有反应」。三件事都缺：
+   *   ① 没登录时同步引擎第一行就 return（现在改成去登录，见下面 onSync）；
+   *   ② 转圈的 class 早就写了，但 `.m-nav-btn.spin` 在 CSS 里**根本不存在**；
+   *   ③ 同步完只有"有变更"才弹 toast——多数时候确实没变更，于是安静得像坏了。
+   * 这里补第三件：只对**人点的那一次**给回执，自动同步照旧安静。
+   */
+  const [syncNote, setSyncNote] = useState<string | null>(null);
+  const syncTapped = useRef(false);
+  const wasSyncing = useRef(false);
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null); // P1 内联重命名
   const mainRef = useRef<HTMLElement | null>(null);
   const touchStart = useRef<{ x: number; y: number } | null>(null);
@@ -412,6 +430,8 @@ export function MobileView(props: Props) {
   };
   const report = props.lastReport;
   const hasError = report && report.errors.length > 0;
+  /** 自动同步撞上网络不通：引擎把错误吞掉只留这个标记，见下面那条 m-offline */
+  const offline = !!report?.offline && !hasError;
 
   /* v0.8.3 的全文搜索、v0.5.0 的文件树渲染，v0.10.0 起都搬进了 ui/mobile/Drawer。
      这里只留状态（query / collapsedDirs），渲染归组件。 */
@@ -424,6 +444,23 @@ export function MobileView(props: Props) {
     setQuery(seedText);
     setDrawerOpen(true);
   }, [seedN, seedText]);
+
+  useEffect(() => {
+    if (props.syncing) {
+      wasSyncing.current = true;
+      return;
+    }
+    if (!wasSyncing.current) return;
+    wasSyncing.current = false;
+    if (!syncTapped.current) return; // 自动同步不打扰
+    syncTapped.current = false;
+    const r = props.lastReport;
+    if (r && r.errors.length > 0) return; // 错误有自己的红条，别再叠一层
+    const moved = r ? r.pushed + r.pulled : 0;
+    setSyncNote(moved > 0 ? `已同步 ↑${r!.pushed} ↓${r!.pulled}` : r?.offline ? '离线，联网后自动同步' : '已是最新');
+    const t = window.setTimeout(() => setSyncNote(null), 2200);
+    return () => window.clearTimeout(t);
+  }, [props.syncing, props.lastReport]);
 
   // ---- P6：大纲数据 ----
   const headings = useMemo(() => extractHeadings(props.doc ?? ''), [props.doc]);
@@ -499,7 +536,12 @@ export function MobileView(props: Props) {
         files={props.files}
         pdfs={props.pdfs}
         allFiles={props.allFiles}
-        onOpenAttachment={props.onOpenAttachment}
+        /* 点开图片/附件同样收起抽屉——和点笔记、点 PDF 一致；
+           图片是全屏看的，抽屉留在底下只会在关掉图片后显得莫名其妙 */
+        onOpenAttachment={(p) => {
+          props.onOpenAttachment?.(p);
+          setDrawerOpen(false);
+        }}
         emptyDirs={props.emptyDirs ?? []}
         currentPath={props.currentPath}
         collapsedDirs={collapsedDirs}
@@ -528,17 +570,27 @@ export function MobileView(props: Props) {
         onClose={() => setDrawerOpen(false)}
       />
 
+      {/*
+        v0.11.14：**顶栏在滚动容器外面。**
+
+        v0.11.13 把滚动交给 `.m-main` 是对的（标题该跟着正文走），但顶栏当时还
+        渲染在 `.m-main` **里面**——滚的是包含顶栏的那一层，于是图标栏一起划走了，
+        想点左上角的侧栏按钮得先滚回最顶（用户原话）。
+        顶栏提出来当 `.m-app` 的直接子元素，`.m-app` 改成纵向 flex：
+        第一层 UI 钉住，标题与正文在下面那层滚。这也是 Obsidian 移动端的分层。
+      */}
+      <TopBar
+        path={props.currentPath}
+        vaultName={props.vault.name}
+        mode={mode}
+        syncing={props.syncing}
+        onOpenDrawer={() => setDrawerOpen(true)}
+        onToggleMode={() => setMode(mode === 'edit' ? 'read' : 'edit')}
+        onMore={() => setMenu('note')}
+      />
+
       {/* 主区 */}
       <main className="m-main" ref={mainRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
-        <TopBar
-          path={props.currentPath}
-          vaultName={props.vault.name}
-          mode={mode}
-          syncing={props.syncing}
-          onOpenDrawer={() => setDrawerOpen(true)}
-          onToggleMode={() => setMode(mode === 'edit' ? 'read' : 'edit')}
-          onMore={() => setMenu('note')}
-        />
         {/*
           登录过期要给**出路**，不能只把服务端那句原话贴出来。
           手机端 2026-09-08 就卡在「拉取失败：refresh token 无效或已过期」这条红条上：
@@ -551,8 +603,21 @@ export function MobileView(props: Props) {
               重新登录
             </button>
           </div>
+        ) : hasError ? (
+          <div className="m-error">⚠ {report!.errors[0]}</div>
         ) : (
-          hasError && <div className="m-error">⚠ {report!.errors[0]}</div>
+          /*
+           * v0.11.14：**连不上服务器不再是一条红条。**
+           *
+           * 手机上「网络这一刻不通」是常态：刚解锁、切回前台、VPN 在重连——
+           * 而自动同步恰好在启动 2s / 每次切回前台 / 每 60s 各跑一次。此前每撞上
+           * 一次就把「拉取失败：连不上服务器（Failed to fetch）+ 三条排查提示」
+           * 整段贴在正文上方，直到下一次成功才消失（用户：「偶尔的这个报错是怎么回事」）。
+           * 那三条提示是给"服务端装错了"准备的，对一次网络抖动毫无意义。
+           * 现在自动同步撞上网络错误只留这一行，联网后自己就没了；
+           * 手动点同步仍然给完整的红条与排查提示（那时人就是来看原因的）。
+           */
+          offline && <div className="m-offline">离线，联网后自动同步</div>
         )}
 
         {props.baseDoc ? (
@@ -560,9 +625,15 @@ export function MobileView(props: Props) {
             path={props.baseDoc.path}
             text={props.baseDoc.text}
             notes={props.baseNotes ?? []}
+            /*
+             * 表里现在有图片和 PDF：一律走 onSelect 会拿文本通道去读一张 PNG，
+             * 直接抛错。按类型分流，和文件树点开它们时走的是同一条路。
+             */
             onOpenNote={(p) => {
               props.onCloseBase?.();
-              props.onSelect(p);
+              if (/\.md$/i.test(p)) props.onSelect(p);
+              else if (/\.pdf$/i.test(p)) props.onOpenPdf(p);
+              else props.onOpenAttachment?.(p);
             }}
             onClose={() => props.onCloseBase?.()}
             onOpenExternal={
@@ -611,11 +682,15 @@ export function MobileView(props: Props) {
           </>
         )}
 
-        {report && !hasError && (report.pushed > 0 || report.pulled > 0) && (
-          <div className="m-toast">
-            ↑{report.pushed} ↓{report.pulled}
-            {report.conflicts.length > 0 && ` · 冲突${report.conflicts.length}`}
-          </div>
+        {syncNote ? (
+          <div className="m-toast">{syncNote}</div>
+        ) : (
+          report && !hasError && (report.pushed > 0 || report.pulled > 0) && (
+            <div className="m-toast">
+              ↑{report.pushed} ↓{report.pulled}
+              {report.conflicts.length > 0 && ` · 冲突${report.conflicts.length}`}
+            </div>
+          )
         )}
       </main>
 
@@ -631,8 +706,17 @@ export function MobileView(props: Props) {
         onCreate={props.onCreateNote}
         onOutline={() => setShowOutline(true)}
         outlineAvailable={headings.length > 0}
-        onSync={props.onSync}
+        onSync={() => {
+          // 没登录时这颗键的意思是"去登录"——它此前调的是一个第一行就 return 的函数
+          if (props.syncDisabled) {
+            props.onOpenLogin();
+            return;
+          }
+          syncTapped.current = true;
+          props.onSync();
+        }}
         syncing={props.syncing}
+        syncDisabled={props.syncDisabled}
       />
 
       <Sheet
