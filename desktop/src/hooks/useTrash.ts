@@ -57,6 +57,8 @@ export interface TrashDeps {
 
 export interface Trash {
   list: string[];
+  /** 一次确认清空整个回收站 */
+  purgeAll(): Promise<void>;
   open: boolean;
   setOpen(v: boolean): void;
   /** 列出 .trash/ 下全部条目并打开面板 */
@@ -133,5 +135,36 @@ export function useTrash(deps: TrashDeps): Trash {
     [io, vaultPath, refreshFiles, sync, confirm, toast, errText]
   );
 
-  return { list, open, setOpen, reload, restore, purge };
+  /**
+   * v0.11.16：**清空回收站**。
+   *
+   * 回收站面板搬进左栏之后，"一条条点彻底删除"就成了一件很蠢的事——
+   * 十几个文件要确认十几次。这里只确认一次，然后逐个删；中途失败不吞：
+   * 删掉几个就报几个，剩下的还在列表里。
+   */
+  const purgeAll = useCallback(async () => {
+    if (vaultPath === null || list.length === 0) return;
+    const ok = await confirm({
+      title: '清空回收站',
+      description: `${list.length} 个文件将被永久删除，不可恢复。`,
+      okText: '永久删除',
+      danger: true,
+    });
+    if (!ok) return;
+    const failed: string[] = [];
+    for (const p of list) {
+      try {
+        await io.remove(vaultPath, p);
+      } catch {
+        failed.push(p);
+      }
+    }
+    setList(failed);
+    await refreshFiles();
+    sync();
+    if (failed.length > 0) toast(`还有 ${failed.length} 个没删掉`, 'error');
+    else toast('回收站已清空', 'ok');
+  }, [io, vaultPath, list, refreshFiles, sync, confirm, toast]);
+
+  return { list, open, setOpen, reload, restore, purge, purgeAll };
 }

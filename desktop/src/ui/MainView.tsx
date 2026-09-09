@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import logoUrl from '../assets/logo.png';
 import { MarkdownEditor } from './MarkdownEditor';
 import { FileTree, buildFileTree } from './FileTree';
-import { RibbonIcon } from './Icons';
+import { RibbonIcon, type IconName } from './Icons';
 import { InlineTitle } from './InlineTitle';
 import { RightPanel, loadRightPanelCollapsed, saveRightPanelCollapsed } from './RightPanel';
 import { usePanelWidth } from '../hooks/usePanelWidth';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { SearchPanel } from './SearchPanel';
+import { TagPane, TrashPane } from './SidePanes';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
 import type { TreeNode } from './FileTree';
@@ -16,6 +17,17 @@ import type { VaultMeta } from '../lib/store';
 import type { SyncReport } from '../lib/sync';
 import type { SearchDoc } from '../lib/searchIndex';
 import type { BaseNote } from '../lib/bases';
+
+/** 左栏能显示的四种面板。ribbon 上那一排就是它们，一一对应 */
+export type SidebarTab = 'files' | 'search' | 'tags' | 'trash';
+
+/** ribbon 上的面板按钮。写成表是为了"按钮"和"面板"永远同源，加一个不会漏另一处 */
+const PANES: { id: SidebarTab; icon: IconName; title: string }[] = [
+  { id: 'files', icon: 'folder', title: '文件' },
+  { id: 'search', icon: 'search', title: '搜索' },
+  { id: 'tags', icon: 'tag', title: '标签' },
+  { id: 'trash', icon: 'trash', title: '回收站' },
+];
 
 export interface FileNode {
   path: string;
@@ -163,6 +175,26 @@ interface Props {
   onCreateFolder(parent?: string): void;
   /** v0.5.0 U5：ribbon 动作（预留扩展；当前仅 files） */
   onRibbonAction?(action: 'files'): void;
+  /** v0.11.16：左栏当前面板 + 切换回调（状态在 App） */
+  sidebarTab?: SidebarTab;
+  onSidebarTab?(tab: SidebarTab): void;
+  /** v0.11.16：回收站现在是左栏的一个面板，数据与动作由 App 给 */
+  trashList?: readonly string[];
+  onTrashRestore?(path: string): void;
+  onTrashPurge?(path: string): void;
+  onTrashPurgeAll?(): void;
+  /** v0.11.16：点标签 → 切到搜索面板并把 `#标签` 灌进搜索框 */
+  onPickTag?(tag: string): void;
+  /** v0.11.16：外部灌一个搜索词进侧栏搜索框（点标签用）。n 用来区分"又点了一次" */
+  searchSeed?: { text: string; n: number } | null;
+  /** v0.11.16：图谱现在在右栏；ribbon 那颗按钮只负责把它叫出来 */
+  graphOpen?: boolean;
+  /** 序号，加一次右栏就切到图谱标签（转发给 RightPanel） */
+  graphRequest?: number;
+  /** 图谱面板里的「全屏打开」——整屏那一版仍然留着 */
+  onExpandGraph?(): void;
+  /** v0.11.16：今日日记。能力早就有（lib/daily + useTemplates），此前只有命令面板能到 */
+  onOpenDaily?(): void;
   /** v0.6.1 H6: add-device pairing */
   onAddDevice?(): void;
   /** v0.7.0 F3: wiki links */
@@ -256,8 +288,12 @@ export function MainView(props: Props) {
    * v0.11.14：`openSortMenu` / `collapseAll` 跟着那行按钮一起搬到 App 了
    * （顶栏左格要用它们，而顶栏由 App 渲染）。留在这儿会是两份实现。
    */
-  /** v0.7.11 E7：侧栏在「文件树」与「搜索」之间切换（对标 Obsidian 的左栏标签） */
-  const [sidebarTab, setSidebarTab] = useState<'files' | 'search'>('files');
+  /*
+   * v0.11.16：左栏显示哪个面板**由 App 持有**。
+   * 命令面板里的「标签」「回收站」也要能切过来，而那两条命令在 App 那边；
+   * 状态留在这里就会出现"命令面板点了没反应"。
+   */
+  const sidebarTab: SidebarTab = props.sidebarTab ?? 'files';
   const sideOpen = props.sidebarOpen ?? true;
 
   /*
@@ -268,6 +304,21 @@ export function MainView(props: Props) {
    * 持有、还能拖，除了一个 CSS 变量没有别的办法把它交出去。
    * 收起时写 0：那一格连同里面的按钮一起消失，正是用户要的"一起收起来"。
    */
+  /*
+   * ribbon 那颗图谱按钮：右栏收着的时候要先把它展开，否则"点了没反应"——
+   * 这正是把图谱从整屏搬进右栏最容易漏掉的一步。
+   */
+  const graphReq = props.graphRequest ?? 0;
+  useEffect(() => {
+    if (graphReq > 0 && rightCollapsed) {
+      setRightCollapsed(false);
+      saveRightPanelCollapsed(false);
+    }
+    // rightCollapsed 故意不进依赖：只在"又点了一次图谱"时才展开，
+    // 否则用户手动收起右栏会被这条 effect 立刻顶回去
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphReq]);
+
   useEffect(() => {
     if (typeof document === 'undefined') return;
     const root = document.documentElement;
@@ -364,41 +415,49 @@ export function MainView(props: Props) {
 
   return (
     <>
-      {/* v0.5.0 U5：左侧 icon ribbon（对标 Obsidian 功能栏） */}
+      {/*
+        左侧 ribbon（v0.11.16 重做）。
+        **这一排按钮现在只做一件事：切换左栏显示什么。**
+        此前「文件 / 搜索」切面板，而「标签 / 回收站 / 图谱」点了盖一张对话框上来——
+        同一排图标、两种行为，用户的原话是「很乱，视觉上体验很差」。
+        现在标签和回收站都是左栏的面板，图谱去了右栏（它需要和正文并排看），
+        日记是一个动作（今天那篇不存在就建、存在就打开），单独放在下面一组。
+      */}
       <nav className="ribbon" aria-label="功能栏">
-        <button
-          className={`ribbon-btn ${sidebarTab === 'files' ? 'on' : ''}`}
-          title="文件"
-          aria-label="文件"
-          onClick={() => {
-            setSidebarTab('files');
-            props.onRibbonAction?.('files');
-          }}
-        >
-          <RibbonIcon name="folder" />
-        </button>
-        <button
-          className={`ribbon-btn ${sidebarTab === 'search' ? 'on' : ''}`}
-          title="搜索"
-          aria-label="搜索"
-          onClick={() => setSidebarTab('search')}
-        >
-          <RibbonIcon name="search" />
-        </button>
-        {props.onOpenTrash && (
-          <button className="ribbon-btn" title="回收站" aria-label="回收站" onClick={props.onOpenTrash}>
-            <RibbonIcon name="trash" />
+        {PANES.map((p) => (
+          <button
+            key={p.id}
+            className={`ribbon-btn ${sidebarTab === p.id ? 'on' : ''}`}
+            title={p.title}
+            aria-label={p.title}
+            aria-pressed={sidebarTab === p.id}
+            onClick={() => {
+              props.onSidebarTab?.(p.id);
+              if (p.id === 'files') props.onRibbonAction?.('files');
+            }}
+          >
+            <RibbonIcon name={p.icon} />
           </button>
-        )}
-        {props.onOpenTags && (
-          <button className="ribbon-btn" title="标签" aria-label="标签" onClick={props.onOpenTags}>
-            <RibbonIcon name="tag" />
-          </button>
-        )}
-
+        ))}
         {props.onOpenGraph && (
-          <button className="ribbon-btn" title="图谱" aria-label="图谱" onClick={props.onOpenGraph}>
+          <button
+            className={`ribbon-btn ${props.graphOpen ? 'on' : ''}`}
+            title="图谱（在右栏打开）"
+            aria-label="图谱"
+            aria-pressed={!!props.graphOpen}
+            onClick={props.onOpenGraph}
+          >
             <RibbonIcon name="graph" />
+          </button>
+        )}
+        {props.onOpenDaily && (
+          <button
+            className="ribbon-btn"
+            title="今日日记（没有就新建）"
+            aria-label="今日日记"
+            onClick={props.onOpenDaily}
+          >
+            <RibbonIcon name="calendar" />
           </button>
         )}
         <span className="ribbon-spacer" />
@@ -484,6 +543,16 @@ export function MainView(props: Props) {
               currentPath={props.currentPath}
               onOpen={props.onSelect}
               onOpenAt={props.onOpenAt}
+              seed={props.searchSeed ?? null}
+            />
+          ) : sidebarTab === 'tags' ? (
+            <TagPane docs={props.searchDocs ?? []} onPick={(t) => props.onPickTag?.(t)} />
+          ) : sidebarTab === 'trash' ? (
+            <TrashPane
+              list={props.trashList ?? []}
+              onRestore={(p) => props.onTrashRestore?.(p)}
+              onPurge={(p) => props.onTrashPurge?.(p)}
+              onPurgeAll={props.onTrashPurgeAll}
             />
           ) : (
           <>
@@ -742,6 +811,11 @@ export function MainView(props: Props) {
       <RightPanel
         width={rightW.width}
         doc={props.doc}
+        docs={props.searchDocs}
+        currentPath={props.currentPath}
+        onOpenNote={(p) => props.onSelect(p)}
+        graphRequest={props.graphRequest}
+        onExpandGraph={props.onExpandGraph}
         wikiOut={props.wikiOut}
         wikiBack={props.wikiBack}
         onOpenWiki={props.onOpenWiki}

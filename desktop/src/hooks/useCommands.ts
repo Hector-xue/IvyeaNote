@@ -31,6 +31,8 @@ export interface CommandActions {
   onAddDevice: (() => void) | null;
   /** 没有笔记库时为 null */
   onOpenTrash: (() => void) | null;
+  /** v0.11.16：标签面板（左栏）。没有笔记库时为 null */
+  onOpenTags: (() => void) | null;
 }
 
 export interface CommandsDeps {
@@ -119,6 +121,7 @@ export function useCommands(deps: CommandsDeps): Commands {
         actions.onOpenTrash
           ? { id: 'trash', label: '打开回收站', run: actions.onOpenTrash }
           : null,
+        actions.onOpenTags ? { id: 'tags', label: '打开标签面板', run: actions.onOpenTags } : null,
         // v0.7.2：应用内更新入口（手动检查）
         { id: 'check-update', label: `检查更新（当前 v${appVersion}）`, run: actions.onCheckUpdate },
       ].filter((c): c is CommandItem => c !== null),

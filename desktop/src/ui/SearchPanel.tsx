@@ -7,7 +7,7 @@
  *
  * 检索走 `lib/searchIndex` 的倒排索引（与命令面板同一套），不另起炉灶。
  */
-import { useDeferredValue, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { searchNotes, type SearchDoc } from '../lib/searchIndex';
 
 interface Props {
@@ -17,6 +17,11 @@ interface Props {
   onOpen(path: string): void;
   /** v0.8.4 E7：点命中行——打开并跳到那一行。不传则退化为只打开 */
   onOpenAt?(path: string, line: number): void;
+  /**
+   * v0.11.16：从外部灌一个搜索词进来（点标签面板里的标签用）。
+   * 带序号是因为「连点同一个标签两次」也该重新搜——只看字符串会被 React 判定没变。
+   */
+  seed?: { text: string; n: number } | null;
 }
 
 function titleOf(path: string): string {
@@ -29,6 +34,12 @@ function dirOf(path: string): string {
 
 export function SearchPanel(props: Props) {
   const [q, setQ] = useState('');
+  const seedN = props.seed?.n;
+  const seedText = props.seed?.text;
+  useEffect(() => {
+    if (seedN === undefined || seedText === undefined) return;
+    setQ(seedText);
+  }, [seedN, seedText]);
   // 敲键时先让输入框跟手，检索用滞后值——库大时不会每敲一下都卡一帧
   const deferred = useDeferredValue(q);
 

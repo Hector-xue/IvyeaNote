@@ -87,6 +87,8 @@ interface Props {
   onCreateVault(): void;
   /** v0.10.2：打开设置面板（存储位置、外观、同步都在里面）。手机上此前没有任何入口 */
   onOpenSettings?(): void;
+  /** v0.11.16：今日日记（桌面在 ribbon 上，手机放进「⋯」这张单子） */
+  onOpenDaily?(): void;
   /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
   onOpenPath?(relPath: string): void;
   onToggleTheme(): void;
@@ -308,9 +310,15 @@ export function MobileView(props: Props) {
     const appGroup: SheetItem[] = props.onOpenSettings
       ? [{ key: 'settings', icon: 'settings', label: '设置', onClick: props.onOpenSettings }]
       : [];
+    /* v0.11.16：日记在桌面是 ribbon 上一颗按钮；手机没有 ribbon，放进这张单子，
+       否则「写日记」在手机上等于不存在（这个仓库反复栽在"能力有、入口没接"上） */
+    const dailyGroup: SheetItem[] = props.onOpenDaily
+      ? [{ key: 'daily', icon: 'calendar', label: '今日日记', onClick: props.onOpenDaily }]
+      : [];
     if (!cur) {
       return [
         [{ key: 'new', icon: 'file-plus', label: '新建笔记', onClick: props.onCreateNote }],
+        dailyGroup,
         appGroup,
       ];
     }
@@ -329,7 +337,10 @@ export function MobileView(props: Props) {
     // v0.10.2：不再有「阅读视图 / 编辑视图」两条——顶栏右边那个图标就是这个开关，
     // 一个模式在一屏里有两个切换入口，只会让人怀疑自己按错了地方
     return [
-      [{ key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) }],
+      [
+        { key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) },
+        ...dailyGroup,
+      ],
       fileActions,
       appGroup,
     ];

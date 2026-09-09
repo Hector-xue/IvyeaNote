@@ -192,8 +192,10 @@ describe('v0.4.0 T5：删除进回收站', () => {
     expect(memFiles.get(trashKey!)).toContain('# B');
 
     // 回收站面板：恢复
+    // v0.11.16：回收站从对话框搬进左栏，两个动作收成行尾的图标按钮（hover 才浮现），
+    // 所以这里按 aria-label 点，不再找「恢复」这两个字
     fireEvent.click(screen.getByLabelText('回收站'));
-    fireEvent.click(await screen.findByText('恢复'));
+    fireEvent.click(await screen.findByLabelText('恢复到原位置'));
     await waitFor(() => expect(memFiles.has('sub/b.md')).toBe(true));
   });
 });

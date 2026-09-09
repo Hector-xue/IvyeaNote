@@ -26,6 +26,17 @@ export interface GraphViewProps {
   currentPath: string | null;
   onOpenNote(path: string): void;
   onClose(): void;
+  /**
+   * v0.11.16：**嵌在右栏里**的紧凑形态。
+   *
+   * 用户原话：「图谱为什么是一个新的页面？不应该也是在右侧窗口吗」。
+   * 整屏那一版是 v0.11.0 为"图谱天生需要面积"做的，那句话没错，但它把图谱变成了
+   * 一个要退出去才能回到正文的地方——而看图谱十有八九是为了**跳到某一篇**。
+   * 所以默认改成右栏的一个标签：局部图 + 正文并排；真要铺开还可以点「全屏」。
+   */
+  compact?: boolean;
+  /** 紧凑形态下的「全屏打开」。不传就不显示 */
+  onExpand?(): void;
 }
 
 interface Camera {
@@ -129,7 +140,10 @@ export function GraphView(props: GraphViewProps) {
   }, [fitView]);
 
   // ---- Esc 关闭 ----
+  const compact = props.compact;
   useEffect(() => {
+    // 嵌在右栏里时不抢 Esc：那时它只是一个面板，Esc 该留给弹层和编辑器
+    if (compact) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -138,7 +152,7 @@ export function GraphView(props: GraphViewProps) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [props]);
+  }, [props, compact]);
 
   // ---- 滚轮缩放：以指针为锚，不是以画布中心 ----
   useEffect(() => {
@@ -216,9 +230,15 @@ export function GraphView(props: GraphViewProps) {
     cam.k > 0.55 || n.path === props.currentPath || n.path === hover || (focusSet?.has(n.path) ?? false);
 
   return (
-    <div className="graph-full" role="dialog" aria-modal="true" aria-label="图谱">
+    <div
+      className={props.compact ? 'graph-panel' : 'graph-full'}
+      role={props.compact ? undefined : 'dialog'}
+      aria-modal={props.compact ? undefined : true}
+      aria-label="图谱"
+    >
       <div className="graph-toolbar">
-        <strong className="graph-title">图谱</strong>
+        {/* 右栏里那条标签已经写着"图谱"了，再写一遍就是重复；节点数留着，它是信息 */}
+        {!props.compact && <strong className="graph-title">图谱</strong>}
         <span className="graph-count">
           {graph.nodes.length} 个节点 · {graph.edges.length} 条连接
         </span>
@@ -253,9 +273,16 @@ export function GraphView(props: GraphViewProps) {
         <button className="icon-btn" title="适应窗口" aria-label="适应窗口" onClick={fitView}>
           <RibbonIcon name="focus" size={16} />
         </button>
-        <button className="icon-btn" title="关闭（Esc）" aria-label="关闭" onClick={props.onClose}>
-          <RibbonIcon name="close" size={16} />
-        </button>
+        {props.compact && props.onExpand && (
+          <button className="icon-btn" title="全屏打开" aria-label="全屏打开" onClick={props.onExpand}>
+            <RibbonIcon name="win-max" size={16} />
+          </button>
+        )}
+        {!props.compact && (
+          <button className="icon-btn" title="关闭（Esc）" aria-label="关闭" onClick={props.onClose}>
+            <RibbonIcon name="close" size={16} />
+          </button>
+        )}
       </div>
 
       <div

@@ -479,11 +479,21 @@ console.log('  · 图谱前状态 =', JSON.stringify(await evaluate(`(() => ({
   rootChild: document.getElementById('root')?.firstElementChild?.className ?? null,
   bodyText: (document.body.innerText || '').slice(0, 220),
 }))()`)));
+/*
+ * v0.11.16：ribbon 那颗按钮现在把图谱开在**右栏**，整屏那一版退到面板里的
+ * 「全屏打开」。这条老用例守的东西没变——铺开之后要有面积、有搜索——
+ * 只是入口多了一跳。
+ */
 await evaluate(`(() => {
-  const b = [...document.querySelectorAll('button')].find(x => x.title === '图谱');
+  const b = [...document.querySelectorAll('.ribbon .ribbon-btn')].find(x => x.getAttribute('aria-label') === '图谱');
   b?.click(); return !!b;
 })()`);
-await new Promise((r) => setTimeout(r, 1800));
+await new Promise((r) => setTimeout(r, 900));
+await evaluate(`(() => {
+  const b = document.querySelector('.right-panel [aria-label="全屏打开"]');
+  b?.click(); return !!b;
+})()`);
+await new Promise((r) => setTimeout(r, 1500));
 const graph = await evaluate(`(() => {
   const g = document.querySelector('.graph-full');
   if (!g) return null;
@@ -496,7 +506,7 @@ const graph = await evaluate(`(() => {
     hint: g.querySelector('.graph-hint')?.textContent ?? null,
   };
 })()`);
-check('图谱占满窗口且有搜索/提示（不再是 720px 弹窗）',
+check('从右栏点「全屏打开」，图谱铺满窗口且有搜索（不再是 720px 弹窗）',
   graph && graph.fullWidth >= 1300 && graph.hasSearch, graph);
 await shot('graph.png');
 await evaluate(`(() => { const b=[...document.querySelectorAll('.graph-toolbar button')].pop(); b?.click(); return true })()`);
@@ -1330,6 +1340,108 @@ await new Promise((r) => setTimeout(r, 2600));
   check('编辑态与阅读态同一套颜色（引用线 / 勾选 / 围栏语言都是品牌绿）',
     isGreen(edit.quoteBorder) && isGreen(edit.checkedBg) && isGreen(edit.fenceColor), edit);
   await shot('colors-edit.png');
+}
+
+// ---------- 7.84 左栏面板化 + 图谱进右栏 + 日记入口（v0.11.16）----------
+/*
+ * 用户原话：「最左侧的侧边栏的回收站的 UI，标签的 UI，都需要优化，你自己去看看
+ * 现在的 UI，很乱，视觉上体验很差」「图谱为什么是一个新的页面？不应该也是在右侧
+ * 窗口吗」「再增加个写日记的功能也放在最左侧那里」。
+ *
+ * 乱的根子是**同一排按钮做着两类事**：文件/搜索切左栏，标签/回收站/图谱弹窗口。
+ * 所以这一组用例守的是"行为一致"：ribbon 上的面板键一律切左栏、图谱在右栏里、
+ * 日记是个动作。光看截图看不出这些，得真的点。
+ */
+{
+  const ribbon = await evaluate(`(() => ({
+    labels: [...document.querySelectorAll('.ribbon .ribbon-btn')].map(b => b.getAttribute('aria-label')),
+  }))()`);
+  check('ribbon 上有：文件 / 搜索 / 标签 / 回收站 / 图谱 / 今日日记',
+    ['文件', '搜索', '标签', '回收站', '图谱', '今日日记'].every((x) => ribbon.labels.includes(x)),
+    ribbon);
+
+  const clickRibbon = async (label) => {
+    await evaluate(`(() => {
+      const b = [...document.querySelectorAll('.ribbon .ribbon-btn')].find(x => x.getAttribute('aria-label') === ${JSON.stringify(label)});
+      b?.click(); return !!b })()`);
+    await new Promise((r) => setTimeout(r, 500));
+  };
+
+  // --- 标签：左栏面板，不是弹窗 ---
+  await clickRibbon('标签');
+  const tags = await evaluate(`(() => ({
+    inSidebar: !!document.querySelector('.sidebar .side-pane .sp-row'),
+    modal: !!document.querySelector('.dlg-mask'),
+    rows: [...document.querySelectorAll('.sidebar .sp-row .sp-name')].map(x => x.textContent),
+    hasFilter: !!document.querySelector('.sidebar .sp-search input'),
+    counts: [...document.querySelectorAll('.sidebar .sp-count')].map(x => x.textContent),
+  }))()`);
+  check('「标签」是左栏的一个面板（带筛选框与引用计数），不再盖一张对话框',
+    tags.inSidebar && !tags.modal && tags.hasFilter && tags.rows.length > 0 && tags.counts.length > 0,
+    tags);
+  await shot('pane-tags.png');
+
+  // 点一个标签：切到搜索面板并把 #标签 灌进搜索框
+  await evaluate(`(() => { document.querySelector('.sidebar .sp-row')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const afterTag = await evaluate(`(() => {
+    const input = document.querySelector('.sidebar input');
+    return { value: input ? input.value : null, hits: document.querySelectorAll('.sidebar .sr-file, .sidebar .search-hit, .sidebar .sr-hit').length };
+  })()`);
+  check('点标签直接切到隔壁的搜索面板并带上 #标签（不再绕命令面板）',
+    (afterTag.value ?? '').startsWith('#'), afterTag);
+
+  // --- 回收站：左栏面板 ---
+  await clickRibbon('回收站');
+  const trash = await evaluate(`(() => ({
+    inSidebar: !!document.querySelector('.sidebar .side-pane'),
+    modal: !!document.querySelector('.dlg-mask'),
+    head: document.querySelector('.sidebar .sp-head')?.textContent ?? '',
+    rows: document.querySelectorAll('.sidebar .sp-row-static').length,
+    empty: document.querySelector('.sidebar .sp-empty')?.textContent ?? null,
+  }))()`);
+  check('「回收站」也是左栏面板：有计数/清空的头部，空的时候说人话',
+    trash.inSidebar && !trash.modal && (trash.rows > 0 || (trash.empty ?? '').includes('回收站')), trash);
+  await shot('pane-trash.png');
+
+  // --- 图谱：右栏的一个标签，不是整屏新页面 ---
+  await clickRibbon('图谱');
+  const graph = await evaluate(`(() => ({
+    full: !!document.querySelector('.graph-full'),
+    inRight: !!document.querySelector('.right-panel .graph-panel'),
+    tabs: [...document.querySelectorAll('.rp-tab')].map(x => x.textContent.trim()),
+    active: document.querySelector('.rp-tab.on')?.textContent?.trim() ?? null,
+    canvasW: Math.round(document.querySelector('.right-panel .graph-canvas')?.getBoundingClientRect().width ?? 0),
+    hasExpand: !!document.querySelector('.right-panel [aria-label="全屏打开"]'),
+  }))()`);
+  check('图谱在右栏里（不再是盖住整个窗口的新页面），并留一颗「全屏打开」',
+    !graph.full && graph.inRight && graph.active === '图谱' && graph.canvasW > 80 && graph.hasExpand,
+    graph);
+  await shot('pane-graph.png');
+
+  // --- 日记：点一下就该有今天那一篇 ---
+  await clickRibbon('今日日记');
+  await new Promise((r) => setTimeout(r, 1500));
+  const daily = await evaluate(`(async () => {
+    const now = new Date();
+    const name = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    const root = await navigator.storage.getDirectory();
+    for await (const [n, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !n.startsWith('vault-')) continue;
+      let dir = null;
+      try { dir = await handle.getDirectoryHandle('日记'); } catch (e) { return { name, made: false, why: 'no-dir' }; }
+      const names = [];
+      for await (const [f] of dir.entries()) names.push(f);
+      return { name, made: names.includes(name + '.md'), names };
+    }
+    return { name, made: false, why: 'no-vault' };
+  })()`);
+  check('点「今日日记」真的落了一篇 日记/YYYY-MM-DD.md（此前只有命令面板能到）',
+    daily.made, daily);
+  await shot('pane-daily.png');
+
+  // 回到文件面板，后面的用例都以文件树为前提
+  await clickRibbon('文件');
 }
 
 // ---------- 7.85 侧栏头部：紧凑且左右不空（v0.11.16）----------
