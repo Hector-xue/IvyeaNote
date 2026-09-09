@@ -9,6 +9,11 @@
  * 手写一个 harness 页面去测样式，只会测到"我抄进 harness 的那部分"——
  * 漏掉的元素永远测不出来，而漏掉的正是会出问题的那些。
  *
+ * ⚠️ **传给 evaluate 的那段代码是模板字面量：里面一个反引号都不能出现。**
+ * 注释里写 `.m-sheet2`、写 ``` 围栏、写 `y`——都会把模板当场截断，
+ * 报错还长得毫不相干（"missing ) after argument list" / "xxx is not defined"）。
+ * 需要反引号就用 String.fromCharCode(96)，需要引用类名就直接写名字、不要加反引号。
+ *
  * 零依赖：静态服务用 node:http，浏览器用系统的 google-chrome + CDP（Node 22 自带 WebSocket）。
  * 退出码非 0 = 有断言没过；截图落在第二个参数指定的目录，用来肉眼复核观感。
  */
@@ -40,17 +45,42 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((r) => server.listen(PORT, '127.0.0.1', r));
 
+/*
+ * 调试端口**必须每次随机**，而且退出时要把浏览器和 profile 都收干净。
+ *
+ * 端口原来写死 9333：脚本中途崩过一次（比如模板字面量里混进反引号）之后，
+ * 那个 Chrome 不会自己退出，仍然占着 9333。下一次运行的 `wsUrl()` 于是连上
+ * **上一轮那个浏览器**——它还带着上一轮的 profile、上一轮的 OPFS 库、
+ * 甚至还停在手机模拟视口里。表现就是"什么都没改，突然一片红"，
+ * 而真正的产物一点问题都没有。同一批残留还堆了 70 多个 profile 目录。
+ *
+ * 这类"验证台自己说谎"的问题比被它挡住的 bug 更贵：它会让人开始不相信红灯。
+ */
+const DEVTOOLS_PORT = 9400 + Math.floor(Math.random() * 500);
 const profile = fs.mkdtempSync('/tmp/ivnote-verify-');
 const chrome = spawn('google-chrome', [
-  '--headless=new', '--remote-debugging-port=9333', '--no-sandbox',
+  '--headless=new', `--remote-debugging-port=${DEVTOOLS_PORT}`, '--no-sandbox',
   '--disable-gpu', '--disable-dev-shm-usage', `--user-data-dir=${profile}`,
   '--window-size=1400,900', '--hide-scrollbars', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
+/** 无论怎么退出（正常结束、断言抛错、Ctrl+C）都要收拾干净 */
+const cleanup = () => {
+  try { chrome.kill('SIGKILL'); } catch { /* 已经没了 */ }
+  try { fs.rmSync(profile, { recursive: true, force: true }); } catch { /* 下次再说 */ }
+};
+process.on('exit', cleanup);
+process.on('uncaughtException', (e) => {
+  cleanup();
+  console.error(e);
+  process.exit(1);
+});
+process.on('SIGINT', () => { cleanup(); process.exit(130); });
+
 async function wsUrl() {
   for (let i = 0; i < 60; i++) {
     try {
-      const r = await fetch('http://127.0.0.1:9333/json/list');
+      const r = await fetch(`http://127.0.0.1:${DEVTOOLS_PORT}/json/list`);
       const list = await r.json();
       const page = list.find((t) => t.type === 'page');
       if (page) return page.webSocketDebuggerUrl;
@@ -298,7 +328,13 @@ check('标题行上的行内语法也渲染（此前整段行内装饰写在 els
 // 标题与顶部留白：v0.11.6 收紧（用户「标题那一栏太高、距顶部留白太多」）
 const titleGeom = await evaluate(`(() => {
   const bar = document.querySelector('.top-bar');
-  const title = document.querySelector('.inline-title');
+  /*
+   * v0.11.11 起，文件名与正文首个 H1 同名时内联标题**会被隐藏**（那正是用户要的
+   * "别显示两个名字"，而 titleSync 会把文件名改成 H1，所以同名是常态）。
+   * 所以这里量的是「顶栏 → 第一行可见内容」的距离，不再钉死在 .inline-title 上：
+   * 这条用例真正要守的是"上面别空一大片"，不是"必须有个内联标题元素"。
+   */
+  const title = document.querySelector('.inline-title') ?? document.querySelector('.cm-content .cm-line');
   const line = document.querySelector('.cm-content .cm-line');
   if (!bar || !title) return null;
   const b = bar.getBoundingClientRect(), t = title.getBoundingClientRect();
@@ -307,11 +343,13 @@ const titleGeom = await evaluate(`(() => {
     titleTop: Math.round(t.top),
     gapAboveTitle: Math.round(t.top - b.bottom),
     titleHeight: Math.round(t.height),
-    gapTitleToBody: line ? Math.round(line.getBoundingClientRect().top - t.bottom) : null,
+    sameAsFirstLine: title === line,
+    gapTitleToBody: !line || title === line ? 0 : Math.round(line.getBoundingClientRect().top - t.bottom),
   };
 })()`);
-check('标题距顶栏的留白收紧到 ≤16px（原来 32px，加上顶栏一共 70px 全是空的）',
-  !!titleGeom && titleGeom.gapAboveTitle <= 16, titleGeom);
+check('顶栏到第一行内容的留白够紧（原来 32px，加上顶栏一共 70px 全是空的）',
+  // 内联标题被去重规则藏起来时，这里量的是 H1 那一行，它自带 0.4em 上边距，故放宽到 24px
+  !!titleGeom && titleGeom.gapAboveTitle <= (titleGeom.sameAsFirstLine ? 24 : 16), titleGeom);
 /*
  * 标题到正文：我们自己只留 8+8=16px（inline-title 的 margin-bottom + cm-content
  * 的 padding-top）。这份样例的正文首行恰好是 `# 标题`，H1 自带 0.4em 上边距
@@ -886,10 +924,55 @@ await new Promise((r) => setTimeout(r, 2600));
 // ---------- 7.7 重开回到上次那篇 + 标题不重复（v0.11.11）----------
 {
   // 打开一篇有 H1 的笔记，刷新（等于重开应用），看还在不在这一篇上
+  /*
+   * v0.11.13：**打开一篇笔记不该把它改名。**
+   * 编辑器的 updateListener 原来对任何 docChanged 都上报，包括"把文件内容灌进来"
+   * 那一次——于是光是打开就写盘 + 按 H1 改名（用户：「文件本来就是这个名字，
+   * 还非要再命名一次」）。这里开一篇文件名与 H1 不同的笔记，等过防抖再看名字还在不在。
+   */
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await handle.getFileHandle('不该被改名.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode('# 正文里的标题' + String.fromCharCode(10)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
   await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('不该被改名'));
+    (el?.closest('.ft-file'))?.scrollIntoView({ block: 'center' });
+    (el?.closest('.ft-file'))?.click();
+    return !!el })()`);
+  await new Promise((r) => setTimeout(r, 2000)); // 等过写盘防抖
+  const stillNamed = await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const names = [];
+      for await (const [n] of handle.entries()) names.push(n);
+      return { kept: names.includes('不该被改名.md'), renamed: names.includes('正文里的标题.md') };
+    }
+    return null;
+  })()`);
+  check('只是打开一篇笔记，不该把它按 H1 改名（也不该写盘）',
+    !!stillNamed && stillNamed.kept && !stillNamed.renamed, stillNamed);
+
+  const clickedTarget = await evaluate(`(() => {
     const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('大纲用'));
-    el?.closest('.ft-file')?.click(); return !!el })()`);
-  await new Promise((r) => setTimeout(r, 900));
+    if (!el) return false;
+    const row = el.closest('.ft-file');
+    row.scrollIntoView({ block: 'center' });
+    row.click();
+    return true;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  if (!clickedTarget) console.log('  · 没点到「大纲用」这一篇——下面那条还原用例的前提就不成立');
   await send('Page.reload');
   await new Promise((r) => setTimeout(r, 2600));
   const restored = await evaluate(`(() => ({
@@ -898,7 +981,7 @@ await new Promise((r) => setTimeout(r, 2600));
     body: (document.querySelector('.cm-content')?.innerText ?? '').slice(0, 20),
   }))()`);
   check('重开之后回到退出前那篇笔记（不再是空白欢迎页）',
-    restored.hasEditor && /一级标题/.test(restored.body), restored);
+    clickedTarget && restored.hasEditor && /一级标题/.test(restored.body), { clickedTarget, ...restored });
 
   // 文件名与 H1 **不同**时两行都要在（它们携带不同信息）
   const differing = await evaluate(`(() => ({
@@ -1187,6 +1270,97 @@ await new Promise((r) => setTimeout(r, 2600));
     !!sheet && parseFloat(sheet.radius) >= 12 && sheet.shadow && (sheet.itemH ?? 0) >= 48 &&
     parseFloat(sheet.sepLeft ?? '0') >= 40 && sheet.icons > 0, sheet);
   await shot('mobile-sheet.png');
+
+  // --- v0.11.13：标题不冻结 / 大纲弹层形状 / 底部四个键 ---
+  await evaluate(`(() => {
+    // 关掉菜单，打开那篇有标题的长笔记
+    document.querySelector('.m-sheet-mask')?.click();
+    return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  // 造一篇够长的：短笔记根本没有可滚的内容，验不出"标题会不会跟着走"
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, handle] of root.entries()) {
+      if (handle.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const NL = String.fromCharCode(10);
+      const lines = ['# 一篇很长的笔记', ''];
+      for (let i = 1; i <= 80; i++) lines.push('## 第 ' + i + ' 节', '', '正文正文正文正文正文', '');
+      const fh = await handle.getFileHandle('长文.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode(lines.join(NL)));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2400));
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  await evaluate(`(() => {
+    const el = [...document.querySelectorAll('.m-tree-name')].find(x => x.textContent.includes('长文'));
+    (el?.closest('.m-tree-row') ?? el)?.click();
+    return !!el })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const bottom = await evaluate(`(() => ({
+    labels: [...document.querySelectorAll('.m-bottom .m-nav-btn')].map(b => b.getAttribute('aria-label')),
+  }))()`);
+  check('底部四个键换成手机上真正高频的：搜索 / 新建 / 大纲 / 同步（格式条改由焦点触发）',
+    JSON.stringify(bottom.labels) === JSON.stringify(['搜索', '新建笔记', '大纲', '立即同步']), bottom);
+
+  // 标题：把主区滚下去，标题应当跟着走（不再钉在顶上）
+  const title = await evaluate(`(() => {
+    const main = document.querySelector('.m-main');
+    const t = document.querySelector('.inline-title');
+    if (!main || !t) {
+      return {
+        missing: true,
+        hasMain: !!main,
+        hasTitle: !!t,
+        crumb: document.querySelector('.m-crumb')?.textContent ?? null,
+        firstLine: document.querySelector('.cm-content .cm-line')?.textContent ?? null,
+      };
+    }
+    const before = t.getBoundingClientRect().top;
+    main.scrollTop = 400;
+    return { before, scrollable: main.scrollHeight > main.clientHeight + 40 };
+  })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const after = await evaluate(`(() => {
+    const t = document.querySelector('.inline-title');
+    return t ? t.getBoundingClientRect().top : null;
+  })()`);
+  check('手机端标题跟着正文滚走，不再冻结在顶部',
+    !!title && !title.missing && title.scrollable && after !== null && after < title.before - 200,
+    { ...title, after });
+
+  // 大纲：贴底、上面两角圆、有把手
+  await evaluate(`(() => {
+    const b = [...document.querySelectorAll('.m-bottom .m-nav-btn')].find(x => x.getAttribute('aria-label') === '大纲');
+    b?.click(); return !!b })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const outline = await evaluate(`(() => {
+    const el = document.querySelector('.m-outline2');
+    if (!el) return null;
+    // 圆角在卡片上，m-sheet2 只是个透明外壳（和底部菜单同一套结构）
+    const card = el.querySelector('.m-sheet2-group') ?? el;
+    const cs = getComputedStyle(card);
+    const r = el.getBoundingClientRect();
+    return {
+      radius: cs.borderTopLeftRadius,
+      grip: !!el.querySelector('.m-sheet2-grip'),
+      items: el.querySelectorAll('.m-outline-item').length,
+      bottomGap: Math.round(window.innerHeight - r.bottom),
+      onScreen: r.top > 0 && r.bottom <= window.innerHeight + 2,
+    };
+  })()`);
+  check('大纲是贴底的圆角卡片（不再是浮在半空的直角块）',
+    !!outline && parseFloat(outline.radius) >= 12 && outline.grip && outline.items > 0 &&
+    outline.onScreen && outline.bottomGap <= 24, outline);
+  await shot('mobile-outline.png');
 
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');
