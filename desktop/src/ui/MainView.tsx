@@ -12,6 +12,7 @@ import { SearchPanel } from './SearchPanel';
 import { GraphView } from './GraphView';
 import { TagPane, TrashPane } from './SidePanes';
 import { PdfViewer } from './PdfViewer';
+import { ImageViewer } from './ImageViewer';
 import { BaseView } from './BaseView';
 import { HtmlViewer } from './HtmlViewer';
 import type { TreeNode } from './FileTree';
@@ -100,6 +101,8 @@ interface Props {
   onDeleteFile(path: string): void;
   /** v0.11.15：删除整个文件夹（里面的文件进回收站）。不传就不显示这个菜单项 */
   onDeleteFolder?(dir: string): void;
+  /** v0.11.22：重命名文件夹——由 App 弹输入框后整棵子树换前缀 */
+  onRenameFolder?(dir: string): void;
   /** v0.7.5 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
   /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
@@ -165,6 +168,13 @@ interface Props {
   baseNotes?: BaseNote[];
   onCloseBase?(): void;
   onOpenBaseExternal?(path: string): void;
+  /**
+   * v0.11.22：正在看的图片（主区里看，不再是盖住全屏的蒙层）。
+   * `url` 是 blob URL，说明不了是哪个文件，所以路径要单独给。
+   */
+  imageView?: { path: string; url: string } | null;
+  onCloseImage?(): void;
+  onOpenImageExternal?(path: string): void;
   pdfView: string | null;
   /** v0.11.0：正在预览的 PDF 的库内路径（pdfView 是 blob URL，说明不了是哪个文件） */
   pdfPath?: string | null;
@@ -342,6 +352,20 @@ export function MainView(props: Props) {
               run: () => props.onCreateFolder?.(node.path),
             },
             { type: 'sep', id: 's-dir' },
+            /*
+             * v0.11.22：**文件夹也要能改名**（用户点名）。此前只有文件那一支有
+             * 「重命名…」，文件夹想换个名字只能新建一个再把东西一件件拖过去。
+             */
+            ...(props.onRenameFolder
+              ? ([
+                  {
+                    id: 'renamedir',
+                    label: '重命名…',
+                    icon: 'edit',
+                    run: () => props.onRenameFolder?.(node.path),
+                  },
+                ] as MenuAnchor['items'])
+              : []),
             ...(props.onRequestMove
               ? ([{ id: 'movedir', label: '移动到…', icon: 'move', run: () => props.onRequestMove?.(node.path, true) }] as MenuAnchor['items'])
               : []),
@@ -562,7 +586,7 @@ export function MainView(props: Props) {
           <FileTree
             nodes={fileTree}
             /* 打开的是 PDF 时，高亮的应该是那个 PDF 而不是上一篇笔记 */
-            currentPath={props.pdfPath ?? props.currentPath}
+            currentPath={props.pdfPath ?? props.imageView?.path ?? props.currentPath}
             collapsed={props.collapsedDirs}
             onToggleDir={props.onToggleDir}
             onSelectFile={openTreeFile}
@@ -611,265 +635,290 @@ export function MainView(props: Props) {
           不是最右侧大纲这啊，是侧边栏的右侧，也就是中间空白的这里」。
           主区本来就是"当前在看什么"的位置，图谱是其中一种。
         */}
-        {props.graphOpen ? (
-          <GraphView
-            docs={props.searchDocs ?? []}
-            currentPath={props.currentPath}
-            onOpenNote={(p) => props.onSelect(p)}
-            onClose={() => props.onCloseGraph?.()}
-          />
-        ) : props.htmlDoc && props.resolveAsset && props.readVaultText ? (
-          <HtmlViewer
-            path={props.htmlDoc.path}
-            html={props.htmlDoc.html}
-            resolveAsset={props.resolveAsset}
-            readText={props.readVaultText}
-            onClose={() => props.onCloseHtml?.()}
-            onOpenExternal={
-              props.onOpenHtmlExternal ? () => props.onOpenHtmlExternal?.(props.htmlDoc!.path) : undefined
-            }
-          />
-        ) : props.baseDoc ? (
-          <BaseView
-            path={props.baseDoc.path}
-            text={props.baseDoc.text}
-            notes={props.baseNotes ?? []}
+        {/*
+          v0.11.22：**编辑区这一层单独包起来（`.editor-stage`）**。
+          状态栏是浮层（`position:absolute; bottom:0`），此前它相对整个
+          `.editor-pane` 定位——AI 面板一开，那条浮着的状态栏就正好压在面板的
+          底栏上，「应用」按钮只露出半截（用户：「右下角有个按钮被盖住了」）。
+          现在状态栏钉在这一层里，AI 面板排在这一层**外面**：浮层只会浮在正文上，
+          永远盖不住下面那块面板。
+        */}
+        <div className="editor-stage">
+          {props.graphOpen ? (
+            <GraphView
+              docs={props.searchDocs ?? []}
+              currentPath={props.currentPath}
+              onOpenNote={(p) => props.onSelect(p)}
+              onClose={() => props.onCloseGraph?.()}
+            />
+          ) : props.htmlDoc && props.resolveAsset && props.readVaultText ? (
+            <HtmlViewer
+              path={props.htmlDoc.path}
+              html={props.htmlDoc.html}
+              resolveAsset={props.resolveAsset}
+              readText={props.readVaultText}
+              onClose={() => props.onCloseHtml?.()}
+              onOpenExternal={
+                props.onOpenHtmlExternal ? () => props.onOpenHtmlExternal?.(props.htmlDoc!.path) : undefined
+              }
+            />
+          ) : props.baseDoc ? (
+            <BaseView
+              path={props.baseDoc.path}
+              text={props.baseDoc.text}
+              notes={props.baseNotes ?? []}
+              /*
+               * 表里现在有图片和 PDF：一律走 onSelect 会拿文本通道去读一张 PNG，
+               * 直接抛错。按类型分流，和文件树点开它们时走的是同一条路。
+               */
+              onOpenNote={(p) => {
+                props.onCloseBase?.();
+                if (/\.md$/i.test(p)) props.onSelect(p);
+                else if (/\.pdf$/i.test(p)) props.onOpenPdf(p);
+                else props.onOpenAttachment?.(p);
+              }}
+              onClose={() => props.onCloseBase?.()}
+              onOpenExternal={
+                props.onOpenBaseExternal
+                  ? () => props.onOpenBaseExternal?.(props.baseDoc!.path)
+                  : undefined
+              }
+            />
+          ) : props.imageView ? (
             /*
-             * 表里现在有图片和 PDF：一律走 onSelect 会拿文本通道去读一张 PNG，
-             * 直接抛错。按类型分流，和文件树点开它们时走的是同一条路。
+             * 图片和 PDF 是同一件事的两种格式：都在主区看、都能缩放、都能交给
+             * 系统应用。它们在这条链上挨着，将来加别的只读视图也照这个位置摆。
              */
-            onOpenNote={(p) => {
-              props.onCloseBase?.();
-              if (/\.md$/i.test(p)) props.onSelect(p);
-              else if (/\.pdf$/i.test(p)) props.onOpenPdf(p);
-              else props.onOpenAttachment?.(p);
-            }}
-            onClose={() => props.onCloseBase?.()}
-            onOpenExternal={
-              props.onOpenBaseExternal
-                ? () => props.onOpenBaseExternal?.(props.baseDoc!.path)
-                : undefined
-            }
-          />
-        ) : props.pdfView ? (
-          <PdfViewer
-            url={props.pdfView}
-            path={props.pdfPath ?? ''}
-            onClose={props.onClosePdf}
-            onOpenExternal={
-              props.onOpenPdfExternal && props.pdfPath
-                ? () => props.onOpenPdfExternal?.(props.pdfPath!)
-                : undefined
-            }
-          />
-        ) : (
-          <div className={`editor-split ${props.splitPath ? 'on' : ''}`}>
-            <div className="editor-col">
-              {/* 内联标题：文件名即标题，改它就是改文件名（Obsidian 同款） */}
-              {props.onRenameFile && (
-                <InlineTitle
-                  path={props.currentPath}
-                  doc={props.doc}
-                  onRename={(p, name) => props.onRenameFile?.(p, name)}
-                />
-              )}
-              <MarkdownEditor
-                doc={props.doc ?? ''}
-                onEdit={props.onEdit}
-                currentPath={props.currentPath}
-                jumpTo={props.jumpTo}
-                defaultView={props.defaultView}
-                mode={props.viewMode}
-                onModeChange={props.onViewModeChange}
-                livePreviewOn={props.livePreviewOn}
-                theme={props.theme}
-                onInsertImage={props.onInsertImage}
-                resolveImage={props.resolveImage}
-                onOpenWiki={props.onOpenWiki}
-                onOpenPath={props.onOpenPath}
-                wikiTitles={props.wikiTitles}
-                onPasteImage={props.onPasteImage}
-                /* 桌面此前从不传 exposeFormat，于是编辑器里的 doInsertImage
-                   是彻头彻尾的死代码。状态栏那颗「插入图片」就靠它 */
-                exposeFormat={exposeFormat}
-                exposeSelection={props.exposeSelection}
-                aiActions={props.aiActions}
-                onAi={props.onAi}
-                onTidy={props.onTidy}
-              />
-            </div>
-            {props.splitPath && (
-              <div className="editor-col split">
-                <div className="split-head">
-                  <span className="split-title" title={props.splitPath}>
-                    {sameDoc ? '实时预览' : props.splitPath}
-                  </span>
-                  <button className="icon-btn" title="关闭右栏" onClick={props.onCloseSplit}>
-                    <RibbonIcon name="close" size={14} />
-                  </button>
-                </div>
+            <ImageViewer
+              url={props.imageView.url}
+              path={props.imageView.path}
+              onClose={() => props.onCloseImage?.()}
+              onOpenExternal={
+                props.onOpenImageExternal
+                  ? () => props.onOpenImageExternal?.(props.imageView!.path)
+                  : undefined
+              }
+            />
+          ) : props.pdfView ? (
+            <PdfViewer
+              url={props.pdfView}
+              path={props.pdfPath ?? ''}
+              onClose={props.onClosePdf}
+              onOpenExternal={
+                props.onOpenPdfExternal && props.pdfPath
+                  ? () => props.onOpenPdfExternal?.(props.pdfPath!)
+                  : undefined
+              }
+            />
+          ) : (
+            <div className={`editor-split ${props.splitPath ? 'on' : ''}`}>
+              <div className="editor-col">
+                {/* 内联标题：文件名即标题，改它就是改文件名（Obsidian 同款） */}
+                {props.onRenameFile && (
+                  <InlineTitle
+                    path={props.currentPath}
+                    doc={props.doc}
+                    onRename={(p, name) => props.onRenameFile?.(p, name)}
+                  />
+                )}
                 <MarkdownEditor
-                  /* 同一篇文章开两个可编辑视图会各写各的、互相覆盖，所以同文档时右栏只读 */
-                  doc={(sameDoc ? props.doc : props.splitDoc) ?? ''}
+                  doc={props.doc ?? ''}
                   onEdit={props.onEdit}
-                  currentPath={props.splitPath}
-                  theme={props.theme}
+                  currentPath={props.currentPath}
+                  jumpTo={props.jumpTo}
+                  defaultView={props.defaultView}
+                  mode={props.viewMode}
+                  onModeChange={props.onViewModeChange}
                   livePreviewOn={props.livePreviewOn}
+                  theme={props.theme}
+                  onInsertImage={props.onInsertImage}
                   resolveImage={props.resolveImage}
                   onOpenWiki={props.onOpenWiki}
                   onOpenPath={props.onOpenPath}
                   wikiTitles={props.wikiTitles}
-                  readOnlyPreview={sameDoc}
+                  onPasteImage={props.onPasteImage}
+                  /* 桌面此前从不传 exposeFormat，于是编辑器里的 doInsertImage
+                     是彻头彻尾的死代码。状态栏那颗「插入图片」就靠它 */
+                  exposeFormat={exposeFormat}
+                  exposeSelection={props.exposeSelection}
+                  aiActions={props.aiActions}
+                  onAi={props.onAi}
+                  onTidy={props.onTidy}
                 />
               </div>
-            )}
-          </div>
-        )}
-        {props.aiPanel}
-        {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
-        {/* v0.10.0：同步从侧栏那个大绿按钮降级到这里。Obsidian 的同步状态就待在
-            右下角状态栏，安静、可点、不抢视线；侧栏留给文件树 */}
-        <div className="status-bar">
-          {/* v0.11.4：路径归顶栏的面包屑（Obsidian 的 view header 就在那儿）。
-              两处都写就是这个仓库被骂过的「上下重复」。 */}
-          <span className="st-right">
-            {/*
-              **插入图片**。这条能力从 v0.7.1 起就写好了（`useAttachments.insertImage`
-              + 编辑器里的 `doInsertImage`），但桌面端**根本没有渲染过任何工具条**，
-              `exposeFormat` 只有移动端会传——于是桌面上只能靠粘贴和拖入，
-              用户的原话是「我的 ivyeanote 怎么无法插入图片啊，obsidian 就可以」。
-              这是这个仓库第六次「能力写好了、入口没接」。
-            */}
-            {props.onInsertImage && props.currentPath && !props.pdfView && (
+              {props.splitPath && (
+                <div className="editor-col split">
+                  <div className="split-head">
+                    <span className="split-title" title={props.splitPath}>
+                      {sameDoc ? '实时预览' : props.splitPath}
+                    </span>
+                    <button className="icon-btn" title="关闭右栏" onClick={props.onCloseSplit}>
+                      <RibbonIcon name="close" size={14} />
+                    </button>
+                  </div>
+                  <MarkdownEditor
+                    /* 同一篇文章开两个可编辑视图会各写各的、互相覆盖，所以同文档时右栏只读 */
+                    doc={(sameDoc ? props.doc : props.splitDoc) ?? ''}
+                    onEdit={props.onEdit}
+                    currentPath={props.splitPath}
+                    theme={props.theme}
+                    livePreviewOn={props.livePreviewOn}
+                    resolveImage={props.resolveImage}
+                    onOpenWiki={props.onOpenWiki}
+                    onOpenPath={props.onOpenPath}
+                    wikiTitles={props.wikiTitles}
+                    readOnlyPreview={sameDoc}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {/* v0.5.0 U4：底部状态栏（字数统计，对标 Obsidian） */}
+          {/* v0.10.0：同步从侧栏那个大绿按钮降级到这里。Obsidian 的同步状态就待在
+              右下角状态栏，安静、可点、不抢视线；侧栏留给文件树 */}
+          <div className="status-bar">
+            {/* v0.11.4：路径归顶栏的面包屑（Obsidian 的 view header 就在那儿）。
+                两处都写就是这个仓库被骂过的「上下重复」。 */}
+            <span className="st-right">
+              {/*
+                **插入图片**。这条能力从 v0.7.1 起就写好了（`useAttachments.insertImage`
+                + 编辑器里的 `doInsertImage`），但桌面端**根本没有渲染过任何工具条**，
+                `exposeFormat` 只有移动端会传——于是桌面上只能靠粘贴和拖入，
+                用户的原话是「我的 ivyeanote 怎么无法插入图片啊，obsidian 就可以」。
+                这是这个仓库第六次「能力写好了、入口没接」。
+              */}
+              {props.onInsertImage && props.currentPath && !props.pdfView && (
+                <button
+                  className="st-item"
+                  title="插入图片（也可以直接粘贴或拖进来）"
+                  aria-label="插入图片"
+                  onClick={() => applyFormat?.('image')}
+                >
+                  <RibbonIcon name="image" size={13} />
+                  插入图片
+                </button>
+              )}
+              {/*
+                **AI**。v0.11.18 做完能力之后，入口只有顶栏「⋯」的二级菜单和命令面板，
+                用户装完的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
+                这是这个仓库第七次「能力写好了、入口没接」——所以这一版给了两个明面上的
+                入口：编辑区右键（选中文字后手就在那儿）和这颗状态栏按钮。
+              */}
+              {props.aiActions && props.aiActions.length > 0 && props.currentPath && !props.pdfView && (
+                <button
+                  className="st-item"
+                  title="AI：校对、润色、精简、写摘要…（替换类动作要先选中一段文字）"
+                  aria-label="AI"
+                  onClick={(e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    /*
+                     * 分段与右键菜单同一套（见 lib/editorMenu 的 aiSubmenu）：
+                     * 会改正文的 / 只多给一段的 / 什么都不写的。这里不置灰——
+                     * 状态栏这颗按钮离编辑区远，选区常常已经没了，点了会说清原因。
+                     */
+                    const items: MenuAnchor['items'] = aiSubmenu(props.aiActions!, true, (id) => props.onAi?.(id));
+                    if (props.onTidy) {
+                      items.push({ type: 'sep', id: 's-ai2' });
+                      items.push({
+                        id: 'tidy',
+                        label: '整理排版',
+                        hint: '本地规则，不联网',
+                        icon: 'text-format',
+                        run: () => props.onTidy?.(),
+                      });
+                    }
+                    setMenu({ x: r.left, y: r.top, items });
+                  }}
+                >
+                  <RibbonIcon name="sparkle" size={13} />
+                  AI
+                </button>
+              )}
+              {props.onOpenSplit && !props.pdfView && props.currentPath && (
+                <button
+                  className={`st-item ${props.splitPath ? 'on' : ''}`}
+                  title={props.splitPath ? '关闭分栏' : '左右分栏'}
+                  aria-label="左右分栏"
+                  onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
+                >
+                  <RibbonIcon name="sidebar" size={13} />
+                  {props.splitPath ? '关闭分栏' : '分栏'}
+                </button>
+              )}
+              {(props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (
+                <button className="st-item st-conflict" onClick={props.onOpenConflicts}>
+                  {props.conflictCount} 个冲突待处理
+                </button>
+              )}
+              {/*
+                这里此前只要登录了就永远写「已同步」：服务器关着、上一次同步整个报错，
+                状态栏照样一片祥和——而"电脑关了手机连不上"恰恰是本地服务器场景的
+                日常。状态得说实话，失败要能点开看原因。
+              */}
               <button
-                className="st-item"
-                title="插入图片（也可以直接粘贴或拖进来）"
-                aria-label="插入图片"
-                onClick={() => applyFormat?.('image')}
+                className={`st-item ${props.syncing ? 'busy' : ''} ${syncFailed ? 'st-fail' : ''}`}
+                onClick={
+                  props.syncDisabled || expired
+                    ? props.onOpenLogin
+                    : syncFailed && props.onOpenSyncStatus
+                      ? props.onOpenSyncStatus
+                      : (props.onSyncNow ?? props.onUpload)
+                }
+                title={
+                  props.syncDisabled
+                    ? '本地模式：笔记只存在这台设备上，点此登录后多端同步'
+                    : expired
+                      ? '登录已过期（服务端不再认这台设备的令牌）；点此重新登录，笔记不会丢'
+                      : props.syncing
+                      ? '同步中…'
+                      : syncFailed
+                        ? `上次同步失败：${props.lastReport?.errors[0]}（点击查看还有什么没上去）`
+                        : offline
+                          ? '连不上服务器；网络恢复后会自动同步，点击立即重试'
+                          : syncPending
+                          ? '这台设备还没同步过；点击立即同步一次'
+                          : '已自动同步；点击立即同步一次'
+                }
               >
-                <RibbonIcon name="image" size={13} />
-                插入图片
-              </button>
-            )}
-            {/*
-              **AI**。v0.11.18 做完能力之后，入口只有顶栏「⋯」的二级菜单和命令面板，
-              用户装完的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」。
-              这是这个仓库第七次「能力写好了、入口没接」——所以这一版给了两个明面上的
-              入口：编辑区右键（选中文字后手就在那儿）和这颗状态栏按钮。
-            */}
-            {props.aiActions && props.aiActions.length > 0 && props.currentPath && !props.pdfView && (
-              <button
-                className="st-item"
-                title="AI：校对、润色、精简、写摘要…（替换类动作要先选中一段文字）"
-                aria-label="AI"
-                onClick={(e) => {
-                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  /*
-                   * 分段与右键菜单同一套（见 lib/editorMenu 的 aiSubmenu）：
-                   * 会改正文的 / 只多给一段的 / 什么都不写的。这里不置灰——
-                   * 状态栏这颗按钮离编辑区远，选区常常已经没了，点了会说清原因。
-                   */
-                  const items: MenuAnchor['items'] = aiSubmenu(props.aiActions!, true, (id) => props.onAi?.(id));
-                  if (props.onTidy) {
-                    items.push({ type: 'sep', id: 's-ai2' });
-                    items.push({
-                      id: 'tidy',
-                      label: '整理排版',
-                      hint: '本地规则，不联网',
-                      icon: 'text-format',
-                      run: () => props.onTidy?.(),
-                    });
-                  }
-                  setMenu({ x: r.left, y: r.top, items });
-                }}
-              >
-                <RibbonIcon name="sparkle" size={13} />
-                AI
-              </button>
-            )}
-            {props.onOpenSplit && !props.pdfView && props.currentPath && (
-              <button
-                className={`st-item ${props.splitPath ? 'on' : ''}`}
-                title={props.splitPath ? '关闭分栏' : '左右分栏'}
-                aria-label="左右分栏"
-                onClick={() => (props.splitPath ? props.onCloseSplit?.() : props.onOpenSplit?.())}
-              >
-                <RibbonIcon name="sidebar" size={13} />
-                {props.splitPath ? '关闭分栏' : '分栏'}
-              </button>
-            )}
-            {(props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (
-              <button className="st-item st-conflict" onClick={props.onOpenConflicts}>
-                {props.conflictCount} 个冲突待处理
-              </button>
-            )}
-            {/*
-              这里此前只要登录了就永远写「已同步」：服务器关着、上一次同步整个报错，
-              状态栏照样一片祥和——而"电脑关了手机连不上"恰恰是本地服务器场景的
-              日常。状态得说实话，失败要能点开看原因。
-            */}
-            <button
-              className={`st-item ${props.syncing ? 'busy' : ''} ${syncFailed ? 'st-fail' : ''}`}
-              onClick={
-                props.syncDisabled || expired
-                  ? props.onOpenLogin
-                  : syncFailed && props.onOpenSyncStatus
-                    ? props.onOpenSyncStatus
-                    : (props.onSyncNow ?? props.onUpload)
-              }
-              title={
-                props.syncDisabled
-                  ? '本地模式：笔记只存在这台设备上，点此登录后多端同步'
+                <RibbonIcon
+                  name={props.syncDisabled ? 'file' : syncFailed || expired ? 'alert' : 'sync'}
+                  size={13}
+                />
+                {props.syncDisabled
+                  ? '本地模式'
                   : expired
-                    ? '登录已过期（服务端不再认这台设备的令牌）；点此重新登录，笔记不会丢'
+                    ? '登录已过期'
                     : props.syncing
-                    ? '同步中…'
+                    ? '同步中'
                     : syncFailed
-                      ? `上次同步失败：${props.lastReport?.errors[0]}（点击查看还有什么没上去）`
+                      ? '同步失败'
                       : offline
-                        ? '连不上服务器；网络恢复后会自动同步，点击立即重试'
+                        ? '离线'
                         : syncPending
-                        ? '这台设备还没同步过；点击立即同步一次'
-                        : '已自动同步；点击立即同步一次'
-              }
-            >
-              <RibbonIcon
-                name={props.syncDisabled ? 'file' : syncFailed || expired ? 'alert' : 'sync'}
-                size={13}
-              />
-              {props.syncDisabled
-                ? '本地模式'
-                : expired
-                  ? '登录已过期'
-                  : props.syncing
-                  ? '同步中'
-                  : syncFailed
-                    ? '同步失败'
-                    : offline
-                      ? '离线'
-                      : syncPending
-                        ? '待同步'
-                        : '已同步'}
-            </button>
-            {/*
-              v0.11.2：**打开 PDF 时不再显示「0 词 · 0 字符」**——那是当前笔记的字数，
-              而屏幕上摆着的是一份 PDF，写 0 只会让人以为出错了。
-              另外补上反向链接数（Obsidian 状态栏就有这一项），点它展开右栏那个标签。
-            */}
-            {!props.pdfView && props.currentPath && (
-              <>
-                {props.onOpenWikiPath && (
-                  <span className="st-item st-count" title="指向这篇笔记的链接数">
-                    {(props.wikiBack ?? []).length} 条反向链接
+                          ? '待同步'
+                          : '已同步'}
+              </button>
+              {/*
+                v0.11.2：**打开 PDF 时不再显示「0 词 · 0 字符」**——那是当前笔记的字数，
+                而屏幕上摆着的是一份 PDF，写 0 只会让人以为出错了。
+                另外补上反向链接数（Obsidian 状态栏就有这一项），点它展开右栏那个标签。
+              */}
+              {!props.pdfView && props.currentPath && (
+                <>
+                  {props.onOpenWikiPath && (
+                    <span className="st-item st-count" title="指向这篇笔记的链接数">
+                      {(props.wikiBack ?? []).length} 条反向链接
+                    </span>
+                  )}
+                  <span className="st-item st-count">
+                    {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
                   </span>
-                )}
-                <span className="st-item st-count">
-                  {stats.words.toLocaleString()} 词 · {stats.characters.toLocaleString()} 字符
-                </span>
-              </>
-            )}
-          </span>
+                </>
+              )}
+            </span>
+          </div>
         </div>
+        {props.aiPanel}
       </main>
       {/* v0.7.9 E8：右栏常驻大纲 + 双链。移动端早有，桌面此前缺席 */}
       {!rightCollapsed && (

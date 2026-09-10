@@ -67,7 +67,7 @@ import { SyncStatusPanel } from './ui/SyncStatusPanel';
 import { AgentSection } from './ui/AgentSection';
 import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { loadLastOpen, pickRestore, saveLastOpen } from './lib/lastOpen';
-import { invertMoveOps, planMove, remapPath } from './lib/movePath';
+import { invertMoveOps, planMove, planRenameDir, remapDirKeys, remapPath } from './lib/movePath';
 import { noteCandidates } from './lib/links';
 import { isSafPath, pickVaultFolder, safIO } from './lib/saf';
 import {
@@ -909,6 +909,14 @@ export default function App() {
   /** v0.7.10 E6：最近打开，供快速切换器排序 */
   const [recent, setRecent] = useState<string[]>(loadRecent);
 
+  /**
+   * v0.11.22：正在主区里看的图片（`{路径, blob URL}`；null = 没在看图）。
+   *
+   * 声明在这儿而不是挨着 `onOpenAttachment`：`openFile` 打开笔记时要把它收起来
+   * （主区一次只显示一样东西），而它得先存在。
+   */
+  const [imageView, setImageView] = useState<{ path: string; url: string } | null>(null);
+
   const openFile = useCallback(
     async (path: string) => {
       if (!vault) return;
@@ -925,7 +933,8 @@ export default function App() {
          */
         setBaseDoc(null);
         setHtmlDoc(null);
-        setShowGraph(false); // 主区五选一：从图谱里点一篇笔记，图谱就该让位
+        setShowGraph(false); // 主区六选一：从图谱里点一篇笔记，图谱就该让位
+        setImageView(null); // 图片同理：正看着图时点一篇笔记，图就该让位
         setCurrentPath(path);
         saveLastOpen(vault.id, path); // 下次启动直接回到这一篇
         setDoc(text);
@@ -1036,11 +1045,11 @@ export default function App() {
    * v0.11.1：点开文件树里既不是笔记也不是 PDF 的东西。
    *
    * 文件树现在显示库里的**全部**文件（对齐 Obsidian），所以必须回答"点了会怎样"：
-   * - 图片：应用内全屏看，不跳出去（附件本来就是笔记的一部分）；
+   * - 图片：在主区里看（v0.11.22 起；手机仍是全屏蒙层），不跳出去
+   *   （附件本来就是笔记的一部分）；
    * - 其余（docx / zip / …）：交给系统应用。我们不打算自己渲染它们，
    *   假装能打开再弹个错，比直接交出去更糟。
    */
-  const [imageView, setImageView] = useState<{ path: string; url: string } | null>(null);
   /** v0.11.10：正在看的 `.base` 表格视图（主区与编辑器 / PDF 互斥） */
   const [baseDoc, setBaseDoc] = useState<{ path: string; text: string } | null>(null);
   /**
@@ -1065,6 +1074,7 @@ export default function App() {
           const text = await io.read(vault?.localPath ?? '', rel);
           setBaseDoc({ path: rel, text });
           onClosePdf();
+          setImageView(null);
         } catch (e) {
           toast(`打不开：${e instanceof Error ? e.message : String(e)}`, 'error');
         }
@@ -1077,6 +1087,7 @@ export default function App() {
           onClosePdf();
           setBaseDoc(null);
           setShowGraph(false);
+          setImageView(null);
         } catch (e) {
           toast(`打不开：${e instanceof Error ? e.message : String(e)}`, 'error');
         }
@@ -1086,6 +1097,18 @@ export default function App() {
         const url = await resolveImage(rel);
         if (url) {
           setImageView({ path: rel, url });
+          /*
+           * v0.11.22：图片进主区之后，它就得守主区那条"只显示一样东西"的规矩
+           * ——和 PDF 一样先把编辑器、表格、HTML、图谱让开。
+           * 手机端仍是全屏蒙层（`imageViewEl`），那边不受这几行影响：小屏上
+           * 主区本来就是整个屏幕。
+           */
+          onClosePdf();
+          setBaseDoc(null);
+          setHtmlDoc(null);
+          setShowGraph(false);
+          setCurrentPath(null);
+          setDoc(null);
           return;
         }
         toast(`打不开这张图片：${rel}`, 'error');
@@ -1096,7 +1119,14 @@ export default function App() {
     [resolveImage, openWithSystemApp, toast, io, vault, onClosePdf]
   );
 
-  /** 图片查看层。**必须抽成变量**：桌面和移动是两棵树，只挂一边就是"点了没反应" */
+  /**
+   * 图片查看层——**手机端专用**。
+   *
+   * v0.11.22 起桌面不再用它：图片开在主区里（`ui/ImageViewer`），和 PDF、`.base`、
+   * HTML、图谱同一个位置，侧栏和状态栏都还在（用户：「图片查看为什么不直接在
+   * 侧边栏右侧的窗口自适应尺寸查看？就像 obsidian 这样」）。
+   * 手机上主区就是整个屏幕，蒙层反而正合适，所以那边保留。
+   */
   const imageViewEl = imageView ? (
     <div className="img-view" onClick={() => setImageView(null)} role="dialog" aria-label={imageView.path}>
       <img src={imageView.url} alt={imageView.path} />
@@ -1783,6 +1813,63 @@ export default function App() {
     [prompt, onRenameFile]
   );
 
+  /**
+   * v0.11.22：**重命名文件夹**（用户点名：「增加文件夹重命名的功能」）。
+   *
+   * 侧栏右键文件夹此前有"新建 / 移动到 / 复制路径 / 删除"，唯独没有改名——
+   * 想换个名字只能新建一个再把里面的东西一件件拖过去。
+   *
+   * 语义就是"在同一层里换个名字"的移动：复用 `applyMoveOps`（新路径 upsert +
+   * 旧路径 delete），于是正开着的笔记、标签栏、最近打开、分栏都会跟着换路径，
+   * 多端同步也自然收敛。路径计算在 `lib/movePath.planRenameDir` 里（纯函数、有单测）
+   * ——改名和移动一样是破坏性操作，算错前缀就是把一整个文件夹的笔记搬丢。
+   */
+  const onRenameFolder = useCallback(
+    async (dir: string) => {
+      if (!vault || !dir) return;
+      const cur = dir.split('/').pop() ?? dir;
+      /** 校验与真正执行**必须用同一份判定**，否则弹框放行了、执行却悄悄不做 */
+      const planOf = (v: string) => planRenameDir(dir, sanitizeTitle(v, ''), allPaths());
+      const name = await prompt({
+        title: '重命名文件夹',
+        description: `「${dir}」及其中的全部文件都会跟着换路径`,
+        initial: cur,
+        okText: '重命名',
+        validate: (v) => {
+          const plan = planOf(v);
+          if (plan.ok) return null;
+          return plan.reason === 'taken'
+            ? '同一层里已经有同名的文件夹了'
+            : plan.reason === 'same'
+              ? '名字没有变'
+              : '请输入文件夹名（不能包含 / \\ : * ? " < > |）';
+        },
+      });
+      if (!name) return;
+      const plan = planOf(name);
+      // 校验已经拦过一遍，走到这儿还不 ok 只可能是刚刚被别处改了；说清楚，别静默
+      if (!plan.ok) {
+        toast(`重命名失败：${plan.reason === 'taken' ? '同名文件夹已存在' : '文件夹名不合法'}`, 'error');
+        return;
+      }
+      try {
+        await applyMoveOps(plan.ops);
+        // 折叠状态是按目录路径存的：不跟着改名走，改完的文件夹会自己弹开，
+        // 而那个已经不存在的旧路径会永远赖在 localStorage 里
+        setCollapsedDirs((s) => {
+          const next = new Set(remapDirKeys(s, dir, plan.dir));
+          saveCollapsed(next);
+          return next;
+        });
+        toast(`已重命名文件夹：${cur} → ${plan.dir.split('/').pop()}`, 'ok');
+      } catch (e) {
+        toast(`重命名文件夹失败：${errText(e)}`, 'error');
+        await refreshFiles();
+      }
+    },
+    [vault, prompt, allPaths, applyMoveOps, refreshFiles, toast]
+  );
+
   /** v0.7.9 E3：复制库内相对路径（贴到别处引用时用） */
   const copyPath = useCallback(
     async (path: string) => {
@@ -2375,7 +2462,10 @@ export default function App() {
       onCreateFolder: () => void onCreateFolder(''),
       onImportObsidian: () => void onImportObsidian(),
       onOpenDaily: () => void openDailyNote(),
-      onOpenGraph: () => setShowGraph(true),
+      onOpenGraph: () => {
+        setShowGraph(true);
+        setImageView(null); // 主区一次只显示一样东西
+      },
       onToggleSplit: () => (splitPath ? closeSplit() : void openSplit()),
       onOpenSyncStatus: openSyncStatus,
       onNewFromTemplate: () => void newFromTemplate(),
@@ -2915,6 +3005,7 @@ export default function App() {
           searchSeed={mobileSearchSeed}
           onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
           onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
+          onRenameFolder={(d) => void onRenameFolder(d)}
           pdfs={pdfs}
           allFiles={allFiles}
           onOpenAttachment={(p) => void onOpenAttachment(p)}
@@ -2957,6 +3048,7 @@ export default function App() {
           onSortChange={setSortMode}
           onOpenPdf={(p) => {
             setBaseDoc(null); // 主区三选一：打开 PDF 同样要把 .base 表格收起来
+            setImageView(null);
             void onOpenPdf(p);
           }}
           baseDoc={baseDoc}
@@ -3132,6 +3224,7 @@ export default function App() {
         onNewFolderNote={(folder) => void onCreateNote(folder)}
         onDeleteFile={(p) => void onDeleteFile(p)}
         onDeleteFolder={(d) => void onDeleteFolder(d)}
+        onRenameFolder={(d) => void onRenameFolder(d)}
         onMovePath={(src, dest, isDir) => void onMovePath(src, dest, isDir)}
         onRequestRename={(p) => void requestRename(p)}
         onCopyPath={(p) => void copyPath(p)}
@@ -3153,8 +3246,12 @@ export default function App() {
         onSortChange={setSortMode}
         onOpenPdf={(p) => {
             setBaseDoc(null); // 主区三选一：打开 PDF 同样要把 .base 表格收起来
+            setImageView(null); // 图片也一样（v0.11.22 起它也占着主区）
             void onOpenPdf(p);
           }}
+        imageView={imageView}
+        onCloseImage={() => setImageView(null)}
+        onOpenImageExternal={(p) => void openWithSystemApp(p)}
         baseDoc={baseDoc}
         baseNotes={baseFiles}
         onCloseBase={() => setBaseDoc(null)}
@@ -3205,7 +3302,10 @@ export default function App() {
         onPasteImage={onPasteImage}
         /* 图谱开在主区（和 PDF/.base 同一块地方）；ribbon 那颗按钮是开关 */
         graphOpen={showGraph}
-        onOpenGraph={() => setShowGraph((v) => !v)}
+        onOpenGraph={() => {
+          setShowGraph((v) => !v);
+          setImageView(null);
+        }}
         onCloseGraph={() => setShowGraph(false)}
         onOpenWiki={(t) => void onOpenWiki(t)}
         onOpenPath={onOpenLinkPath}
@@ -3267,7 +3367,8 @@ export default function App() {
         />
       )}
       {syncStatusEl}
-      {imageViewEl}
+      {/* v0.11.22：桌面的图片不再是蒙层，它开在主区（见上面 MainView 的 imageView）。
+          `imageViewEl` 只剩手机那棵树在用。 */}
       {dialogEl}
       {toastEl}
       </div>

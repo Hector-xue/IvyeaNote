@@ -57,6 +57,8 @@ interface Props {
    * 「移动端功能是空的」。
    */
   onCreateFolder?(parent?: string): void;
+  /** v0.11.22：重命名文件夹（长按文件夹 → 重命名）。弹框归 App，两棵树共用一份实现 */
+  onRenameFolder?(dir: string): void;
   onDeleteFile(path: string): void;
   /** v0.7.3 P1：重命名 */
   onRenameFile(path: string, newName: string): void;
@@ -442,6 +444,11 @@ export function MobileView(props: Props) {
       groups.push([
         { key: 'newnote', icon: 'file-plus', label: '在此新建笔记', onClick: () => props.onCreateNote() },
         { key: 'newdir', icon: 'folder-plus', label: '在此新建子文件夹', onClick: () => props.onCreateFolder?.(st.path) },
+        /* v0.11.22：桌面右键有了「重命名…」，手机这张单子是同一个功能的唯一入口，
+           只加一边就是这个仓库的老毛病（能力有了、另一棵树没接） */
+        ...(props.onRenameFolder
+          ? [{ key: 'renamedir', icon: 'edit', label: '重命名', onClick: () => props.onRenameFolder?.(st.path) } as SheetItem]
+          : []),
       ]);
     } else {
       groups.push([

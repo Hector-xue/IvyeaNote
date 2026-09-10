@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeDir, planMove, remapPath, invertMoveOps } from './movePath';
+import {
+  normalizeDir,
+  planMove,
+  remapPath,
+  invertMoveOps,
+  planRenameDir,
+  remapDirKeys,
+} from './movePath';
 
 const FILES = ['a.md', 'AI/agent.md', 'AI/llm.md', 'AI/子目录/x.md', '日记/2026-08-29.md'];
 
@@ -158,5 +165,68 @@ describe('invertMoveOps（撤销移动）', () => {
 
   it('空批次返回空', () => {
     expect(invertMoveOps([])).toEqual([]);
+  });
+});
+
+describe('planRenameDir（文件夹重命名）', () => {
+  const paths = ['a.md', 'AI/agent.md', 'AI/子目录/x.md', '日记/一.md', '空/.keep'];
+
+  it('整棵子树跟着换前缀', () => {
+    const r = planRenameDir('AI', '人工智能', paths);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.dir).toBe('人工智能');
+    expect(r.ops).toEqual([
+      { from: 'AI/agent.md', to: '人工智能/agent.md' },
+      { from: 'AI/子目录/x.md', to: '人工智能/子目录/x.md' },
+    ]);
+  });
+
+  it('子目录改名只动它自己那一段，父目录留在原处', () => {
+    const r = planRenameDir('AI/子目录', '归档', paths);
+    expect(r.ok && r.dir).toBe('AI/归档');
+    expect(r.ok && r.ops).toEqual([{ from: 'AI/子目录/x.md', to: 'AI/归档/x.md' }]);
+  });
+
+  it('空文件夹（只有 .keep 占位）也能改名', () => {
+    const r = planRenameDir('空', '不空了', paths);
+    expect(r.ok && r.ops).toEqual([{ from: '空/.keep', to: '不空了/.keep' }]);
+  });
+
+  it('撞名不加序号，直接说重名——重命名是用户明确打进去的名字', () => {
+    expect(planRenameDir('日记', 'AI', paths)).toEqual({ ok: false, reason: 'taken' });
+  });
+
+  it('名字没变 = same', () => {
+    expect(planRenameDir('AI', 'AI', paths)).toEqual({ ok: false, reason: 'same' });
+  });
+
+  it('空名 / 纯空白 / 只有斜杠都是 invalid', () => {
+    expect(planRenameDir('AI', '   ', paths)).toEqual({ ok: false, reason: 'invalid' });
+    expect(planRenameDir('AI', '///', paths)).toEqual({ ok: false, reason: 'invalid' });
+    expect(planRenameDir('', '新名', paths)).toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('名字里的斜杠被剥掉——那是移动，不是改名', () => {
+    const r = planRenameDir('AI', '别的/AI', paths);
+    expect(r.ok && r.dir).toBe('别的AI');
+  });
+
+  it('trim 之后与原名相同也算 same', () => {
+    expect(planRenameDir('AI', ' AI ', paths)).toEqual({ ok: false, reason: 'same' });
+  });
+});
+
+describe('remapDirKeys（折叠状态跟着改名走）', () => {
+  it('自己和后代一起换前缀，别人不动', () => {
+    expect(remapDirKeys(['AI', 'AI/子目录', '日记'], 'AI', '人工智能')).toEqual([
+      '人工智能',
+      '人工智能/子目录',
+      '日记',
+    ]);
+  });
+
+  it('前缀相同但不是子目录的（AI2）不受影响', () => {
+    expect(remapDirKeys(['AI2'], 'AI', '人工智能')).toEqual(['AI2']);
   });
 });

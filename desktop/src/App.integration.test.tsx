@@ -31,6 +31,12 @@ if (!window.matchMedia) {
   })) as unknown as typeof window.matchMedia;
 }
 
+/** jsdom 没有 URL.createObjectURL：图片/PDF 那条路会在这一步就抛 */
+if (!URL.createObjectURL) {
+  URL.createObjectURL = (() => 'blob:test') as unknown as typeof URL.createObjectURL;
+  URL.revokeObjectURL = (() => undefined) as unknown as typeof URL.revokeObjectURL;
+}
+
 const { memFiles, memIO } = vi.hoisted(() => {
   const memFiles = new Map<string, string>();
   const memIO: FileIO = {
@@ -438,7 +444,84 @@ describe('右键上下文菜单（E3）', () => {
     // v0.8.3：文件夹也能「移动到…」（不能移进自己的子孙，由 MoveDialog 守卫）
     // v0.11.15：文件夹也能删（用户点名"文件夹右键点击没有删除选项"）；
     // 文案是「删除文件夹」而不是「删除笔记」——它删的是一整个目录
-    expect(labels).toEqual(['在此新建笔记', '在此新建子文件夹', '移动到…', '复制路径', '删除文件夹']);
+    // v0.11.22：文件夹也能改名（用户点名"增加文件夹重命名的功能"）
+    expect(labels).toEqual([
+      '在此新建笔记',
+      '在此新建子文件夹',
+      '重命名…',
+      '移动到…',
+      '复制路径',
+      '删除文件夹',
+    ]);
+  });
+
+  /**
+   * v0.11.22：**文件夹重命名**（用户点名：「增加文件夹重命名的功能」）。
+   *
+   * 这条不测 `planRenameDir`（那边有纯函数单测），测的是**这条链真的接上了**：
+   * 右键 → 弹框 → 整棵子树换前缀落盘 → 正开着的那篇跟着换路径。
+   * 这个仓库最常出的病就是"能力写好了、入口没接"。
+   */
+  it('右键文件夹 → 重命名：整棵子树跟着换前缀，正开着的那篇也跟着走', async () => {
+    await renderApp({ 'sub/b.md': '# B\n', 'sub/深/c.md': '# C\n' });
+    openNote('sub/b.md');
+    await waitFor(() => expect(openedNotePath()).toBe('sub/b.md'));
+
+    fireEvent.contextMenu(dirNode('sub')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+    fireEvent.click([...screen.getAllByRole('menuitem')].find((b) => b.textContent === '重命名…')!);
+
+    await waitFor(() => expect(document.querySelector('.dlg-input')).toBeTruthy());
+    fireEvent.change(document.querySelector('.dlg-input')!, { target: { value: '归档' } });
+    fireEvent.click(
+      [...document.querySelectorAll('.dlg-actions button')].find((b) => b.textContent === '重命名')!
+    );
+
+    await waitFor(() => expect(memFiles.has('归档/b.md')).toBe(true));
+    // 子目录里的也要跟着走，一个都不能落下
+    expect(memFiles.has('归档/深/c.md')).toBe(true);
+    expect(memFiles.has('sub/b.md')).toBe(false);
+    expect(memFiles.has('sub/深/c.md')).toBe(false);
+    // 正开着的那篇：路径没跟上就等于指着一个已经不存在的文件
+    await waitFor(() => expect(openedNotePath()).toBe('归档/b.md'));
+  });
+
+  it('重命名撞上同名文件夹：当场拦下并说清原因，一个文件都不动', async () => {
+    await renderApp({ 'sub/b.md': '# B\n', '归档/x.md': '# X\n' });
+
+    fireEvent.contextMenu(dirNode('sub')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+    fireEvent.click([...screen.getAllByRole('menuitem')].find((b) => b.textContent === '重命名…')!);
+    await waitFor(() => expect(document.querySelector('.dlg-input')).toBeTruthy());
+    fireEvent.change(document.querySelector('.dlg-input')!, { target: { value: '归档' } });
+    fireEvent.click(
+      [...document.querySelectorAll('.dlg-actions button')].find((b) => b.textContent === '重命名')!
+    );
+
+    // 弹框留在原地、给出原因；不能悄悄改成"归档-2"，那不是用户打进去的名字
+    await waitFor(() => expect(document.querySelector('.dlg-error')?.textContent).toContain('同名'));
+    expect(memFiles.has('sub/b.md')).toBe(true);
+    expect(memFiles.has('归档/x.md')).toBe(true);
+    expect(memFiles.has('归档/b.md')).toBe(false);
+  });
+
+  /**
+   * v0.11.22：**图片开在主区**，不再是盖住整个应用的那层蒙层
+   * （用户：「图片查看为什么不直接在侧边栏右侧的窗口自适应尺寸查看？就像 obsidian
+   * 这样」）。排版好不好看要用真浏览器量（scripts/verify-ui.mjs），
+   * 这里守的是**挂在哪棵树上**：桌面必须是主区里的 `.img-pane`，
+   * 而不是那层 `.img-view` —— 这个仓库栽过好几次"弹层挂错树"。
+   */
+  it('点开库里的图片 → 在主区里看（侧栏还在），不是全屏蒙层', async () => {
+    await renderApp({ 'a.md': '# A\n', 'Attachments/图.png': 'PNGDATA' });
+    fireEvent.click(fileNode('Attachments/图.png')!);
+
+    await waitFor(() => expect(document.querySelector('.img-pane')).toBeTruthy());
+    expect(document.querySelector('.img-view')).toBeNull();
+    // 主区一次只显示一样东西：编辑器要让开；侧栏文件树必须还在
+    expect(document.querySelector('.editor-split')).toBeNull();
+    expect(document.querySelector('.ft-root')).toBeTruthy();
+    expect(document.querySelector('.img-pane .pdf-name')?.textContent).toBe('图.png');
   });
 
   it('Esc 关闭菜单', async () => {

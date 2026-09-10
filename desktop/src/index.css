@@ -807,6 +807,21 @@ button {
 .editor-pane {
   position: relative;
 }
+/*
+ * v0.11.22：状态栏这层浮层的**定位基准**。
+ *
+ * 它以前是整个 `.editor-pane`，于是 AI 结果面板（排在编辑区下方、状态栏之上的
+ * 一块普通内容）一出现，浮着的状态栏就正好压在面板底栏上——右下角那颗「应用」
+ * 只露出半截。现在 `.editor-stage` 只包住"当前在看什么"那一块（编辑器 / PDF /
+ * 图片 / 表格 / 图谱）和状态栏，AI 面板排在它外面，两者再也不会重叠。
+ */
+.editor-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 /* 阅读态底部留出状态栏的高度，最后一行不会被压在它下面 */
 .md-preview {
   padding-bottom: calc(var(--sp-7) + 24px);
@@ -2658,8 +2673,52 @@ button {
   display: none;
 }
 
-/* v0.11.1：库内图片的全屏查看（文件树现在能点开图片了）。
-   点任意处关闭；不做缩放/翻页——那是图片管理器的活，笔记软件只需要"看一眼"。 */
+/*
+ * v0.11.22：**图片开在主区**（`ui/ImageViewer`），和 PDF / `.base` / HTML / 图谱
+ * 一样是"当前在看什么"的一种。工具条直接复用 `.pdf-bar` 那一套，两个阅读器
+ * 长得一样、按钮在同一个位置——它们本来就是同一件事。
+ */
+.img-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-2);
+}
+/*
+ * ⚠️ 居中用 `margin:auto`（在 `.img-canvas` 上），**不能用
+ * `justify-content/align-items: center`**：放大到超出容器时，居中会把左边和上边
+ * 那部分推到滚动区外面，怎么滚都滚不回来。
+ */
+.img-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  padding: var(--sp-4);
+}
+.img-canvas {
+  display: block;
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--r-1);
+  box-shadow: var(--shadow-pop);
+  /* 棋盘格：透明的 PNG 才看得出哪块是透明、哪块是白 */
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, rgba(0, 0, 0, 0.06) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(0, 0, 0, 0.06) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.06) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.06) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+/* v0.11.1：库内图片的全屏查看。**手机端专用**——小屏上主区就是全屏，
+   蒙层反而是对的；桌面已改成主区里的 `.img-pane`（见上）。
+   点任意处关闭；不做缩放/翻页——那是图片管理器的活。 */
 .img-view {
   position: fixed;
   inset: 0;
@@ -2761,6 +2820,7 @@ button {
   .editor-col,
   .app,
   .editor-pane,
+  .editor-stage,
   .md-preview {
     display: block !important;
     height: auto !important;
