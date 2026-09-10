@@ -11,11 +11,19 @@
  * 否则会先按默认值画一帧再跳成用户设置，那一下闪烁很廉价。
  */
 
+import { DEFAULT_PALETTE, normalizePalette, type PaletteKey } from './palettes';
+
 export type ThemeMode = 'light' | 'dark' | 'system';
 export type ReadFont = 'sans' | 'serif' | 'mono';
 
 export interface Appearance {
   theme: ThemeMode;
+  /**
+   * v0.11.23：配色主题（纸色 / 墨色 / 强调色）。
+   * 与 `theme` 是**两个轴**：主题管"用哪张纸"，theme 管"开不开灯"。
+   * 每套主题的深浅两版都在 styles/palettes.css 里给全了。
+   */
+  palette: PaletteKey;
   /** 正文字号 px */
   fontSize: number;
   /** 正文可读宽度 px；编辑态与阅读态共用 */
@@ -27,6 +35,7 @@ export interface Appearance {
 
 export const DEFAULTS: Appearance = {
   theme: 'light',
+  palette: DEFAULT_PALETTE,
   fontSize: 15,
   measure: 720,
   lineHeight: 1.75,
@@ -57,6 +66,7 @@ export function normalize(raw: Partial<Appearance> | null | undefined): Appearan
   const a = { ...DEFAULTS, ...(raw ?? {}) };
   return {
     theme: a.theme === 'dark' || a.theme === 'system' ? a.theme : 'light',
+    palette: normalizePalette(a.palette),
     font: a.font === 'serif' || a.font === 'mono' ? a.font : 'sans',
     fontSize: clamp(Number(a.fontSize), LIMITS.fontSize.min, LIMITS.fontSize.max),
     measure: clamp(Number(a.measure), LIMITS.measure.min, LIMITS.measure.max),
@@ -89,6 +99,7 @@ export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
 export function applyAppearance(a: Appearance = loadAppearance()): void {
   const root = document.documentElement;
   root.dataset.theme = resolveTheme(a.theme);
+  root.dataset.palette = normalizePalette(a.palette);
   root.style.setProperty('--fs-body', `${a.fontSize}px`);
   root.style.setProperty('--measure', `${a.measure}px`);
   root.style.setProperty('--lh-body', String(a.lineHeight));

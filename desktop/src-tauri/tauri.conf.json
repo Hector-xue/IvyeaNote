@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Ivyea Note",
-  "version": "0.11.22",
+  "version": "0.11.23",
   "identifier": "com.ivyea.note",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -43,7 +43,12 @@
     ],
     "windows": {
       "nsis": {
-        "installerHooks": "installer/firewall.nsh"
+        "installerHooks": "installer/firewall.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "uninstallerHeaderImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp"
       }
     }
   },

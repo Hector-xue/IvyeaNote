@@ -16,6 +16,18 @@ describe('normalize：手改过的 localStorage 不能把界面搞坏', () => {
   it('非法枚举值退回默认', () => {
     expect(normalize({ theme: 'neon' as unknown as 'light' }).theme).toBe('light');
     expect(normalize({ font: 'comic' as unknown as 'sans' }).font).toBe('sans');
+    // v0.11.23：配色同理。认不出的名字写进 DOM 会让 [data-palette] 一条规则都命不中，
+    // 界面掉回裸默认值，看着像"主题坏了"
+    expect(normalize({ palette: 'neon' as never }).palette).toBe('paper');
+  });
+
+  it('老用户（存的 appearance 里没有 palette 这个字段）拿到默认配色，不是 undefined', () => {
+    // 这条守的是升级路径：v0.11.22 存下来的对象里根本没有 palette
+    expect(normalize({ theme: 'dark', fontSize: 17 }).palette).toBe('paper');
+  });
+
+  it('合法配色原样保留', () => {
+    expect(normalize({ palette: 'soot' }).palette).toBe('soot');
   });
   it('null / undefined 直接给默认', () => {
     expect(normalize(null)).toEqual(DEFAULTS);

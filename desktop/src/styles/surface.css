@@ -2691,3 +2691,64 @@ button.st-item:hover {
   font: inherit;
   font-size: 13px;
 }
+
+/* ---- 配色主题选择器（v0.11.23）---- */
+/*
+ * 色块直接把「纸 / 墨 / 强调」三色画出来。
+ * 颜色这种东西，名字再好听也不如看一眼——逼人一套套点开试是最差的做法。
+ */
+.set-row-wrap .set-label {
+  /* 说明文字比标题长，`.set-label` 那套 baseline 对齐会把它挤成一行溢出 */
+  flex-wrap: wrap;
+}
+.pal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--sp-2);
+}
+.pal-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.pal-item:hover {
+  border-color: var(--n-4);
+  color: var(--text);
+}
+.pal-item.on {
+  border-color: var(--accent);
+  color: var(--text);
+  /* 选中态不靠填色：这里每个格子本来就有三块颜色，再铺底会糊成一团 */
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.pal-chip {
+  display: flex;
+  width: 100%;
+  height: 26px;
+  border-radius: var(--r-1);
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.pal-chip i {
+  flex: 1;
+  display: block;
+}
+/* 强调色只占窄窄一条：它在真实界面里也只是点缀，色块要如实反映这个比例 */
+.pal-chip i:nth-child(2) {
+  flex: 0 0 26%;
+}
+.pal-chip i:nth-child(3) {
+  flex: 0 0 18%;
+}
+.pal-name {
+  font-weight: 500;
+}
