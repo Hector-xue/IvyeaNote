@@ -5,6 +5,27 @@
 
 ---
 
+## v0.11.23 — 2026-09-10
+
+**Windows 安装包终于是自己的样子。**
+
+用户下载到的 `Ivyea.Note_x64-setup.exe` 在资源管理器里显示的是 NSIS 自带的默认图标。
+根因不是图标资源缺失——`icons/icon.ico` 一直在，且就是现在这枚叶子 logo：
+`bundle.icon` 只管**应用本身**的图标，**安装器和卸载器是 nsis 那节里另外两个键**
+（`installerIcon` / `uninstallerIcon`），不配就吃 NSIS 的默认图标。
+
+顺带把安装向导的两张位图也做了（此前一直是 NSIS 的默认样式）：
+顶部横幅 150×57、欢迎页竖图 164×314——**尺寸是 NSIS MUI2 写死的**，而 Tauri 的模板
+没开 `MUI_HEADERIMAGE_NOSTRETCH`，尺寸不对不会报错、只会被拉伸变形，
+所以生成脚本 `brand/gen_installer.py` 把尺寸断言在代码里。横幅只放叶子不放字：
+MUI2 的标题文字和这张图共用一条横栏，谁左谁右由主题决定，图里再写一次品牌名两边都可能撞上。
+
+本机打不了 Windows 包，配置按三条逐项核过：键名对着 `@tauri-apps/cli` 的
+config.schema.json 查（**写错键 Tauri 是静默忽略的**，正是这次的病根）、
+路径按相对 `tauri.conf.json` 解析、BMP 为 24 位无 alpha（NSIS 经典位图控件不认 alpha）。
+
+---
+
 ## v0.11.22 — 2026-09-10
 
 **图片开在主区、文件夹能改名、状态栏不再压住 AI 面板。**
