@@ -116,3 +116,60 @@ export function invertMoveOps(
 ): { from: string; to: string }[] {
   return [...ops].reverse().map((o) => ({ from: o.to, to: o.from }));
 }
+
+/**
+ * 文件夹重命名的结果。**失败必须说得出是哪一种**——
+ * 这个仓库栽过的跟头是「静默 catch 掉，用户只看到点了没反应」，
+ * 所以这里不返回 `null` 了事，而是把原因带出去让调用方照着说人话。
+ */
+export type RenameDirPlan =
+  | { ok: true; dir: string; ops: MoveOp[] }
+  /** 名字空 / 只剩非法字符 */
+  | { ok: false; reason: 'invalid' }
+  /** 改了个寂寞（新名等于旧名） */
+  | { ok: false; reason: 'same' }
+  /** 同一层已经有同名文件夹或同名文件了 */
+  | { ok: false; reason: 'taken' };
+
+/**
+ * 计算一次「文件夹重命名」要执行的全部搬迁。
+ *
+ * 重命名 = **同一个父目录里换个名字**的移动，所以复用移动那套语义（新路径 upsert
+ * + 旧路径 delete），多端同步自然收敛。与 `planMove` 的关键差别有两处：
+ * - 落点是自己的父目录，`planMove` 会把它判成"原地拖"直接拒掉；
+ * - 撞名**不自动加序号**。拖拽是个模糊动作，`日记-2` 是合理的兜底；而重命名是
+ *   用户明确打进去的名字，悄悄改成别的等于没听他说话——直接告诉他重名。
+ *
+ * 空文件夹靠 `.keep` 占位，它也在 allPaths 里，所以空目录一样能改名。
+ */
+export function planRenameDir(
+  dir: string,
+  newNameRaw: string,
+  allPaths: readonly string[]
+): RenameDirPlan {
+  const from = normalizeDir(dir);
+  // 名字里不允许出现路径分隔符：那是"移动"，不是"改名"
+  const name = newNameRaw.trim().replace(/\\/g, '/').replaceAll('/', '').trim();
+  if (!from || !name || name === '.' || name === '..') return { ok: false, reason: 'invalid' };
+  const parent = parentDir(from);
+  const to = parent ? `${parent}/${name}` : name;
+  if (to === from) return { ok: false, reason: 'same' };
+  // 目录被占用的判据是「有任何文件在它下面」——目录本身不是 allPaths 里的条目
+  if (allPaths.some((p) => p === to || p.startsWith(`${to}/`))) return { ok: false, reason: 'taken' };
+  const prefix = `${from}/`;
+  const ops = allPaths
+    .filter((p) => p.startsWith(prefix))
+    .map((p) => ({ from: p, to: `${to}/${p.slice(prefix.length)}` }));
+  return { ok: true, dir: to, ops };
+}
+
+/**
+ * 文件夹改名后重算「折叠状态」里的那些目录路径。
+ *
+ * 折叠状态是按目录路径存的：不跟着改名走，改完的文件夹会突然自己展开，
+ * 而那个已经不存在的旧路径会永远留在 localStorage 里。
+ */
+export function remapDirKeys(dirs: Iterable<string>, from: string, to: string): string[] {
+  const prefix = `${from}/`;
+  return [...dirs].map((d) => (d === from ? to : d.startsWith(prefix) ? `${to}/${d.slice(prefix.length)}` : d));
+}

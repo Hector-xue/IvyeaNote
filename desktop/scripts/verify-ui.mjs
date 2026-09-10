@@ -441,6 +441,176 @@ check('粘贴非图片不会被当成图片插入', !/!\[\]\(/.test(await evalua
   `document.querySelector('.cm-content').innerText.split('\\n').pop()`)) || true, nonImageToast || '(无提示)');
 await shot('paste.png');
 
+// ---------- 5.3 图片开在主区、自适应尺寸（v0.11.22）----------
+/*
+ * 用户原话：「图片查看为什么不直接在侧边栏右侧的窗口自适应尺寸查看？就像 obsidian
+ * 这样」。此前点开库里的图片是一层盖住整个应用的黑色蒙层（`.img-view`）。
+ *
+ * 这条量的是**真的排版结果**，不是"有没有这个组件"：
+ *   ① 侧栏还在（蒙层的毛病就是把整个应用盖掉）；
+ *   ② 大图整张收进主区那块地方，不溢出、不需要滚；
+ *   ③ 放大之后真的变大（滚动区出现横向滚动），点"适应窗口"能回去。
+ * 先粘一张 2400×1600 的大图进来当靶子——1×1 那张怎么摆都"不溢出"，测不出东西。
+ */
+{
+  const pastedBig = await evaluate(`(async () => {
+    const c = document.createElement('canvas');
+    c.width = 2400; c.height = 1600;
+    const g = c.getContext('2d');
+    g.fillStyle = '#3b6ef5'; g.fillRect(0, 0, 2400, 1600);
+    g.fillStyle = '#ffffff'; g.fillRect(120, 120, 700, 500);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    const file = new File([blob], 'bigshot.png', { type: 'image/png' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    const t = document.querySelector('.cm-content');
+    t.focus();
+    t.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 1800));
+    return [...document.querySelectorAll('.ft-file-name')].map((x) => x.getAttribute('title')).filter(Boolean);
+  })()`);
+  const clicked = await evaluate(`(async () => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find((x) => (x.getAttribute('title') || '').includes('bigshot'));
+    const row = el && el.closest('.ft-file');
+    if (!row) return null;
+    row.scrollIntoView({ block: 'center' });
+    row.click();
+    await new Promise((r) => setTimeout(r, 1200));
+    return el.getAttribute('title');
+  })()`);
+  const inPane = await evaluate(`(() => {
+    const pane = document.querySelector('.img-pane');
+    const scroll = document.querySelector('.img-scroll');
+    const img = document.querySelector('.img-canvas');
+    const side = document.querySelector('.sidebar');
+    if (!pane || !scroll || !img) return { pane: !!pane, scroll: !!scroll, img: !!img };
+    const s = scroll.getBoundingClientRect(), i = img.getBoundingClientRect();
+    const sd = side ? side.getBoundingClientRect() : null;
+    return {
+      pane: true,
+      overlay: !!document.querySelector('.img-view'),
+      sidebarWidth: sd ? Math.round(sd.width) : 0,
+      natural: img.naturalWidth + 'x' + img.naturalHeight,
+      imgW: Math.round(i.width), imgH: Math.round(i.height),
+      boxW: Math.round(s.width), boxH: Math.round(s.height),
+      overflowX: scroll.scrollWidth - scroll.clientWidth,
+      overflowY: scroll.scrollHeight - scroll.clientHeight,
+      zoomLabel: (document.querySelector('.img-pane .pdf-zoom') || {}).textContent || null,
+      name: (document.querySelector('.img-pane .pdf-name') || {}).textContent || null,
+    };
+  })()`);
+  check('点开图片是在主区里看（侧栏还在，没有盖住整个应用的蒙层）',
+    inPane.pane && !inPane.overlay && inPane.sidebarWidth > 100, { clicked, inPane });
+  check('大图自适应尺寸：整张收进主区那块地方，既不溢出也不用滚',
+    inPane.pane && inPane.natural === '2400x1600' && inPane.imgW <= inPane.boxW &&
+      inPane.imgH <= inPane.boxH && inPane.overflowX <= 1 && inPane.overflowY <= 1 &&
+      inPane.zoomLabel === '适应窗口', inPane);
+  await shot('image-pane.png');
+  const zoomed = await evaluate(`(async () => {
+    const bar = document.querySelector('.img-pane .pdf-bar');
+    const zin = [...bar.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === '放大');
+    for (let i = 0; i < 4; i++) { zin.click(); await new Promise((r) => setTimeout(r, 120)); }
+    await new Promise((r) => setTimeout(r, 300));
+    const scroll = document.querySelector('.img-scroll');
+    const img = document.querySelector('.img-canvas');
+    const after = { w: Math.round(img.getBoundingClientRect().width), overflowX: scroll.scrollWidth - scroll.clientWidth,
+                    label: document.querySelector('.img-pane .pdf-zoom').textContent };
+    document.querySelector('.img-pane .pdf-zoom').click();
+    await new Promise((r) => setTimeout(r, 400));
+    const back = { w: Math.round(document.querySelector('.img-canvas').getBoundingClientRect().width),
+                   overflowX: document.querySelector('.img-scroll').scrollWidth - document.querySelector('.img-scroll').clientWidth,
+                   label: document.querySelector('.img-pane .pdf-zoom').textContent };
+    return { after, back };
+  })()`);
+  check('放大真的变大（滚动区可横向滚），点「适应窗口」能回到整张收进来',
+    zoomed.after.w > inPane.imgW && zoomed.after.overflowX > 1 && /%/.test(zoomed.after.label) &&
+      zoomed.back.label === '适应窗口' && zoomed.back.overflowX <= 1, zoomed);
+  const closed = await evaluate(`(async () => {
+    [...document.querySelectorAll('.img-pane .pdf-bar button')].find((b) => b.getAttribute('aria-label') === '关闭')?.click();
+    await new Promise((r) => setTimeout(r, 600));
+    return { pane: !!document.querySelector('.img-pane'), editor: !!document.querySelector('.editor-split') };
+  })()`);
+  check('关掉图片回到编辑区', !closed.pane && closed.editor, closed);
+}
+
+// ---------- 5.4 文件夹重命名（v0.11.22）----------
+/*
+ * 用户点名「增加文件夹重命名的功能」。集成测试用的是内存 IO，量不到**真存储**
+ * 那一步：改名要往一个还不存在的目录里写文件，而"要先建目录的写入"正是这个仓库
+ * 栽过的地方（v0.11.4 那次 parentOf 只认斜杠，新建目录的写入整句被跳过）。
+ * 所以这条直接读 OPFS 核对文件到底躺在哪儿。
+ */
+{
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const d = await h.getDirectoryHandle('旧名', { create: true });
+      const sub = await d.getDirectoryHandle('里层', { create: true });
+      const fh = await sub.getFileHandle('深处.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode('# 深处'));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  const menuLabels = await evaluate(`(async () => {
+    const el = [...document.querySelectorAll('.ft-dir-name')].find(x => x.textContent === '旧名');
+    const row = el && el.closest('.ft-dir');
+    if (!row) return null;
+    row.scrollIntoView({ block: 'center' });
+    const r = row.getBoundingClientRect();
+    row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true,
+      clientX: Math.round(r.left + 20), clientY: Math.round(r.top + 8) }));
+    await new Promise((x) => setTimeout(x, 400));
+    return [...document.querySelectorAll('.ctx-item .ctx-label')].map(x => x.textContent);
+  })()`);
+  check('右键文件夹的菜单里有「重命名…」', Array.isArray(menuLabels) && menuLabels.includes('重命名…'), menuLabels);
+  const renamed = await evaluate(`(async () => {
+    const item = [...document.querySelectorAll('.ctx-item')].find(b => (b.querySelector('.ctx-label') || {}).textContent === '重命名…');
+    if (!item) return { menu: false };
+    item.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const input = document.querySelector('.dlg-input');
+    if (!input) return { menu: true, dialog: false };
+    const initial = input.value;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, '新名');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 100));
+    [...document.querySelectorAll('.dlg-actions button')].find(b => b.textContent.includes('重命名'))?.click();
+    await new Promise((r) => setTimeout(r, 1600));
+    // 直接问真存储：文件到底躺在哪儿
+    const root = await navigator.storage.getDirectory();
+    const walk = async (dir, prefix, out) => {
+      for await (const [name, h] of dir.entries()) {
+        if (h.kind === 'directory') await walk(h, prefix + name + '/', out);
+        else out.push(prefix + name);
+      }
+      return out;
+    };
+    let files = [];
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      files = await walk(h, '', []);
+      break;
+    }
+    return {
+      menu: true, dialog: true, initial,
+      moved: files.includes('新名/里层/深处.md'),
+      leftBehind: files.filter(f => f.startsWith('旧名/')),
+      tree: [...document.querySelectorAll('.ft-dir-name')].map(x => x.textContent),
+      toast: [...document.querySelectorAll('.toast')].map(t => t.textContent).join('|'),
+    };
+  })()`);
+  check('重命名文件夹：整棵子树真的搬到新路径（含还不存在的子目录），旧路径不留东西',
+    renamed.dialog && renamed.initial === '旧名' && renamed.moved && renamed.leftBehind.length === 0 &&
+      renamed.tree.includes('新名') && !renamed.tree.includes('旧名'), renamed);
+}
+
 // ---------- 5.5 PDF 阅读器（真 PDF，量到像素） ----------
 /*
  * 直接把一个 3 页的 PDF 写进 OPFS（应用在浏览器里就是用 OPFS 当库），刷新后从
@@ -882,18 +1052,26 @@ await new Promise((r) => setTimeout(r, 2600));
     allFilesTable.rows.some((r) => r.includes('说明')), { ...allFilesTable, ...openedAll });
   await shot('base-all-files.png');
 
-  // 点图片那一行：要开图片层，而不是拿文本通道去读 PNG 然后炸掉
+  // 点图片那一行：要开图片视图，而不是拿文本通道去读 PNG 然后炸掉
+  // v0.11.22：桌面的图片从全屏蒙层（.img-view）改成了主区里的 .img-pane，断言跟着走
   await evaluate(`(() => {
     const link = [...document.querySelectorAll('.base-table .base-link')].find(a => a.textContent.includes('插图'));
     link?.click(); return !!link })()`);
   await new Promise((r) => setTimeout(r, 1200));
   const imgFromBase = await evaluate(`(() => {
-    const v = document.querySelector('.img-view');
-    return { open: !!v, natural: v?.querySelector('img')?.naturalWidth ?? 0, err: !!document.querySelector('.err-wrap') };
+    const v = document.querySelector('.img-pane');
+    return {
+      open: !!v,
+      overlay: !!document.querySelector('.img-view'),
+      natural: v ? (v.querySelector('.img-canvas')?.naturalWidth ?? 0) : 0,
+      err: !!document.querySelector('.err-wrap'),
+    };
   })()`);
-  check('点表里的图片一行会打开图片预览（不是当成笔记去读，也不该把应用打进错误页）',
-    imgFromBase.open && imgFromBase.natural > 0 && !imgFromBase.err, imgFromBase);
-  await evaluate(`(() => { document.querySelector('.img-view')?.click(); return true })()`);
+  check('点表里的图片一行会在主区打开图片（不是当成笔记去读，也不该把应用打进错误页）',
+    imgFromBase.open && !imgFromBase.overlay && imgFromBase.natural > 0 && !imgFromBase.err, imgFromBase);
+  await evaluate(`(() => {
+    [...document.querySelectorAll('.img-pane .pdf-bar button')].find(b => b.getAttribute('aria-label') === '关闭')?.click();
+    return true })()`);
   await new Promise((r) => setTimeout(r, 400));
 }
 
@@ -1781,6 +1959,38 @@ await new Promise((r) => setTimeout(r, 2600));
     ran.calls === 1 && ran.url.includes('/v1/chat/completions') && ran.sentOnlySelection &&
     ran.panel && ran.diffRows > 0 && ran.docUntouched, ran);
   await shot('ai-panel.png');
+
+  /*
+   * **状态栏不许盖住 AI 面板**（v0.11.22）。
+   *
+   * 状态栏是浮层（`position:absolute; bottom:0`），此前它以整个 `.editor-pane`
+   * 为基准 —— AI 面板一开，它就正好压在面板底栏上，右下角那颗「应用」只露出半截
+   * （用户：「右下角有个按钮被盖住了」）。修法是把编辑区那一块单独包成
+   * `.editor-stage`，状态栏钉在它里面、AI 面板排在它外面。
+   * 这条量的是**真实矩形有没有相交**，还顺手用 elementFromPoint 问一句
+   * "按钮正中间那个点上，最上面的是谁" —— 只看 z-index 或 DOM 结构都可能骗人。
+   */
+  const stackAi = await evaluate(`(() => {
+    const st = document.querySelector('.status-bar');
+    const panel = document.querySelector('.ai-panel');
+    const apply = [...document.querySelectorAll('.ai-foot button')].find(b => b.textContent.trim() === '应用');
+    if (!st || !panel || !apply) return null;
+    const s = st.getBoundingClientRect(), p = panel.getBoundingClientRect(), a = apply.getBoundingClientRect();
+    const hit = !(s.right <= a.left || s.left >= a.right || s.bottom <= a.top || s.top >= a.bottom);
+    const top = document.elementFromPoint(Math.round(a.left + a.width / 2), Math.round(a.top + a.height / 2));
+    return {
+      overlapsApplyButton: hit,
+      statusBottom: Math.round(s.bottom), panelTop: Math.round(p.top),
+      applyTop: Math.round(a.top), applyBottom: Math.round(a.bottom),
+      coveredBy: top && top.closest && top.closest('.status-bar') ? 'status-bar' : (top ? top.tagName : null),
+      statusInsideStage: !!st.closest('.editor-stage'),
+      panelOutsideStage: !panel.closest('.editor-stage'),
+    };
+  })()`);
+  check('状态栏没有盖住 AI 面板的「应用」按钮（用户：右下角有个按钮被盖住了）',
+    stackAi && !stackAi.overlapsApplyButton && stackAi.coveredBy !== 'status-bar' &&
+      stackAi.statusBottom <= stackAi.panelTop + 1 && stackAi.statusInsideStage && stackAi.panelOutsideStage,
+    stackAi);
 
   // ③ 点应用才写回，且能撤销
   await evaluate(`(() => {
