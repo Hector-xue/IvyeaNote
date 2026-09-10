@@ -43,7 +43,9 @@
     ],
     "windows": {
       "nsis": {
-        "installerHooks": "installer/firewall.nsh"
+        "installerHooks": "installer/firewall.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     }
   },
