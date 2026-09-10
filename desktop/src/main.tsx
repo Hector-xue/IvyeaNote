@@ -7,6 +7,7 @@ import { ErrorBoundary } from './ui/ErrorBoundary';
 //   surface   —— 平面层次/滚动条/控件/焦点/动效
 //   typography—— 编辑态与阅读态共用的文字规则，必须最后加载才压得住历史规则
 import './styles/tokens.css';
+import './styles/palettes.css';
 import './index.css';
 import './styles/surface.css';
 import './styles/typography.css';

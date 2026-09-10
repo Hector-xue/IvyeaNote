@@ -13,6 +13,7 @@ import { RibbonIcon } from './Icons';
 import { SyncDiagnostics } from './SyncDiagnostics';
 import { isLocalServerAccount } from '../lib/localServer';
 import { DEFAULTS, LIMITS, type Appearance, type ReadFont, type ThemeMode } from '../lib/appearance';
+import { PALETTES } from '../lib/palettes';
 import { useState } from 'react';
 import { isLlmConfigured, testConnection } from '../lib/llm';
 import { SHORTCUTS, type Prefs } from '../lib/prefs';
@@ -259,6 +260,38 @@ export function SettingsView(props: Props) {
                     onClick={() => set({ theme: t.id })}
                   >
                     {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/*
+              v0.11.23：配色主题。**放在「主题」这一行下面**——它俩是同一件事的
+              两个轴（哪张纸 / 开不开灯），隔开放用户会以为是两套没关系的设置。
+              每个色块直接把纸色、墨色、强调色画出来：颜色这种东西，名字再好听
+              也不如看一眼，逼人一套套点开试是最差的做法。
+            */}
+            <div className="set-row set-row-wrap">
+              <label className="set-label">
+                配色
+                <em className="set-hint">纸与墨。深浅两版都有，切换深色不会掉回默认</em>
+              </label>
+              <div className="pal-grid" role="radiogroup" aria-label="配色主题">
+                {PALETTES.map((p) => (
+                  <button
+                    key={p.key}
+                    role="radio"
+                    aria-checked={v.palette === p.key}
+                    className={`pal-item ${v.palette === p.key ? 'on' : ''}`}
+                    title={p.hint}
+                    onClick={() => set({ palette: p.key })}
+                  >
+                    <span className="pal-chip" aria-hidden="true">
+                      {p.swatch.map((c, i) => (
+                        <i key={i} style={{ background: c }} />
+                      ))}
+                    </span>
+                    <span className="pal-name">{p.label}</span>
                   </button>
                 ))}
               </div>
