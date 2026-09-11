@@ -21,9 +21,23 @@ export type IconName =
   | 'win-min' | 'win-max' | 'win-restore' | 'win-close'
   | 'zoom-in' | 'zoom-out' | 'focus' | 'filter' | 'page-left' | 'page-right'
   // v0.11.16：回收站里的「恢复」。用 sync 那个圆环会和"同步中"撞语义
-  | 'undo';
+  | 'undo'
+  // v0.11.24：文件历史（时钟带回转箭头）、云端版本、HTML 里「运行脚本」
+  | 'history' | 'cloud' | 'play';
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  /** 文件历史：时钟 + 逆时针回转的一小段弧 */
+  history: (
+    <>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" />
+      <path d="M3.5 3.5V9H9" />
+      <path d="M12 7.5V12l3 2" />
+    </>
+  ),
+  /** 云端版本 */
+  cloud: <path d="M7 18.5A4.5 4.5 0 0 1 6.6 9.6 6 6 0 0 1 18.2 11a3.8 3.8 0 0 1-.7 7.5H7z" />,
+  /** 运行脚本 */
+  play: <path d="M7 4.5v15l12-7.5z" />,
   /** 恢复：一条绕回去的箭头（撤销的通用形状） */
   undo: (
     <>

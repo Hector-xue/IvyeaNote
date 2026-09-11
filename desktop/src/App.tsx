@@ -38,6 +38,9 @@ import { useTemplates } from './hooks/useTemplates';
 import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor, nextTrashName } from './hooks/useTrash';
+import { useFileHistory } from './hooks/useFileHistory';
+import type { DeletedFile } from './lib/api';
+import type { RightTab } from './ui/RightPanel';
 import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
 import { linkVaults } from './lib/vaultLink';
@@ -47,7 +50,8 @@ import type { MenuItem } from './ui/ContextMenu';
 import { WelcomeView, isWelcomed } from './ui/WelcomeView';
 import { ApiError, SyncClient, sha256Hex } from './lib/api';
 import type { FileIO } from './lib/sync';
-import { tauriIO, opfsIO, migrateFiles } from './lib/fs-adapters';
+import { tauriIO, opfsIO, migrateFiles, removeOpfsVault } from './lib/fs-adapters';
+import { vaultDisplayName, vaultLocationLabel, folderName } from './lib/vaultName';
 import { extractH1, replaceFirstH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
 import { loadCollapsed, saveCollapsed } from './ui/FileTree';
 import { Palette } from './ui/Palette';
@@ -160,6 +164,11 @@ export default function App() {
    */
   const [splitPath, setSplitPath] = useState<string | null>(null);
   const [splitDoc, setSplitDoc] = useState<string | null>(null);
+  /** v0.11.24：恢复历史版本前要把编辑器里还没落盘的内容先写下去，走 ref 不进依赖 */
+  const docRef = useRef<string | null>(null);
+  docRef.current = doc;
+  const splitDocRef = useRef<string | null>(null);
+  splitDocRef.current = splitDoc;
   splitPathRef.current = splitPath;
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
@@ -355,6 +364,21 @@ export default function App() {
     refresh: refreshFiles,
   } = useVaultFiles(io, vault ? (vault.localPath ?? '') : null);
 
+  /**
+   * v0.11.24：文件历史。写盘前留本机快照 + 列云端每一版（hooks/useFileHistory）。
+   * 用户：「被误修改的可真就无法找回了」——现在找得回。
+   */
+  const fileHistory = useFileHistory({
+    io,
+    vaultPath: vault ? (vault.localPath ?? '') : null,
+    vaultId: vault?.id ?? null,
+    client,
+    deviceId: state.account?.deviceId,
+    allPaths,
+  });
+  /** 命令面板 / 状态栏想让右栏切到某个标签（MainView 消费后清掉） */
+  const [wantRightTab, setWantRightTab] = useState<RightTab | null>(null);
+
 
   /**
    * v0.7.5 P0：全库正文索引。
@@ -451,7 +475,7 @@ export default function App() {
    */
   const relinking = useRef(false);
   const relinkFailedOnce = useRef(false);
-  const relink = useCallback(async (): Promise<boolean> => {
+  const relink = useCallback(async (quiet = false): Promise<boolean> => {
     if (!client || relinking.current) return false;
     relinking.current = true;
     try {
@@ -466,11 +490,20 @@ export default function App() {
           'ok'
         );
       }
+      for (const g of r.released) {
+        toast(
+          g.keptAs !== null
+            ? `「${g.name}」已在别的设备上删除；这台设备上的内容留成了本地库`
+            : `「${g.name}」已在别的设备上删除，已从列表移除（文件不动）`,
+          'info'
+        );
+      }
       relinkFailedOnce.current = false;
       return true;
     } catch (e) {
-      // 每次同步都会重试，所以提示只出一次——底下的同步失败横幅一直都在，不算静默
-      if (!relinkFailedOnce.current) {
+      // 每次同步都会重试，所以提示只出一次——底下的同步失败横幅一直都在，不算静默。
+      // 启动时那次对齐（quiet）连这一次都不出：没网打开应用不该先弹一条红的。
+      if (!relinkFailedOnce.current && !quiet) {
         relinkFailedOnce.current = true;
         toast(`云端笔记库没接上：${errText(e)}`, 'error');
       }
@@ -533,6 +566,7 @@ export default function App() {
     setLastReport,
     sync: doSync,
     autoSync: doAutoSync,
+    syncAllowingDeletes,
     upload: doUpload,
     download: doDownload,
   } = useSyncEngine({
@@ -556,10 +590,15 @@ export default function App() {
   const healed = useRef(false);
   useEffect(() => {
     if (!client || healed.current) return;
-    if (Object.values(state.vaults).some((v) => v.id > 0)) return;
     healed.current = true;
-    void relink();
-  }, [client, state.vaults, relink]);
+    /*
+     * v0.11.25 起登录着就**每次启动对齐一次**库清单（不只是"一个云端库都没有"时）：
+     * 别的设备删掉的库要从这台设备的列表里消失，靠"等它被选中、同步撞 403"太晚——
+     * 测试用的空库永远不会被选中，就永远挂在那儿。当前库服务端认得时 linkVaults
+     * 什么都不动（pickOrphan 返回 null），只是把列表对齐。
+     */
+    void relink(true);
+  }, [client, relink]);
 
   // ---------- v0.3.4：插图 / 图片解析 / PDF（v0.8.0 P1.4 搬进 hooks/useAttachments） ----------
 
@@ -1059,6 +1098,37 @@ export default function App() {
    * 现在在主区渲染（沙箱 iframe，不跑脚本），跳浏览器降级成工具条上的一个出口。
    */
   const [htmlDoc, setHtmlDoc] = useState<{ path: string; html: string } | null>(null);
+  /**
+   * v0.11.24：这个 HTML 允不允许跑脚本——「一律运行」或这个文件点过「运行脚本」。
+   * 点「运行 / 停止」只改这个文件的记录；全局那档在设置里。
+   */
+  const htmlScriptsAllowed = htmlDoc
+    ? prefs.htmlScripts === 'always' || prefs.htmlScriptFiles.includes(htmlDoc.path)
+    : false;
+  const onHtmlScriptsToggle = useCallback(
+    (allow: boolean) => {
+      if (!htmlDoc) return;
+      const path = htmlDoc.path;
+      const rest = prefs.htmlScriptFiles.filter((p) => p !== path);
+      // 「一律运行」下点停止：只对这个文件不跑没法表达（列表是白名单），退回到「按文件」再把它去掉
+      updatePrefs({
+        ...prefs,
+        htmlScripts: allow ? prefs.htmlScripts : 'ask',
+        htmlScriptFiles: allow ? [...rest, path] : rest,
+      });
+    },
+    [htmlDoc, prefs, updatePrefs]
+  );
+  /** HTML 工具的数据文件落盘：写完刷新列表（它是库里一个真文件）并推同步 */
+  const writeVaultText = useCallback(
+    async (rel: string, text: string) => {
+      if (!vault) return;
+      await io.write(vault.localPath ?? '', rel, text);
+      await refreshFiles();
+      if (prefs.autoSync) void doSync();
+    },
+    [vault, io, refreshFiles, prefs.autoSync, doSync]
+  );
   const onOpenAttachment = useCallback(
     async (rel: string) => {
       /*
@@ -1179,6 +1249,8 @@ export default function App() {
       window.clearTimeout(saveTimers.current.get(path));
       saveTimers.current.set(path, window.setTimeout(async () => {
         try {
+          // v0.11.24：覆盖之前先把盘上旧内容留一张本机快照（5 分钟一张，失败不挡写盘）
+          await fileHistory.snapshotBefore(path);
           await io.write(vault.localPath ?? '', path, text);
           // v0.7.5：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
           // 不触发 refreshFiles，光靠咽喉对账的话离线写作时反链/搜索会滞后一拍。
@@ -1196,7 +1268,36 @@ export default function App() {
         }
       }, 800));
     },
-    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex, toast]
+    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex, toast, fileHistory]
+  );
+
+  /**
+   * v0.11.24：把某一版历史内容恢复成当前内容。
+   *
+   * 就是一次普通写盘：先给"现在这版"强制留快照（恢复错了能再恢复回来），写盘，
+   * 编辑器回灌，索引更新，推同步——和用户手动改回去走的是同一条路，
+   * 服务端不需要知道"这是一次恢复"。
+   */
+  const restoreVersion = useCallback(
+    async (path: string, content: string) => {
+      if (!vault) return;
+      const root = vault.localPath ?? '';
+      // 编辑器里还没落盘的改动先落下去，快照才是完整的"现在"
+      const pending = saveTimers.current.get(path);
+      if (pending !== undefined) {
+        window.clearTimeout(pending);
+        saveTimers.current.delete(path);
+        const live = path === currentPathRef.current ? docRef.current : path === splitPathRef.current ? splitDocRef.current : null;
+        if (live !== null) await io.write(root, path, live);
+      }
+      await fileHistory.snapshotBefore(path, true);
+      await io.write(root, path, content);
+      if (path === currentPathRef.current) setDoc(content);
+      if (path === splitPathRef.current) setSplitDoc(content);
+      noteIndex.touch(path, content);
+      if (prefs.autoSync) void doSync();
+    },
+    [vault, io, fileHistory, noteIndex, prefs.autoSync, doSync]
   );
 
   /**
@@ -2029,6 +2130,72 @@ export default function App() {
    * 而那两条命令在这一层。ribbon 上那一排按钮从此只做一件事——切这个值。
    */
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files');
+
+  /**
+   * v0.11.24：**云端已删除**的文件——回收站面板的第二段。
+   *
+   * 本机回收站只有"这台设备删的"（现在也包括"别的设备删的、这台 pull 到的"，
+   * 见 lib/sync 的 moveToTrash）。但在这之前被删的、或者换了台新设备，本机什么都没有；
+   * 云端那份墓碑清单才是全端共同的"可恢复"来源。只列本地现在不存在的。
+   */
+  const [cloudDeleted, setCloudDeleted] = useState<DeletedFile[]>([]);
+  const refreshCloudDeleted = useCallback(async () => {
+    if (!client || !vault || vault.id <= 0) {
+      setCloudDeleted([]);
+      return;
+    }
+    try {
+      const { files: gone } = await client.deletedFiles(vault.id);
+      const local = new Set(allPaths());
+      setCloudDeleted(gone.filter((f) => !local.has(f.path)));
+    } catch (e) {
+      // 列不到就当没有；不该因为它把回收站面板整个弄红
+      console.warn('云端已删除清单读取失败', e);
+      setCloudDeleted([]);
+    }
+  }, [client, vault, allPaths]);
+  useEffect(() => {
+    if (sidebarTab === 'trash') void refreshCloudDeleted();
+  }, [sidebarTab, refreshCloudDeleted, trash.list]);
+
+  /** 从云端把一份已删除的文件拿回来：写回原路径，下一轮 push 就是普通 upsert */
+  const restoreCloudDeleted = useCallback(
+    async (f: DeletedFile) => {
+      if (!client || !vault) return;
+      const root = vault.localPath ?? '';
+      try {
+        if (await io.exists(root, f.path)) {
+          toast(`${f.path} 本地已经有一份了，没有覆盖`, 'error');
+          return;
+        }
+        const bytes = new Uint8Array(await client.getBlob(f.blob_hash));
+        if (/\.(md|markdown|txt|base|html?|json|css|csv)$/i.test(f.path)) {
+          await io.write(root, f.path, new TextDecoder().decode(bytes));
+        } else {
+          await io.writeBinary(root, f.path, bytes);
+        }
+        await refreshFiles();
+        setCloudDeleted((cur) => cur.filter((x) => x.path !== f.path));
+        toast(`已从云端找回：${f.path}`, 'ok');
+        void doSync();
+      } catch (e) {
+        toast(`找回失败：${errText(e)}`, 'error');
+      }
+    },
+    [client, vault, io, refreshFiles, doSync, toast, errText]
+  );
+
+  /** 右栏「历史」标签的数据与动作 */
+  const historyProps = useMemo(
+    () => ({
+      path: currentPath,
+      current: doc ?? '',
+      history: fileHistory,
+      onRestore: restoreVersion,
+      toast,
+    }),
+    [currentPath, doc, fileHistory, restoreVersion, toast]
+  );
   /** 点标签面板里的标签 → 灌进侧栏搜索框（带序号，连点两次也要重搜） */
   const [sideSearchSeed, setSideSearchSeed] = useState<{ text: string; n: number } | null>(null);
 
@@ -2190,34 +2357,134 @@ export default function App() {
    * 可"建一个笔记本"跟服务器毫无关系，登录只该影响同步这一件事。
    * 未登录时建的是本地库（负数 id，OPFS 里各占一个目录）；登录后建的仍是云端库。
    */
+  /**
+   * v0.11.25：**新建笔记库 = 选一个文件夹。**
+   *
+   * 用户原话：「新建文件库就应该是新建本地文件夹或者选择本地文件夹」「库名就应该是
+   * 文件夹名字」「我压根找不到源文件在手机上的哪个位置」。此前新建默认落在 `opfs://`
+   * ——应用内部存储，安卓在 /data/data/…/app_webview/ 里，文件管理器根本看不到，
+   * 卸载即清；再靠「绑定本地目录」挪出来，两步之间就是 2026-09-11 那次事故的窗口。
+   *
+   * 现在：桌面走系统文件夹对话框（对话框里能新建文件夹），安卓走 SAF 选目录；
+   * 库名 = 文件夹名；选中的文件夹里已经有 .md 就直接当库用（Obsidian 的
+   * "Open folder as vault"）。只有浏览器版（没有磁盘）还是问名字、落内部存储。
+   */
   const createVault = useCallback(async () => {
-    const name = await prompt({
-      title: '新建笔记库',
-      placeholder: '笔记库名称',
-      okText: '创建',
-      validate: (v) => (v.trim() ? null : '请输入名称'),
-    });
-    if (!name) return;
     const cur = stateRef.current;
+    let sel: string | null = null;
+    let label: string | undefined;
+    let name: string;
+    if (isTauri) {
+      try {
+        if (isAndroidUA()) {
+          const picked = await pickVaultFolder();
+          if (!picked) return;
+          sel = picked.uri;
+          label = picked.name;
+        } else {
+          const { open } = await import('@tauri-apps/plugin-dialog');
+          const r = await open({ directory: true, title: '选择或新建一个文件夹作为笔记库' });
+          if (typeof r !== 'string' || !r) return;
+          sel = r;
+        }
+      } catch (e) {
+        toast(`选择文件夹失败：${errText(e)}`, 'error');
+        return;
+      }
+      const taken = Object.values(cur.vaults).find((v) => v.localPath === sel);
+      if (taken) {
+        toast(`这个文件夹已经是「${vaultDisplayName(taken)}」了`, 'error');
+        setVaultId(taken.id);
+        return;
+      }
+      name = vaultDisplayName({ name: '', localPath: sel, localLabel: label }) || folderName(sel);
+    } else {
+      const typed = await prompt({
+        title: '新建笔记库',
+        placeholder: '笔记库名称',
+        okText: '创建',
+        validate: (v) => (v.trim() ? null : '请输入名称'),
+      });
+      if (!typed) return;
+      name = typed.trim();
+    }
+    const withPlace = (m: VaultMeta): VaultMeta =>
+      sel ? { ...m, localPath: sel, localLabel: label, syncedAt: sel } : m;
     if (!client) {
       const id = nextLocalVaultId(cur.vaults);
-      persist({ ...cur, vaults: { ...cur.vaults, [String(id)]: newVaultMeta(id, name.trim()) } });
+      persist({ ...cur, vaults: { ...cur.vaults, [String(id)]: withPlace(newVaultMeta(id, name)) } });
       setVaultId(id);
       setCurrentPath(null);
       setDoc(null);
-      toast(`已创建本地笔记库「${name.trim()}」`, 'ok');
+      toast(sel ? `笔记库「${name}」已建在 ${sel}` : `已创建本地笔记库「${name}」`, 'ok');
       return;
     }
     try {
-      const v = await client.createVault(name.trim());
-      persist({ ...cur, vaults: { ...cur.vaults, [String(v.id)]: newVaultMeta(v.id, v.name) } });
+      const v = await client.createVault(name);
+      persist({ ...cur, vaults: { ...cur.vaults, [String(v.id)]: withPlace(newVaultMeta(v.id, v.name)) } });
       setVaultId(v.id);
       setCurrentPath(null);
       setDoc(null);
+      toast(sel ? `笔记库「${name}」已建在 ${sel}，会同步到云端` : `已创建笔记库「${name}」`, 'ok');
     } catch (e) {
       toast(`创建失败：${errText(e)}`, 'error');
     }
   }, [client, persist, prompt, toast]);
+
+  /**
+   * v0.11.25：删除笔记库。此前只有新建没有删除，测试用的空库一直挂着。
+   *
+   * 规矩：**用户的文件一个都不碰。** 绑了磁盘文件夹 / SAF 目录的，只从列表里去掉，
+   * 文件原地留着；只有应用内部存储（opfs://）那份会被清掉——它不在任何用户看得见的
+   * 地方，留着只是占空间。云端库还要在服务端打软删除，否则下次对齐列表又会回来
+   * （其它设备下次对齐时也会跟着放手，见 lib/vaultLink）。
+   */
+  const deleteVault = useCallback(
+    async (id: number) => {
+      const cur = stateRef.current;
+      const target = cur.vaults[String(id)];
+      if (!target) return;
+      const bound = !!target.localPath && !target.localPath.startsWith('opfs://');
+      const cloud = id > 0 && !!client;
+      const title = `删除笔记库「${vaultDisplayName(target)}」？`;
+      const lines = [
+        bound
+          ? `文件夹 ${vaultLocationLabel(target)} 里的文件不会被删除，只是不再作为笔记库打开。`
+          : '它存在应用内部存储里，删除后这份内容就没有了。',
+        cloud ? '云端也会标记删除：其它设备下次同步会自动放手（它们本地的文件同样不动）。' : '',
+        '云端保留历史版本，误删可联系管理员恢复。',
+      ].filter(Boolean);
+      const ok = await confirm({ title, description: lines.join('\n\n'), okText: '删除', danger: true });
+      if (!ok) return;
+      try {
+        if (cloud) await client!.deleteVault(id);
+      } catch (e) {
+        toast(`云端删除失败，笔记库未改变：${errText(e)}`, 'error');
+        return;
+      }
+      if (!bound) {
+        try {
+          await removeOpfsVault(id);
+        } catch (e) {
+          console.warn('清理应用内部存储失败', e);
+        }
+      }
+      const rest = { ...cur.vaults };
+      delete rest[String(id)];
+      let next: PersistState = { ...cur, vaults: rest };
+      // 一个都不剩就补一个本地库，界面不能空壳
+      if (Object.keys(rest).length === 0) next = ensureLocalVault(next);
+      persist(next);
+      if (activeVaultId === id) {
+        const pick = Object.values(next.vaults).sort((a, b) => b.id - a.id)[0];
+        setVaultId(pick ? pick.id : null);
+        setCurrentPath(null);
+        setDoc(null);
+      }
+      toast(`已删除笔记库「${vaultDisplayName(target)}」${bound ? '（文件还在原文件夹里）' : ''}`, 'ok');
+    },
+    [client, confirm, persist, toast, activeVaultId]
+  );
 
   /**
    * 选择笔记库在磁盘上的位置。
@@ -2266,7 +2533,7 @@ export default function App() {
     const from = vault.localPath ?? '';
     if (from === sel) return;
     const wasVirtual = !from || from.startsWith('opfs://');
-    const count = allPaths.length;
+    const count = allPaths().length;
     const shownDest = label ?? sel;
     if (count > 0) {
       const ok = await confirm({
@@ -2285,13 +2552,26 @@ export default function App() {
         return;
       }
     }
+    const newName = vaultDisplayName({ name: vault.name, localPath: sel, localLabel: label ?? undefined });
     patchVault(vault.id, (m) => {
       m.localPath = sel as string;
       m.localLabel = label ?? undefined;
+      // 库名跟着文件夹名走（v0.11.25）
+      m.name = newName;
+      /*
+       * 账本换位置（v0.11.25）：这里**不**改 syncedAt——留给同步引擎在下一轮发现
+       * "账本是在旧位置对出来的"，按新设备冷启动全量对账（lib/sync relocateIfMoved）。
+       * 刚复制过去的文件和云端一模一样，对账只会确认、不会推一条 delete。
+       */
     });
+    if (client && vault.id > 0 && newName !== vault.name) {
+      client.renameVault(vault.id, newName).catch(() => {
+        /* 云端名字下次对齐列表时再纠正；不挡本地 */
+      });
+    }
     await refreshFiles();
-    toast(count > 0 ? `已移动 ${count} 个文件到新位置` : '已设置笔记库位置', 'ok');
-  }, [vault, allPaths.length, patchVault, confirm, toast, refreshFiles]);
+    toast(count > 0 ? `已移动 ${count} 个文件到新位置，库名改为「${newName}」` : `已设置笔记库位置：${newName}`, 'ok');
+  }, [vault, allPaths, patchVault, confirm, toast, refreshFiles, client]);
 
   /**
    * 撤回到应用内部存储。
@@ -2482,6 +2762,7 @@ export default function App() {
       onOpenTags: vault ? () => setSidebarTab('tags') : null,
       onTidy: currentPath ? tidyNote : null,
       onAi: currentPath ? onEditorAi : null,
+      onOpenHistory: currentPath ? () => setWantRightTab('history') : null,
     }),
     [
       onCreateNote,
@@ -2614,11 +2895,9 @@ export default function App() {
           storage={{
             // opfs:// 是虚拟标记，对用户来说就是「应用内部存储」，不该把它当路径显示
             // content:// 那一长串给人看等于没说，有显示名就用显示名
-            path:
-              vault?.localPath && !vault.localPath.startsWith('opfs://')
-                ? vault.localLabel ?? vault.localPath
-                : null,
-            fileCount: allPaths.length,
+            // v0.11.25：SAF 的 content:// 换算成 Documents/IvyeaNote 这种人能读的路径
+            path: vault?.localPath && !vault.localPath.startsWith('opfs://') ? vaultLocationLabel(vault) : null,
+            fileCount: allPaths().length,
             // v0.10.4：安卓有自己的 SAF 选择器了，不再是"只有桌面能选"
             canPick: isTauri,
             isAndroid: isAndroidUA(),
@@ -2688,6 +2967,83 @@ export default function App() {
     </div>
   ) : null;
 
+  /**
+   * v0.11.25 删除熔断的两条出路。
+   *
+   * 「从云端拉回来」不用走网络：`.md` 的上次同步内容就在账本 `bases` 里，附件按
+   * `assets` 里的哈希取 blob。写回本地之后账本没变，下一轮同步就是"本地 = 上次同步"，
+   * 什么都不用推。「确实是我删的」走 syncAllowingDeletes，只放行这一轮。
+   */
+  const [guardBusy, setGuardBusy] = useState(false);
+  const restoreMissing = useCallback(async () => {
+    const md = lastReport?.massDelete;
+    if (!vault || !md) return;
+    const root = vault.localPath ?? '';
+    setGuardBusy(true);
+    let ok = 0;
+    const failed: string[] = [];
+    try {
+      for (const path of md.paths) {
+        try {
+          if (await io.exists(root, path)) {
+            ok++;
+            continue;
+          }
+          const base = vault.bases[path];
+          const hash = vault.assets?.[path];
+          if (base !== undefined) await io.write(root, path, base);
+          else if (hash && client) await io.writeBinary(root, path, new Uint8Array(await client.getBlob(hash)));
+          else {
+            failed.push(path);
+            continue;
+          }
+          ok++;
+        } catch {
+          failed.push(path);
+        }
+      }
+      await refreshFiles();
+      if (failed.length === 0) toast(`已拉回 ${ok} 篇`, 'ok');
+      else toast(`拉回 ${ok} 篇，${failed.length} 篇没成功：${failed.slice(0, 3).join('、')}`, 'error');
+      await doSync();
+      await refreshSyncStatus();
+    } finally {
+      setGuardBusy(false);
+    }
+  }, [vault, io, client, lastReport, refreshFiles, doSync, refreshSyncStatus, toast]);
+  const confirmDeletes = useCallback(async () => {
+    const md = lastReport?.massDelete;
+    if (!md) return;
+    const ok = await confirm({
+      title: `把 ${md.missing} 篇的删除推到云端？`,
+      description: '所有设备都会跟着删（它们会先进各自的回收站，云端也留着历史版本，但请确认这确实是你的意思）。',
+      okText: '推上去',
+      danger: true,
+    });
+    if (!ok) return;
+    setGuardBusy(true);
+    try {
+      await syncAllowingDeletes();
+      await refreshSyncStatus();
+    } finally {
+      setGuardBusy(false);
+    }
+  }, [lastReport, confirm, syncAllowingDeletes, refreshSyncStatus]);
+
+  /*
+   * v0.11.25 换了位置：引擎把账本清零、按新位置全量对账。要说一声，否则人看到的只是
+   * "同步了一下，多了一堆文件"。
+   */
+  const relocatedSeen = useRef<string | null>(null);
+  useEffect(() => {
+    const r = lastReport?.relocated;
+    if (!r) return;
+    const key = `${r.from}→${r.to}`;
+    if (relocatedSeen.current === key) return;
+    relocatedSeen.current = key;
+    toast(`库位置变了，已按新位置重新对账：拉取 ${lastReport?.pulled ?? 0} 篇、推送 ${lastReport?.pushed ?? 0} 篇；一篇都不会删`, 'ok');
+  }, [lastReport, toast]);
+
   const syncStatusEl = showSyncStatus ? (
     <SyncStatusPanel
       loading={syncStatusBusy}
@@ -2695,6 +3051,10 @@ export default function App() {
       summary={summarize(syncStatusList)}
       errors={lastReport?.errors ?? []}
       syncing={syncing}
+      massDelete={lastReport?.massDelete}
+      onRestoreMissing={() => void restoreMissing()}
+      onConfirmDeletes={() => void confirmDeletes()}
+      busy={guardBusy}
       onRefresh={() => void refreshSyncStatus()}
       onSyncNow={async () => {
         await doSync();
@@ -2991,7 +3351,20 @@ export default function App() {
   }
 
   // 未登录：列表里展示全部**本地**库（负数 id）；云端库要登录后才能用
-  const vaultList = Object.values(state.vaults).filter((v) => state.account || v.id < 0);
+  /** 切库：主区上一个库的东西（笔记 / PDF / 表格 / HTML / 图片）全部让开 */
+  const switchVault = (id: number) => {
+    setVaultId(id);
+    setCurrentPath(null);
+    setDoc(null);
+    onClosePdf();
+    setBaseDoc(null);
+    setHtmlDoc(null);
+    setImageView(null);
+    setShowGraph(false);
+  };
+  const vaultList = Object.values(state.vaults)
+    .filter((v) => state.account || v.id < 0)
+    .map((v) => ({ id: v.id, name: vaultDisplayName(v), location: vaultLocationLabel(v) }));
 
   if (isMobile && vault) {
     return (
@@ -3015,11 +3388,8 @@ export default function App() {
           lastReport={lastReport}
           vaults={vaultList}
           activeVaultId={activeVaultId}
-          onSwitchVault={(id) => {
-            setVaultId(id);
-            setCurrentPath(null);
-            setDoc(null);
-          }}
+          onSwitchVault={switchVault}
+          onDeleteVault={(id) => void deleteVault(id)}
           onSelect={(p) => void openFile(p)}
           onEdit={onEdit}
           exposeSelection={exposeSelection}
@@ -3060,6 +3430,9 @@ export default function App() {
           onOpenHtmlExternal={(p) => void openWithSystemApp(p)}
           resolveAsset={resolveImage}
           readVaultText={(rel) => io.read(vault?.localPath ?? '', rel)}
+          writeVaultText={writeVaultText}
+          htmlScriptsAllowed={htmlScriptsAllowed}
+          onHtmlScriptsToggle={onHtmlScriptsToggle}
           pdfView={pdfView}
           pdfPath={pdfPath}
           onClosePdf={onClosePdf}
@@ -3070,9 +3443,15 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenDaily={() => void openDailyNote()}
           trashList={trash.list}
-          onOpenTrash={() => void trash.reload()}
+          onOpenTrash={() => {
+            void trash.reload();
+            void refreshCloudDeleted();
+          }}
           onTrashRestore={(p) => void trash.restore(p)}
           onTrashPurge={(p) => void trash.purge(p)}
+          cloudDeleted={cloudDeleted}
+          onCloudRestore={(f) => void restoreCloudDeleted(f)}
+          historyProps={historyProps}
         />
         {/* 标签面板原本整段写在桌面分支之后，手机上根本不渲染——补入口就得连它一起搬 */}
         {showTagPanel && (
@@ -3155,21 +3534,6 @@ export default function App() {
           onOpenPdf={() => undefined}
           pdfView={null}
           onClosePdf={onClosePdf}
-          vaultSelector={
-            <select
-              value=""
-              onChange={(e) => {
-                if (e.target.value) setVaultId(Number(e.target.value));
-              }}
-            >
-              <option value="">选择一个笔记库…</option>
-              {vaultList.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.name}
-                </option>
-              ))}
-            </select>
-          }
           onCreateVault={createVault}
           collapsedDirs={collapsedDirs}
           onToggleDir={toggleDir}
@@ -3261,6 +3625,9 @@ export default function App() {
         onOpenHtmlExternal={(p) => void openWithSystemApp(p)}
         resolveAsset={resolveImage}
         readVaultText={(rel) => io.read(vault?.localPath ?? '', rel)}
+        writeVaultText={writeVaultText}
+        htmlScriptsAllowed={htmlScriptsAllowed}
+        onHtmlScriptsToggle={onHtmlScriptsToggle}
         pdfView={pdfView}
         pdfPath={pdfPath}
         onOpenPdfExternal={(p) => void openWithSystemApp(p)}
@@ -3282,6 +3649,11 @@ export default function App() {
         onTrashRestore={(p) => void trash.restore(p)}
         onTrashPurge={(p) => void trash.purge(p)}
         onTrashPurgeAll={() => void trash.purgeAll()}
+        cloudDeleted={cloudDeleted}
+        onCloudRestore={(f) => void restoreCloudDeleted(f)}
+        historyProps={historyProps}
+        wantRightTab={wantRightTab}
+        onWantRightTabConsumed={() => setWantRightTab(null)}
         onPickTag={(tag) => {
           setSidebarTab('search');
           setSideSearchSeed((cur) => ({ text: `#${tag}`, n: (cur?.n ?? 0) + 1 }));
@@ -3315,24 +3687,11 @@ export default function App() {
         onOpenConflicts={() => setShowConflict(true)}
         onAddDevice={() => void showPairCode()}
         addDeviceBusy={pairBusy}
-        vaultSelector={
-          <select
-            value={activeVaultId ?? ''}
-            onChange={(e) => {
-              setVaultId(Number(e.target.value));
-              setCurrentPath(null);
-              setDoc(null);
-              onClosePdf();
-            }}
-          >
-            {vaultList.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.name}
-              </option>
-            ))}
-          </select>
-        }
         onCreateVault={createVault}
+        vaults={vaultList}
+        activeVaultId={activeVaultId}
+        onSwitchVault={switchVault}
+        onDeleteVault={(id) => void deleteVault(id)}
       />
       {paletteMode && (
         <Palette

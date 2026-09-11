@@ -120,7 +120,33 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 			return fmt.Errorf("ddl %d: %w", i+1, err)
 		}
 	}
-	return nil
+	// v0.11.25：库软删除。SQLite 没有 ADD COLUMN IF NOT EXISTS，先查再加
+	return s.addColumnIfMissing(ctx, "vaults", "deleted_at", "TEXT")
+}
+
+func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, typ string) error {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, typ))
+	return err
 }
 
 // ---------- users ----------
@@ -202,7 +228,7 @@ func scanVault(scan func(dest ...any) error) (Vault, error) {
 
 func (s *SQLiteStore) ListVaults(ctx context.Context, userID int64) ([]Vault, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, user_id, name, created_at FROM vaults WHERE user_id=? ORDER BY id`, userID)
+		`SELECT id, user_id, name, created_at FROM vaults WHERE user_id=? AND deleted_at IS NULL ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -230,8 +256,53 @@ func (s *SQLiteStore) CreateVault(ctx context.Context, userID int64, name string
 func (s *SQLiteStore) VaultOwnedBy(ctx context.Context, vaultID, userID int64) (bool, error) {
 	var ok bool
 	err := s.db.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM vaults WHERE id=? AND user_id=?)`, vaultID, userID).Scan(&ok)
+		`SELECT EXISTS(SELECT 1 FROM vaults WHERE id=? AND user_id=? AND deleted_at IS NULL)`, vaultID, userID).Scan(&ok)
 	return ok, err
+}
+
+// ---------- 库管理（v0.11.25） ----------
+
+func (s *SQLiteStore) DeleteVault(ctx context.Context, vaultID, userID int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE vaults SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND user_id=? AND deleted_at IS NULL`,
+		vaultID, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoRows
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListDeletedVaultIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM vaults WHERE user_id=? AND deleted_at IS NOT NULL ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) RenameVault(ctx context.Context, vaultID, userID int64, name string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE vaults SET name=? WHERE id=? AND user_id=? AND deleted_at IS NULL`, name, vaultID, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNoRows
+	}
+	return nil
 }
 
 // ---------- blobs ----------
@@ -298,6 +369,69 @@ func (s *SQLiteStore) Pull(ctx context.Context, vaultID, cursor int64, limit int
 		next = c.ID
 	}
 	return out, next, rows.Err()
+}
+
+// ---------- 文件历史 ----------
+
+// blob 大小用子查询而不是 JOIN：blobs 主键是 (hash, user_id)，而 changes 里
+// 没有 user_id；同一个 hash 不管属于谁内容都一样长，取任意一条即可。
+const sqliteHistorySQL = `SELECT c.version, c.op, c.blob_hash,
+	COALESCE((SELECT size FROM blobs b WHERE b.hash=c.blob_hash LIMIT 1), 0),
+	c.device_id, c.created_at
+	FROM changes c WHERE c.vault_id=? AND c.path=? ORDER BY c.version DESC LIMIT ?`
+
+func (s *SQLiteStore) History(ctx context.Context, vaultID int64, path string, limit int) ([]Version, error) {
+	rows, err := s.db.QueryContext(ctx, sqliteHistorySQL, vaultID, path, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Version{}
+	for rows.Next() {
+		var v Version
+		var created string
+		if err := rows.Scan(&v.Version, &v.Op, &v.BlobHash, &v.Size, &v.DeviceID, &created); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			v.CreatedAt = t
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// 已删除 = heads.deleted=1；恢复要的是删除**之前**那一版的 blob，
+// 所以再往 changes 里找该路径最后一次 upsert。
+const sqliteDeletedSQL = `SELECT h.path, h.version, u.blob_hash,
+	COALESCE((SELECT size FROM blobs b WHERE b.hash=u.blob_hash LIMIT 1), 0),
+	d.created_at
+	FROM heads h
+	JOIN changes d ON d.vault_id=h.vault_id AND d.path=h.path AND d.version=h.version
+	LEFT JOIN changes u ON u.vault_id=h.vault_id AND u.path=h.path AND u.op='upsert'
+	  AND u.version=(SELECT MAX(version) FROM changes x WHERE x.vault_id=h.vault_id AND x.path=h.path AND x.op='upsert')
+	WHERE h.vault_id=? AND h.deleted=1
+	ORDER BY d.id DESC`
+
+func (s *SQLiteStore) DeletedFiles(ctx context.Context, vaultID int64) ([]DeletedFile, error) {
+	rows, err := s.db.QueryContext(ctx, sqliteDeletedSQL, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DeletedFile{}
+	for rows.Next() {
+		var f DeletedFile
+		var created string
+		if err := rows.Scan(&f.Path, &f.Version, &f.BlobHash, &f.Size, &created); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			f.DeletedAt = t
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }
 
 // ---------- MCP 长期令牌 ----------

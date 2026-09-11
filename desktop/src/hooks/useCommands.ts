@@ -38,6 +38,8 @@ export interface CommandActions {
   /** v0.11.18：AI 动作（按 id 触发）。没有打开笔记时为 null */
   /** 动作 id 见 lib/llm 的 AI_ACTIONS，外加 custom / ask-note / ask-vault 三条要先问一句的 */
   onAi: ((id: string) => void) | null;
+  /** v0.11.24：右栏「历史」标签（本机快照 + 云端版本）。没有打开笔记时为 null */
+  onOpenHistory: (() => void) | null;
 }
 
 export interface CommandsDeps {
@@ -128,6 +130,9 @@ export function useCommands(deps: CommandsDeps): Commands {
           : null,
         actions.onOpenTags ? { id: 'tags', label: '打开标签面板', run: actions.onOpenTags } : null,
         actions.onTidy ? { id: 'tidy', label: '整理排版（本地规则，不联网）', run: actions.onTidy } : null,
+        actions.onOpenHistory
+          ? { id: 'history', label: '查看文件历史（找回误改的内容）', run: actions.onOpenHistory }
+          : null,
         actions.onAi
           ? { id: 'ai-proofread', label: 'AI 校对选中的文字', run: () => actions.onAi?.('proofread') }
           : null,

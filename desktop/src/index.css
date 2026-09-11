@@ -2859,3 +2859,19 @@ button {
     color: #555;
   }
 }
+
+/*
+ * v0.11.24：主区放的是 HTML / PDF / 图片 / 表格 / 图谱时，状态栏不再浮着——
+ * iframe 里的页面留不出底部空白，浮层必然压住它最后一行。改成贴底的一条，
+ * 内容区在它上面结束（`.editor-stage` 是纵向 flex，静态定位的状态栏自然占一行）。
+ */
+.editor-stage.stage-frame .status-bar {
+  position: static;
+  width: 100%;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

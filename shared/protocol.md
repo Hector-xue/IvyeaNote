@@ -28,8 +28,10 @@
 ### 3.2 Vault
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | /vaults | 列表 |
+| GET | /vaults | `{vaults:[{id,name,created_at}], deleted:[id…]}`；`deleted` 是已软删除的库 id（v0.11.25 起），客户端据此"放手"而不是当孤儿收养 |
 | POST | /vaults | {name} → {id,name} |
+| DELETE | /vaults/{id} | 软删除（v0.11.25）：列表不再有它、同步一律 403、内容原样留着 |
+| PATCH | /vaults/{id} | {name} 改名（v0.11.25，库名跟着文件夹名走） |
 
 ### 3.3 同步
 **PUSH** `POST /sync/push`
@@ -63,6 +65,14 @@
 - 客户端循环拉取直到 next_cursor 不再前进；每条 change 应用到本地后更新该 path 的本地 version。
 - **应用规则**：跳过自己 device_id 的记录（自己的写已在本地）；upsert 且本地无此内容则下载 blob 写盘；delete 则删除本地文件。
 
+### 3.3b 文件历史（v0.11.24，只读）
+changes 只追加、blob 不删（§5）意味着每一版都在；这两条只是把它们列出来。**恢复不需要新接口**：客户端把旧版 blob 写回本地，下一轮 push 就是普通 upsert（base_version = 当前版本）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /sync/history?vault_id=1&path=a.md&limit=50 | 该路径历史版本，新的在前：`{versions:[{version,op,blob_hash?,size,device_id,created_at}]}` |
+| GET | /sync/deleted?vault_id=1 | 当前已删除的路径（最近删的在前），`blob_hash` 指向删除前最后一版：`{files:[{path,version,blob_hash,size,deleted_at}]}` |
+
 ### 3.4 Blob
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -74,6 +84,10 @@
 - 服务端在某 vault 有新变更时向该 vault 的其他在线设备推：
   `{"event":"dirty","vault_id":1}`
 - 客户端收到后立即执行一轮 PULL。断线重连：指数退避 1s→2s→…→60s 封顶。
+
+### 3.6 客户端义务（v0.11.25）
+- **账本跟着位置走**：客户端记录同步账本对应的本地位置；位置变化时必须清零账本、从 cursor=0 按"最终状态"重新对账，**绝不能**把"本地没有"推理成 delete。
+- **删除熔断**：一轮里本地消失的已知路径 ≥ 30% 且 ≥ 10（或全部、≥ 3）时不得推送 delete，须经用户确认。
 
 ## 4. 冲突解决规则（全端统一）
 

@@ -30,6 +30,7 @@ function makeActions(over: Partial<CommandActions> = {}): CommandActions {
     onOpenTags: null,
     onTidy: null,
     onAi: null,
+    onOpenHistory: null,
     ...over,
   };
 }

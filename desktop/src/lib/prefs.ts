@@ -48,6 +48,16 @@ export interface Prefs {
    * 没有服务端可以替你保管它。**它不会随笔记同步**（同步的只有 vault 里的文件）。
    */
   ai: AiPrefs;
+  /**
+   * v0.11.24：库里的 `.html` 要不要跑脚本。
+   *
+   * 默认 `ask`：页面带脚本时先不跑，工具条上一条「运行脚本」，点过的文件记进
+   * `htmlScriptFiles`，下次直接跑。`always`：所有 HTML 一律直接跑（自己写的工具多、
+   * 不从外面存网页的人用）。**默认不变**：老用户升级后 HTML 仍然是不跑脚本的。
+   */
+  htmlScripts: 'ask' | 'always';
+  /** 点过「运行脚本」的文件（库内路径）。改名 / 移动后要重新点一次，这是有意的 */
+  htmlScriptFiles: string[];
 }
 
 export interface AiPrefs {
@@ -85,6 +95,8 @@ export const PREF_DEFAULTS: Prefs = {
   attachMode: 'beside',
   autoDensity: false,
   ai: AI_DEFAULTS,
+  htmlScripts: 'ask',
+  htmlScriptFiles: [],
 };
 
 const KEY = 'ivnote.prefs';
@@ -103,6 +115,10 @@ export function loadPrefs(): Prefs {
           ? raw.attachMode
           : PREF_DEFAULTS.attachMode,
       autoDensity: typeof raw.autoDensity === 'boolean' ? raw.autoDensity : PREF_DEFAULTS.autoDensity,
+      htmlScripts: raw.htmlScripts === 'always' ? 'always' : 'ask',
+      htmlScriptFiles: Array.isArray(raw.htmlScriptFiles)
+        ? raw.htmlScriptFiles.filter((x): x is string => typeof x === 'string').slice(0, 500)
+        : [],
       ai: {
         baseUrl: typeof raw.ai?.baseUrl === 'string' ? raw.ai.baseUrl : '',
         apiKey: typeof raw.ai?.apiKey === 'string' ? raw.ai.apiKey : '',

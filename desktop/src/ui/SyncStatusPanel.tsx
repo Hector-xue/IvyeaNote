@@ -10,6 +10,7 @@
  */
 import { RibbonIcon } from './Icons';
 import { STATE_LABEL, type FileSyncStatus, type SyncSummary } from '../lib/syncStatus';
+import type { SyncReport } from '../lib/sync';
 
 interface Props {
   loading: boolean;
@@ -22,6 +23,14 @@ interface Props {
   syncing: boolean;
   onOpen(path: string): void;
   onClose(): void;
+  /**
+   * v0.11.25：删除熔断。上一轮本地一下少了太多已知文件，引擎没推删除，等人来判断。
+   * 两条路：从云端拉回来（默认、无害）；确实是我删的（推删除，全端跟着删）。
+   */
+  massDelete?: SyncReport['massDelete'];
+  onRestoreMissing?(): void;
+  onConfirmDeletes?(): void;
+  busy?: boolean;
 }
 
 const ORDER: Record<FileSyncStatus['state'], number> = {
@@ -62,6 +71,33 @@ export function SyncStatusPanel(props: Props) {
             </button>
           </span>
         </div>
+
+        {props.massDelete && (
+          <div className="sync-guard" role="alert">
+            <p className="sync-guard-title">
+              本地少了 {props.massDelete.missing} 篇（原来 {props.massDelete.known} 篇），同步已暂停删除
+            </p>
+            <p className="sync-guard-text">
+              这不像是一篇篇删出来的——更像是库位置换了、文件夹被挪走、或存储授权失效。
+              云端那 {props.massDelete.missing} 篇一篇没动，其它设备也都还在。
+              在你决定之前，这台设备**不会**把删除推上去；别的改动照常同步。
+            </p>
+            <ul className="sync-guard-list">
+              {props.massDelete.paths.slice(0, 12).map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+              {props.massDelete.paths.length > 12 && <li>…还有 {props.massDelete.paths.length - 12} 篇</li>}
+            </ul>
+            <div className="sync-guard-actions">
+              <button className="btn primary" disabled={props.busy} onClick={props.onRestoreMissing}>
+                从云端拉回来
+              </button>
+              <button className="btn danger" disabled={props.busy} onClick={props.onConfirmDeletes}>
+                这些确实是我删的，推上去
+              </button>
+            </div>
+          </div>
+        )}
 
         {props.errors.length > 0 && (
           <ul className="sync-errors">

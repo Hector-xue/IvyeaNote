@@ -449,6 +449,35 @@ export function SettingsView(props: Props) {
                 {ATTACH_MODES.find((m) => m.id === p.attachMode)?.hint}
               </p>
             </div>
+
+            {/*
+              v0.11.24：库里的 HTML 工具要不要跑脚本。默认「按文件」= 老行为（不跑），
+              带脚本的页面会在工具条下给一条「运行脚本」，点过的记住。
+            */}
+            <div className="set-row">
+              <label className="set-label">
+                HTML 文件里的脚本
+                <span className="set-hint">
+                  沙箱里运行，碰不到笔记和账号；工具存的数据落到同名 .data.json，随笔记同步
+                </span>
+              </label>
+              <div className="seg">
+                {(['ask', 'always'] as const).map((m) => (
+                  <button
+                    key={m}
+                    className={`seg-btn ${p.htmlScripts === m ? 'on' : ''}`}
+                    onClick={() => setPref({ htmlScripts: m })}
+                  >
+                    {m === 'ask' ? '按文件允许' : '一律运行'}
+                  </button>
+                ))}
+              </div>
+              <p className="set-hint">
+                {p.htmlScripts === 'ask'
+                  ? `打开带脚本的页面时先不跑，点「运行脚本」才跑；已允许 ${p.htmlScriptFiles.length} 个文件`
+                  : '所有 HTML 打开就跑脚本。库里会存别人发来的网页的话，建议用「按文件允许」'}
+              </p>
+            </div>
           </section>
 
           {/* ---------------- AI（v0.11.18） ---------------- */}

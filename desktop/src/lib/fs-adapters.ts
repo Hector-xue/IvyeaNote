@@ -149,6 +149,22 @@ async function opfsVaultRoot(meta: VaultMeta): Promise<DirHandle> {
   return root.getDirectoryHandle(`vault-${meta.id}`, { create: true }) as Promise<DirHandle>;
 }
 
+/**
+ * v0.11.25：删除库时把它在 OPFS 里的目录整个拿掉（`vault-<id>`）。
+ * 只对应用内部存储；绑定的磁盘文件夹 / SAF 目录**永远不动**——那是用户的文件。
+ */
+export async function removeOpfsVault(id: number): Promise<void> {
+  const root = (await navigator.storage.getDirectory()) as unknown as DirHandle & {
+    removeEntry(name: string, opts?: { recursive?: boolean }): Promise<void>;
+  };
+  try {
+    await root.removeEntry(`vault-${id}`, { recursive: true });
+  } catch (e) {
+    // 目录本来就不存在（从没写过东西）不算失败
+    if ((e as { name?: string })?.name !== 'NotFoundError') throw e;
+  }
+}
+
 async function opfsWalk(dir: DirHandle, prefix: string, out: string[]): Promise<void> {
   for await (const h of dir.values()) {
     const rel = prefix ? `${prefix}/${h.name}` : h.name;
@@ -274,8 +290,14 @@ export async function migrateFiles(
 ): Promise<number> {
   let n = 0;
   for (const rel of await src.list(srcPath)) {
-    if (!/\.(md|markdown)$/i.test(rel)) continue;
-    await dst.write(dstPath, rel, await src.read(srcPath, rel));
+    /*
+     * v0.11.25：**附件也搬**。此前只搬 `.md`——库从应用内部存储移到磁盘文件夹时，
+     * 图片和 PDF 全留在 OPFS 里，新位置里的笔记一打开全是裂图。
+     * `.ivyea/`（索引缓存）与 `.trash/`（本机回收站）是这个位置自己的派生数据，不搬。
+     */
+    if (rel.startsWith('.ivyea/') || rel.startsWith('.trash/')) continue;
+    if (/\.(md|markdown)$/i.test(rel)) await dst.write(dstPath, rel, await src.read(srcPath, rel));
+    else await dst.writeBinary(dstPath, rel, await src.readBinary(srcPath, rel));
     n++;
   }
   if (tombstones) {
