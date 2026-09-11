@@ -288,7 +288,7 @@ export async function migrateFiles(
   dstPath: string,
   tombstones?: Record<string, number>
 ): Promise<number> {
-  let n = 0;
+  const copied: string[] = [];
   for (const rel of await src.list(srcPath)) {
     /*
      * v0.11.25：**附件也搬**。此前只搬 `.md`——库从应用内部存储移到磁盘文件夹时，
@@ -298,8 +298,21 @@ export async function migrateFiles(
     if (rel.startsWith('.ivyea/') || rel.startsWith('.trash/')) continue;
     if (/\.(md|markdown)$/i.test(rel)) await dst.write(dstPath, rel, await src.read(srcPath, rel));
     else await dst.writeBinary(dstPath, rel, await src.readBinary(srcPath, rel));
-    n++;
+    copied.push(rel);
   }
+  /*
+   * v0.11.27：复制完**回头数一遍**。安卓 SAF 那次（2026-09-12）目标端把 `CNC.md` 落成了
+   * `CNC.md.txt`，write 却一路成功——库指向新位置后一篇也对不上，每同步一轮多一份副本。
+   * 这里以目标端自己的 list 为准：少一个就整体失败，调用方不会切 localPath，笔记留在原地。
+   */
+  if (copied.length > 0) {
+    const got = new Set(await dst.list(dstPath));
+    const missing = copied.filter((p) => !got.has(p));
+    if (missing.length > 0) {
+      throw new Error(`复制后在新位置找不到 ${missing.length} 个文件（如 ${missing[0]}），已放弃`);
+    }
+  }
+  const n = copied.length;
   if (tombstones) {
     for (const p of Object.keys(tombstones)) {
       const stillLocal = await src.exists(srcPath, p).catch(() => false);
