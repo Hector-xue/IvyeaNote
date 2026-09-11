@@ -2930,3 +2930,48 @@ button.st-item:hover {
   color: var(--accent);
   background: var(--accent-weak, color-mix(in srgb, var(--accent) 12%, transparent));
 }
+
+/* ---- 同步面板：删除熔断（v0.11.25）---- */
+/*
+ * 一块淡红底的说明区，不是弹窗：它要和下面的文件清单一起看。
+ * 两个按钮里"从云端拉回来"是主按钮（无害），"确实是我删的"用 danger——
+ * 点它之后全端跟着删，这颗按钮不该长得和"确定"一样。
+ */
+.sync-guard {
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, #d95a4a 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, #d95a4a 30%, transparent);
+}
+.sync-guard-title {
+  margin: 0 0 4px;
+  font-weight: var(--fw-bold);
+  color: #b3402f;
+  font-size: var(--fs-sm);
+}
+.sync-guard-text {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.sync-guard-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  max-height: 120px;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sync-guard-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* 状态栏里的熔断提示：红字，可点，和"同步失败"同一档 */
+.status-bar .st-item.st-guard {
+  color: #b3402f;
+}
+/* 手机端：红条带一颗按钮，和"登录已过期"同一形状 */

@@ -112,7 +112,17 @@ type Store interface {
 	// ---------- vaults ----------
 	ListVaults(ctx context.Context, userID int64) ([]Vault, error)
 	CreateVault(ctx context.Context, userID int64, name string) (int64, error)
+	// VaultOwnedBy 属主校验；**已删除的库一律 false**（同步会拿到 403，客户端据此停手）。
 	VaultOwnedBy(ctx context.Context, vaultID, userID int64) (bool, error)
+	// ---------- 库管理（v0.11.25） ----------
+	// DeleteVault 软删除：打 deleted_at，heads / changes / blobs 原样留着（能撤销、能审计）。
+	// 之后 ListVaults 不再列它、VaultOwnedBy 为 false。
+	DeleteVault(ctx context.Context, vaultID, userID int64) error
+	// ListDeletedVaultIDs 该用户已删除的库 id。客户端用它区分"服务端不认这个库"的两种含义：
+	// 被别的设备删掉了（要跟着放手） vs 服务端换了 / 重置了（要重新接入）。
+	ListDeletedVaultIDs(ctx context.Context, userID int64) ([]int64, error)
+	// RenameVault 改名（库名跟着文件夹名走，v0.11.25）。
+	RenameVault(ctx context.Context, vaultID, userID int64, name string) error
 
 	// ---------- blobs ----------
 	PutBlob(ctx context.Context, hash string, userID int64, content []byte) error // 幂等

@@ -56,6 +56,8 @@ var pgDDL = []string{
 		name       TEXT NOT NULL,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`,
+	// v0.11.25：库软删除
+	`ALTER TABLE vaults ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
 	`CREATE TABLE IF NOT EXISTS devices (
 		id         TEXT PRIMARY KEY,
 		user_id    BIGINT NOT NULL REFERENCES users(id),
@@ -180,7 +182,7 @@ func (s *PGStore) CreateDevice(ctx context.Context, id string, userID int64) err
 
 func (s *PGStore) ListVaults(ctx context.Context, userID int64) ([]Vault, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, user_id, name, created_at FROM vaults WHERE user_id=$1 ORDER BY id`, userID)
+		`SELECT id, user_id, name, created_at FROM vaults WHERE user_id=$1 AND deleted_at IS NULL ORDER BY id`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,8 +211,52 @@ func (s *PGStore) CreateVault(ctx context.Context, userID int64, name string) (i
 func (s *PGStore) VaultOwnedBy(ctx context.Context, vaultID, userID int64) (bool, error) {
 	var ok bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM vaults WHERE id=$1 AND user_id=$2)`, vaultID, userID).Scan(&ok)
+		`SELECT EXISTS(SELECT 1 FROM vaults WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL)`, vaultID, userID).Scan(&ok)
 	return ok, err
+}
+
+// ---------- 库管理（v0.11.25） ----------
+
+func (s *PGStore) DeleteVault(ctx context.Context, vaultID, userID int64) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE vaults SET deleted_at=now() WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`, vaultID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoRows
+	}
+	return nil
+}
+
+func (s *PGStore) ListDeletedVaultIDs(ctx context.Context, userID int64) ([]int64, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id FROM vaults WHERE user_id=$1 AND deleted_at IS NOT NULL ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *PGStore) RenameVault(ctx context.Context, vaultID, userID int64, name string) error {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE vaults SET name=$1 WHERE id=$2 AND user_id=$3 AND deleted_at IS NULL`, name, vaultID, userID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNoRows
+	}
+	return nil
 }
 
 // ---------- blobs ----------

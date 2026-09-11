@@ -206,8 +206,26 @@ export class SyncClient {
 
   // ---------- Vault ----------
 
-  listVaults(): Promise<{ vaults: { id: number; name: string; created_at: string }[] }> {
+  /**
+   * `deleted` 是这个账号下已经（在别的设备上）删掉的库 id（v0.11.25 起服务端才给，
+   * 老服务端没有这个字段——调用方要当空数组）。
+   */
+  listVaults(): Promise<{ vaults: { id: number; name: string; created_at: string }[]; deleted?: number[] }> {
     return this.req('/vaults');
+  }
+
+  /** v0.11.25：软删除——库从列表消失、同步一律 403；内容留在服务端 */
+  deleteVault(id: number): Promise<{ deleted: number }> {
+    return this.req(`/vaults/${id}`, { method: 'DELETE' });
+  }
+
+  /** v0.11.25：库名跟着文件夹名走 */
+  renameVault(id: number, name: string): Promise<{ id: number; name: string }> {
+    return this.req(`/vaults/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
   }
 
   createVault(name: string): Promise<{ id: number; name: string }> {

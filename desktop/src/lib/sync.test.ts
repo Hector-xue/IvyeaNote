@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { syncVault, type FileIO, type SyncReport } from './sync';
+import { isMassDelete, syncVault, type FileIO, type SyncReport } from './sync';
 import { ApiError, SyncClient, type PushChange, type PushResult, type ServerChange } from './api';
 import { newVaultMeta, type VaultMeta } from './store';
 
@@ -651,5 +651,175 @@ describe('文件历史（v0.11.24）：远端删除进回收站、自动合并�
     const snaps = [...local.keys()].filter((p) => p.startsWith('.ivyea/history/n.md/'));
     expect(snaps).toHaveLength(1);
     expect(local.get(snaps[0])).toBe('base\nmine');
+  });
+});
+
+/*
+ * v0.11.25：账本跟着位置走 + 删除熔断。
+ *
+ * 2026-09-11 事故：手机换了库位置（指向空目录），引擎拿老账本对新目录，把整个库的
+ * delete 推上云端，电脑跟着全删。下面每一条在修复前都会红（验过）。
+ */
+describe('账本跟着位置走（relocateIfMoved）', () => {
+  function cloudWith(files: Record<string, string>): { changes: ServerChangeRow[]; versions: Record<string, number> } {
+    const changes: ServerChangeRow[] = [];
+    const versions: Record<string, number> = {};
+    let seq = 0;
+    for (const [path, text] of Object.entries(files)) {
+      const hash = `h-${path}`;
+      blobStore.set(hash, text);
+      changes.push({ seq: ++seq, path, op: 'upsert', version: 1, device_id: 'other', blob_hash: hash });
+      versions[path] = 1;
+    }
+    return { changes, versions };
+  }
+
+  it('S1 换到空目录：一条 delete 都不推，云端内容全部落到新位置', async () => {
+    const cloud = cloudWith({ 'a.md': 'A', '日记/b.md': 'B', '图.png': 'PNG' });
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 3;
+    meta.versions = { ...cloud.versions };
+    meta.bases = { 'a.md': 'A', '日记/b.md': 'B' };
+    meta.assets = { '图.png': await sha256(new TextEncoder().encode('PNG')) };
+    meta.syncedAt = '/old-place'; // 账本是在旧位置对出来的
+    const local = new Map<string, string>(); // 新位置：空目录
+
+    const report = await run(meta, memIO(local), mockServer({ changes: cloud.changes }));
+
+    expect(report.relocated).toEqual({ from: '/old-place', to: '/vault' });
+    expect(cloud.changes.filter((c) => c.op === 'delete')).toHaveLength(0);
+    expect(local.get('a.md')).toBe('A');
+    expect(local.get('日记/b.md')).toBe('B');
+    expect(local.get('图.png')).toBe('PNG');
+    expect(meta.syncedAt).toBe('/vault');
+    expect(report.errors).toEqual([]);
+  });
+
+  it('S1b 换到一个已有同名文件但内容不同的目录：留冲突副本，两边都不丢，不推 delete', async () => {
+    const cloud = cloudWith({ 'a.md': 'cloud-line' });
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 1;
+    meta.versions = { ...cloud.versions };
+    meta.bases = { 'a.md': 'cloud-line' };
+    meta.syncedAt = '/old-place';
+    const local = new Map([['a.md', 'local-line']]);
+
+    const report = await run(meta, memIO(local), mockServer({ changes: cloud.changes }));
+
+    expect(cloud.changes.filter((c) => c.op === 'delete')).toHaveLength(0);
+    const all = [...local.values()].join('\n');
+    expect(all).toContain('cloud-line');
+    expect(all).toContain('local-line');
+    expect(report.relocated).toBeTruthy();
+  });
+
+  it('S1c 回放里有一条历史 delete，而新位置本来就有这个文件：留着并推回去，不是被历史删掉', async () => {
+    const cloud = cloudWith({ 'x.md': 'x1' });
+    cloud.changes.push({ seq: 2, path: 'x.md', op: 'delete', version: 2, device_id: 'other' });
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 2;
+    meta.versions = { 'x.md': 2 };
+    meta.tombstones = { 'x.md': 2 };
+    meta.syncedAt = '/old-place';
+    const local = new Map([['x.md', 'mine-in-new-place']]);
+
+    const report = await run(meta, memIO(local), mockServer({ changes: cloud.changes }));
+
+    expect(local.get('x.md')).toBe('mine-in-new-place');
+    // 只对账最终状态：中间那个 v1 不该在新位置留下冲突副本，也不该进回收站
+    expect([...local.keys()]).toEqual(['x.md']);
+    // 以墓碑版本为 base 推了一次 upsert（复活）
+    const last = cloud.changes[cloud.changes.length - 1];
+    expect(last.op).toBe('upsert');
+    expect(last.path).toBe('x.md');
+    expect(report.pushed).toBeGreaterThanOrEqual(1);
+    expect(meta.cursor).toBe(2); // 回放到了流末尾（第 3 条是自己刚推的）
+  });
+
+  it('S5 老账本没有 syncedAt：不触发全量回放，只把当前位置记下来', async () => {
+    const cloud = cloudWith({ 'a.md': 'A' });
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 1;
+    meta.versions = { ...cloud.versions };
+    meta.bases = { 'a.md': 'A' };
+    delete meta.syncedAt;
+    const local = new Map([['a.md', 'A']]);
+
+    const report = await run(meta, memIO(local), mockServer({ changes: cloud.changes }));
+
+    expect(report.relocated).toBeUndefined();
+    expect(meta.cursor).toBe(1); // 没有归零回放
+    expect(meta.syncedAt).toBe('/vault');
+  });
+});
+
+describe('删除熔断（isMassDelete / massDelete）', () => {
+  it('阈值：≥10 篇且 ≥30%，或全部（≥3 篇）', () => {
+    expect(isMassDelete(10, 30)).toBe(true);
+    expect(isMassDelete(9, 30)).toBe(false);
+    expect(isMassDelete(10, 40)).toBe(false); // 25%
+    expect(isMassDelete(3, 3)).toBe(true);
+    expect(isMassDelete(2, 2)).toBe(false);
+    expect(isMassDelete(1, 1)).toBe(false);
+    expect(isMassDelete(0, 5)).toBe(false);
+  });
+
+  function bigVault(n: number) {
+    const changes: ServerChangeRow[] = [];
+    const meta = newVaultMeta(1, 'v');
+    meta.syncedAt = '/vault';
+    for (let i = 1; i <= n; i++) {
+      const path = `n${i}.md`;
+      blobStore.set(`h-${path}`, `c${i}`);
+      changes.push({ seq: i, path, op: 'upsert', version: 1, device_id: 'other', blob_hash: `h-${path}` });
+      meta.versions[path] = 1;
+      meta.bases[path] = `c${i}`;
+    }
+    meta.cursor = n;
+    return { changes, meta };
+  }
+
+  it('S2 位置没变但本地一下少了 10/12：不推删除，报告 massDelete，其它改动照常推', async () => {
+    const { changes, meta } = bigVault(12);
+    const local = new Map([
+      ['n1.md', 'c1-edited'],
+      ['n2.md', 'c2'],
+    ]);
+
+    const report = await run(meta, memIO(local), mockServer({ changes }));
+
+    expect(report.massDelete).toEqual({
+      missing: 10,
+      known: 12,
+      paths: ['n10.md', 'n11.md', 'n12.md', 'n3.md', 'n4.md', 'n5.md', 'n6.md', 'n7.md', 'n8.md', 'n9.md'],
+    });
+    expect(changes.filter((c) => c.op === 'delete')).toHaveLength(0);
+    // 改过的那篇照常推上去了
+    expect(changes.some((c) => c.op === 'upsert' && c.path === 'n1.md' && c.device_id === 'self')).toBe(true);
+    // 账本没动：下一轮还会再拦
+    expect(Object.keys(meta.versions)).toHaveLength(12);
+  });
+
+  it('S3 用户确认"确实是我删的"（allowMassDelete）→ 才推删除', async () => {
+    const { changes, meta } = bigVault(12);
+    const local = new Map([['n1.md', 'c1']]);
+
+    const report = await syncVault(mockServer({ changes }), meta, memIO(local), SELF, '/vault', {
+      allowMassDelete: true,
+    });
+
+    expect(report.massDelete).toBeUndefined();
+    expect(changes.filter((c) => c.op === 'delete')).toHaveLength(11);
+  });
+
+  it('S4 正常零星删除不受影响（12 篇删 2 篇）', async () => {
+    const { changes, meta } = bigVault(12);
+    const local = new Map<string, string>();
+    for (let i = 3; i <= 12; i++) local.set(`n${i}.md`, `c${i}`);
+
+    const report = await run(meta, memIO(local), mockServer({ changes }));
+
+    expect(report.massDelete).toBeUndefined();
+    expect(changes.filter((c) => c.op === 'delete')).toHaveLength(2);
   });
 });

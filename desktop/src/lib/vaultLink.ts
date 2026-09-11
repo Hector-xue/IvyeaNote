@@ -18,6 +18,7 @@ import {
   LOCAL_VAULT_ID,
   mergeLocalIntoCloud,
   newVaultMeta,
+  nextLocalVaultId,
   type PersistState,
   type VaultMeta,
 } from './store';
@@ -36,6 +37,12 @@ export interface LinkResult {
   activeId: number | null;
   /** 这一次真的接了哪个库；没有需要接的就是 null（据此决定要不要提示用户） */
   linked: { from: number; to: number; name: string; copied: number } | null;
+  /**
+   * v0.11.25：别的设备删掉的云端库，这台设备跟着放手了。
+   * 绑了磁盘文件夹的：文件原地不动，只从列表里去掉；
+   * 存在应用内部（OPFS）且还有内容的：转成本地库留着（`keptAs`），一篇都不丢。
+   */
+  released: { id: number; name: string; keptAs: number | null }[];
 }
 
 /**
@@ -53,8 +60,9 @@ export async function linkVaults(
   cur: PersistState,
   preferredId?: number | null
 ): Promise<LinkResult> {
-  const { vaults: remote } = await client.listVaults();
+  const { vaults: remote, deleted = [] } = await client.listVaults();
   const known = new Set(remote.map((v) => v.id));
+  const gone = new Set(deleted);
 
   const vaults: Record<string, VaultMeta> = { ...cur.vaults };
   for (const v of remote) {
@@ -63,9 +71,35 @@ export async function linkVaults(
     vaults[String(v.id)] = had ? { ...had, name: v.name } : newVaultMeta(v.id, v.name);
   }
 
+  /*
+   * v0.11.25：**服务端说这个库已经删了** → 放手，绝不"收养"。
+   *
+   * 此前"服务端不认的正数 id 库"一律当孤儿并进别的云端库或新建一个——那是给
+   * "服务端重置了"准备的。对"用户在手机上删了个测试库"这种情况，同一套逻辑会让
+   * 它在电脑上以另一个 id **复活**，删了等于没删。现在服务端把已删除 id 单独列出来，
+   * 两种情况分得开。放手的原则：用户的文件一个都不动——绑了文件夹的原地留着，
+   * 存在应用内部的转成本地库。
+   */
+  const released: LinkResult['released'] = [];
+  for (const v of Object.values(vaults)) {
+    if (v.id <= 0 || !gone.has(v.id) || known.has(v.id)) continue;
+    delete vaults[String(v.id)];
+    let keptAs: number | null = null;
+    if (!isBound(v)) {
+      const lid = nextLocalVaultId(vaults);
+      const local = newVaultMeta(lid, v.name);
+      const copied = await migrateFiles(opfsIO(() => v), '', opfsIO(() => local), '', v.tombstones);
+      if (copied > 0) {
+        vaults[String(lid)] = local;
+        keptAs = lid;
+      }
+    }
+    released.push({ id: v.id, name: v.name, keptAs });
+  }
+
   const orphan = pickOrphan(vaults, known, preferredId);
   if (!orphan) {
-    return { vaults, activeId: chooseActive(vaults, known, preferredId), linked: null };
+    return { vaults, activeId: chooseActive(vaults, known, preferredId), linked: null, released };
   }
 
   /*
@@ -86,6 +120,7 @@ export async function linkVaults(
     vaults,
     activeId: target.meta.id,
     linked: { from: orphan.id, to: target.meta.id, name: target.meta.name, copied: target.copied },
+    released,
   };
 }
 

@@ -17,6 +17,7 @@ import { BaseView } from './BaseView';
 import { HtmlViewer } from './HtmlViewer';
 import { HistoryPane, type HistoryPaneProps } from './HistoryPane';
 import type { DeletedFile } from '../lib/api';
+import { vaultDisplayName } from '../lib/vaultName';
 import { InlineTitle } from './InlineTitle';
 import { TopBar } from './mobile/TopBar';
 import { BottomBar, type FormatAction } from './mobile/BottomBar';
@@ -47,7 +48,7 @@ interface Props {
    * 「标签」。用户反馈「桌面端绑定的文件夹始终无法同步到手机」，真因就是这个：
    * 电脑推的是 A 库，手机停在 B 库，而手机换不过去。
    */
-  vaults: { id: number; name: string }[];
+  vaults: { id: number; name: string; location?: string }[];
   activeVaultId: number | null;
   onSwitchVault(id: number): void;
   onSelect(path: string): void;
@@ -93,6 +94,8 @@ interface Props {
   conflictCount?: number;
   onOpenConflicts?(): void;
   onCreateVault(): void;
+  /** v0.11.25：删除当前库（文件夹里的文件不动） */
+  onDeleteVault?(id: number): void;
   /** v0.10.2：打开设置面板（存储位置、外观、同步都在里面）。手机上此前没有任何入口 */
   onOpenSettings?(): void;
   /** v0.11.16：今日日记（桌面在 ribbon 上，手机放进「⋯」这张单子） */
@@ -317,12 +320,27 @@ export function MobileView(props: Props) {
         key: `vault-${v.id}`,
         icon: 'folder',
         label: v.name,
+        sub: v.location,
         checked: v.id === props.activeVaultId,
         onClick: () => props.onSwitchVault(v.id),
       }));
+      const manage: SheetItem[] = [
+        { key: 'new-vault', icon: 'plus', label: '新建笔记库', sub: '选择或新建一个文件夹，库名就是文件夹名', onClick: props.onCreateVault },
+      ];
+      // v0.11.25：此前只有新建没有删除，测试用的空库一直挂在列表里
+      if (props.onDeleteVault) {
+        manage.push({
+          key: 'delete-vault',
+          icon: 'trash',
+          label: '删除当前笔记库…',
+          sub: '文件夹里的文件不会被删',
+          danger: true,
+          onClick: () => props.onDeleteVault?.(props.vault.id),
+        });
+      }
       return [
         ...(list.length > 0 ? [list] : []),
-        [{ key: 'new-vault', icon: 'plus', label: '新建笔记库', onClick: props.onCreateVault }],
+        manage,
         [{ key: 'tags', icon: 'tag', label: '标签', onClick: () => props.onOpenTags?.() }],
       ];
     }
@@ -656,7 +674,7 @@ export function MobileView(props: Props) {
     >
       <Drawer
         open={drawerOpen}
-        vaultName={props.vault.name}
+        vaultName={vaultDisplayName(props.vault)}
         files={props.files}
         pdfs={props.pdfs}
         allFiles={props.allFiles}
@@ -705,7 +723,7 @@ export function MobileView(props: Props) {
       */}
       <TopBar
         path={props.currentPath}
-        vaultName={props.vault.name}
+        vaultName={vaultDisplayName(props.vault)}
         mode={mode}
         syncing={props.syncing}
         onOpenDrawer={() => setDrawerOpen(true)}
@@ -725,6 +743,14 @@ export function MobileView(props: Props) {
             <span>⚠ 登录已过期，笔记不会丢</span>
             <button className="btn small" onClick={props.onOpenLogin}>
               重新登录
+            </button>
+          </div>
+        ) : report?.massDelete && props.onOpenSyncStatus ? (
+          /* v0.11.25 删除熔断：手机上出事最多（换位置 / SAF 授权失效），红条要带出路 */
+          <div className="m-error m-error-action">
+            <span>⚠ 本地少了 {report.massDelete.missing} 篇，已暂停删除</span>
+            <button className="btn small" onClick={props.onOpenSyncStatus}>
+              查看
             </button>
           </div>
         ) : hasError ? (
@@ -869,7 +895,7 @@ export function MobileView(props: Props) {
           menu === 'note'
             ? props.currentPath
               ? (props.currentPath.split('/').pop() ?? '').replace(/\.(md|markdown)$/i, '')
-              : props.vault.name
+              : vaultDisplayName(props.vault)
             : menu === 'ai'
               ? 'AI 助手'
               : menu === 'vault'

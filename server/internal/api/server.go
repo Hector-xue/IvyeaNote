@@ -56,6 +56,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/vaults", s.authed(s.handleVaultList))
 	mux.Handle("POST /api/v1/vaults", s.authed(s.handleVaultCreate))
 	mux.Handle("POST /api/v1/devices", s.authed(s.handleDeviceRegister))
+	mux.Handle("DELETE /api/v1/vaults/{id}", s.authed(s.handleVaultDelete))
+	mux.Handle("PATCH /api/v1/vaults/{id}", s.authed(s.handleVaultRename))
 	mux.Handle("POST /api/v1/sync/push", s.authed(s.handlePush))
 	mux.Handle("GET /api/v1/sync/changes", s.authed(s.handlePull))
 	// v0.11.24：文件历史。内容一直都在（changes 只追加、blob 不删），这里只是把它们列出来
@@ -338,7 +340,56 @@ func (s *Server) handleVaultList(w http.ResponseWriter, r *http.Request) {
 	for _, v := range vaults {
 		list = append(list, vault{ID: v.ID, Name: v.Name, CreatedAt: v.CreatedAt})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"vaults": list})
+	// v0.11.25：连已删除的 id 一起给。客户端据此区分"这个库被别的设备删了"和
+	// "服务端换了 / 重置了"——前者要放手，后者要重新接入，混为一谈会把删掉的库复活。
+	deleted, err := s.st.ListDeletedVaultIDs(r.Context(), userIDFrom(r))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"vaults": list, "deleted": deleted})
+}
+
+// handleVaultDelete 软删除：库从列表里消失、同步一律 403；内容留在库里（能审计、能撤销）。
+func (s *Server) handleVaultDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "id 无效")
+		return
+	}
+	if err := s.st.DeleteVault(r.Context(), id, userIDFrom(r)); errors.Is(err, store.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not_found", "vault 不存在或不属于你")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	s.hub.BroadcastDirty(userIDFrom(r), id, r.Header.Get("X-Device-Id"))
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": id})
+}
+
+// handleVaultRename 库名跟着文件夹名走（v0.11.25）。
+func (s *Server) handleVaultRename(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "id 无效")
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !decodeBody(w, r, &req) || strings.TrimSpace(req.Name) == "" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "name 不能为空")
+		return
+	}
+	if err := s.st.RenameVault(r.Context(), id, userIDFrom(r), strings.TrimSpace(req.Name)); errors.Is(err, store.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "not_found", "vault 不存在或不属于你")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "name": strings.TrimSpace(req.Name)})
 }
 
 func (s *Server) handleVaultCreate(w http.ResponseWriter, r *http.Request) {

@@ -9,7 +9,7 @@
  * 谁在同步、结果怎么呈现、拉取之后要重读哪些东西。
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pullOnly, pushOnly, syncVault, type FileIO, type SyncReport } from '../lib/sync';
+import { pullOnly, pushOnly, syncVault, type FileIO, type SyncOptions, type SyncReport } from '../lib/sync';
 import { ApiError, type SyncClient } from '../lib/api';
 import type { VaultMeta } from '../lib/store';
 
@@ -65,6 +65,11 @@ export interface SyncEngine {
   upload(): Promise<void>;
   /** 只拉 */
   download(): Promise<void>;
+  /**
+   * v0.11.25：用户在面板上确认"这些确实是我删的"之后，放行被熔断的批量删除再同步一次。
+   * 只放行这一轮：下一轮如果又少了一大批，照样拦。
+   */
+  syncAllowingDeletes(): Promise<void>;
 }
 
 /** `fetch` 压根没发出去（跨域被拦 / 没网 / 服务器没起来）——api.ts 统一包成这个 code */
@@ -97,7 +102,7 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
   const [resyncAt, setResyncAt] = useState(0);
 
   const run = useCallback(
-    async (mode: SyncMode, auto = false) => {
+    async (mode: SyncMode, auto = false, opts: SyncOptions = {}) => {
       if (!client || !vault || !deviceId || running.current) return;
       /*
        * 浏览器/WebView 已经知道没网时，自动同步连试都不用试：一次必然失败的
@@ -121,7 +126,7 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
       running.current = true;
       setSyncing(true);
       try {
-        const report = await RUNNERS[mode](client, vault, io, deviceId, vault.localPath ?? '');
+        const report = await RUNNERS[mode](client, vault, io, deviceId, vault.localPath ?? '', opts);
         setLastReport(quiet(report, auto));
         if (report.authExpired) onAuthExpired?.();
         if (report.unlinked && onUnlinked && !relinked.current) {
@@ -177,6 +182,7 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
   const autoSync = useCallback(() => run('full', true), [run]);
   const upload = useCallback(() => run('push'), [run]);
   const download = useCallback(() => run('pull'), [run]);
+  const syncAllowingDeletes = useCallback(() => run('full', false, { allowMassDelete: true }), [run]);
 
-  return { syncing, lastReport, setLastReport, sync, autoSync, upload, download };
+  return { syncing, lastReport, setLastReport, sync, autoSync, upload, download, syncAllowingDeletes };
 }

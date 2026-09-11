@@ -93,8 +93,10 @@ vi.mock('./lib/fs-adapters', () => ({
  * 只有 SyncClient 被换掉，ApiError 等其余导出保持真的——sync.ts 要用 instanceof 判 403。
  */
 const api = vi.hoisted(() => ({
-  calls: { listVaults: 0, createVault: [] as string[] },
+  calls: { listVaults: 0, createVault: [] as string[], deleteVault: [] as number[] },
   remote: [] as { id: number; name: string }[],
+  /** 服务端已软删除的库 id（v0.11.25） */
+  deleted: [] as number[],
   /** 让同步请求以「登录态过期」失败（401 + refresh_invalid） */
   authExpired: false,
   /** 让同步请求以「连不上服务器」失败（fetch 压根没发出去，api.ts 包成 network_error） */
@@ -108,7 +110,16 @@ vi.mock('./lib/api', async (orig) => {
     }
     async listVaults() {
       api.calls.listVaults++;
-      return { vaults: api.remote.map((v) => ({ ...v, created_at: '' })) };
+      return { vaults: api.remote.map((v) => ({ ...v, created_at: '' })), deleted: api.deleted };
+    }
+    async deleteVault(id: number) {
+      api.calls.deleteVault.push(id);
+      api.remote = api.remote.filter((v) => v.id !== id);
+      api.deleted.push(id);
+      return { deleted: id };
+    }
+    async renameVault(id: number, name: string) {
+      return { id, name };
     }
     async createVault(name: string) {
       api.calls.createVault.push(name);
@@ -180,8 +191,9 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem('ivnote.welcomed', '1');
   memFiles.clear();
-  api.calls = { listVaults: 0, createVault: [] };
+  api.calls = { listVaults: 0, createVault: [], deleteVault: [] };
   api.remote = [];
+  api.deleted = [];
   api.authExpired = false;
   api.offline = false;
 });
@@ -1229,5 +1241,176 @@ describe('文件夹右键能删除（v0.11.15）', () => {
     const trashed = [...memFiles.keys()].filter((p) => p.startsWith('.trash/'));
     expect(trashed.length).toBe(2);
     expect(memFiles.get('c.md')).toBe('# C'); // 文件夹外的一律不动
+  });
+});
+
+/*
+ * v0.11.25：库管理。用户原话：「电脑端新建库，旧库也没有地方可以切回去，也没有选择库
+ * 的地方，应该也没有删除库的地方」「手机上只有新建库的功能，没有删除选项，有些测试用的
+ * 空白库都一直存在」「我认为库名就应该是文件夹名字」。
+ */
+describe('库切换 / 删除 / 库名跟文件夹（v0.11.25）', () => {
+  function seedTwoVaults() {
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'http://127.0.0.1:8080',
+          email: 'me@example.com',
+          userId: 1,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: {
+          '7': { id: 7, name: '我的笔记', localPath: 'E:\\notes\\工作', cursor: 0, versions: {}, bases: {} },
+          '8': { id: 8, name: '测试库', localPath: 'opfs://8', cursor: 0, versions: {}, bases: {} },
+        },
+      })
+    );
+    localStorage.setItem('ivnote.activeVault', '7');
+    api.remote = [
+      { id: 7, name: '我的笔记' },
+      { id: 8, name: '测试库' },
+    ];
+  }
+  const vaultBtn = () => document.querySelector<HTMLElement>('.vault-btn')!;
+  const menuLabels = () =>
+    [...document.querySelectorAll<HTMLElement>('.ctx-menu .ctx-item, .ctx-menu button')].map((b) =>
+      (b.textContent ?? '').trim()
+    );
+
+  it('绑了文件夹的库，显示名就是文件夹名', async () => {
+    seedTwoVaults();
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => expect(vaultBtn()).toBeTruthy());
+    expect(vaultBtn().textContent).toContain('工作');
+    expect(vaultBtn().textContent).not.toContain('我的笔记');
+  });
+
+  it('库名下拉列出全部库（带位置），点另一个能切过去，还有「删除这个笔记库」', async () => {
+    seedTwoVaults();
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => expect(vaultBtn()).toBeTruthy());
+    fireEvent.click(vaultBtn());
+    await waitFor(() => {
+      if (!document.querySelector('.ctx-menu')) throw new Error('菜单没出来');
+    });
+    const labels = menuLabels().join('|');
+    expect(labels).toContain('工作');
+    expect(labels).toContain('测试库');
+    expect(labels).toContain('应用内部存储');
+    expect(labels).toContain('删除这个笔记库');
+    const other = [...document.querySelectorAll<HTMLElement>('.ctx-menu button')].find((b) =>
+      (b.textContent ?? '').includes('测试库')
+    )!;
+    fireEvent.click(other);
+    await waitFor(() => expect(localStorage.getItem('ivnote.activeVault')).toBe('8'));
+    expect(vaultBtn().textContent).toContain('测试库');
+  });
+
+  it('删除当前库：确认后云端软删除、从列表消失、自动切到剩下的那个', async () => {
+    seedTwoVaults();
+    localStorage.setItem('ivnote.activeVault', '8');
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => expect(vaultBtn().textContent).toContain('测试库'));
+    fireEvent.click(vaultBtn());
+    await waitFor(() => {
+      if (!document.querySelector('.ctx-menu')) throw new Error('菜单没出来');
+    });
+    const del = [...document.querySelectorAll<HTMLElement>('.ctx-menu button')].find((b) =>
+      (b.textContent ?? '').includes('删除这个笔记库')
+    )!;
+    fireEvent.click(del);
+    await waitFor(() => {
+      if (!document.querySelector('.dlg-card')) throw new Error('确认框没出来');
+    });
+    expect(document.querySelector('.dlg-card')!.textContent).toContain('测试库');
+    fireEvent.click(document.querySelector('.dlg-card .btn.danger')!);
+    await waitFor(() => expect(api.calls.deleteVault).toEqual([8]));
+    await waitFor(() => expect(localStorage.getItem('ivnote.activeVault')).toBe('7'));
+    const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+    expect(st.vaults['8']).toBeUndefined();
+    expect(st.vaults['7']).toBeTruthy();
+    expect(vaultBtn().textContent).toContain('工作');
+  });
+
+  it('别的设备删掉的库：启动对齐时从这台设备的列表里消失（不再作为孤儿复活）', async () => {
+    seedTwoVaults();
+    api.remote = [{ id: 7, name: '我的笔记' }];
+    api.deleted = [8];
+    memFiles.set('a.md', '# A\n');
+    render(<App />);
+    await waitFor(() => {
+      const st = JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!);
+      if (st.vaults['8']) throw new Error('还没放手');
+    });
+    expect(api.calls.createVault).toEqual([]);
+    expect(JSON.parse(localStorage.getItem('ivnote.desktop.state.v1')!).vaults['7']).toBeTruthy();
+  });
+});
+
+/*
+ * v0.11.25 删除熔断：2026-09-11 手机换库位置指向空目录，引擎把整个库的 delete 推上云端，
+ * 电脑跟着全删。现在本地一下少了一大批时不推删除，状态栏变红，面板里能一键拉回来。
+ */
+describe('删除熔断（v0.11.25）', () => {
+  function seedBigVault() {
+    const versions: Record<string, number> = {};
+    const bases: Record<string, string> = {};
+    for (let i = 1; i <= 12; i++) {
+      versions[`n${i}.md`] = 1;
+      bases[`n${i}.md`] = `# 第 ${i} 篇\n`;
+    }
+    localStorage.setItem(
+      'ivnote.desktop.state.v1',
+      JSON.stringify({
+        account: {
+          serverUrl: 'http://127.0.0.1:8080',
+          email: 'me@example.com',
+          userId: 1,
+          deviceId: 'dev-1',
+          tokens: { access: 'a', refresh: 'r' },
+        },
+        vaults: {
+          '7': { id: 7, name: '我的笔记', localPath: 'E:\\notes', cursor: 12, versions, bases, syncedAt: 'E:\\notes' },
+        },
+      })
+    );
+    localStorage.setItem('ivnote.activeVault', '7');
+    api.remote = [{ id: 7, name: '我的笔记' }];
+  }
+
+  it('本地只剩 2/12 篇 → 状态栏变红「已暂停删除」→ 面板「从云端拉回来」把 10 篇写回本地', async () => {
+    seedBigVault();
+    memFiles.set('n1.md', '# 第 1 篇\n');
+    memFiles.set('n2.md', '# 第 2 篇\n');
+    render(<App />);
+    const guard = () =>
+      [...document.querySelectorAll<HTMLElement>('.status-bar button')].find((b) =>
+        (b.textContent ?? '').includes('已暂停删除')
+      );
+    await waitFor(
+      () => {
+        if (!guard()) throw new Error('状态栏还没提示熔断：' + document.querySelector('.status-bar')?.textContent);
+      },
+      { timeout: 8000 }
+    );
+    expect(guard()!.textContent).toContain('本地少了 10 篇');
+    fireEvent.click(guard()!);
+    await waitFor(() => {
+      if (!document.querySelector('.sync-guard')) throw new Error('面板里没有熔断区');
+    });
+    expect(document.querySelector('.sync-guard')!.textContent).toContain('n3.md');
+    const pull = [...document.querySelectorAll<HTMLElement>('.sync-guard button')].find((b) =>
+      (b.textContent ?? '').includes('从云端拉回来')
+    )!;
+    fireEvent.click(pull);
+    await waitFor(() => {
+      if (memFiles.size < 12) throw new Error('还没拉回来：' + memFiles.size);
+    });
+    expect(memFiles.get('n7.md')).toBe('# 第 7 篇\n');
   });
 });

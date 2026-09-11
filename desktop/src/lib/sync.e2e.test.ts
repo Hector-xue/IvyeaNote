@@ -261,4 +261,61 @@ suite('端到端：真服务端 + 真目录', () => {
     expect(existsSync(path.join(D, '笔记.md'))).toBe(true); // 其余照常拉下来
     expect(existsSync(path.join(D, 'Attachments/手册.pdf'))).toBe(true);
   }, 120_000);
+
+  /*
+   * v0.11.25：**把 2026-09-11 那次事故原样重演一遍，看它现在还会不会发生。**
+   *
+   * 手机（设备 P）把库位置从 P1 换到一个空目录 P2，账本没动；此前引擎拿老账本对新目录，
+   * 一轮把全库 delete 推上云端，电脑（设备 Q）跟着全删。现在：
+   *   - P 换位置后同步：云端一条 delete 都不该出现，P2 里出现全部文件；
+   *   - Q 再同步：文件一篇都不少。
+   * 顺带验熔断：位置没换、目录被清空（模拟 SD 卡拔了 / 授权失效）→ 不推删除。
+   */
+  it('换库位置指向空目录：一条 delete 都不推，云端内容落到新位置，另一台设备一篇不少', async () => {
+    const io = diskIO();
+    const P1 = path.join(workdir, 'P1');
+    const P2 = path.join(workdir, 'P2');
+    const Q = path.join(workdir, 'Q');
+    for (const d of [P1, P2, Q]) mkdirSync(d, { recursive: true });
+    const clientP = new SyncClient(base, { ...tokens }, (t) => (tokens = t), 'device-P');
+    const clientQ = new SyncClient(base, { ...tokens }, (t) => (tokens = t), 'device-Q');
+
+    // P 在 P1 上对好账（云端此时已有前面用例留下的笔记 + 附件）
+    const metaP = newVaultMeta(vaultId, 'e2e');
+    let r = await syncVault(clientP, metaP, io, 'device-P', P1);
+    expect(r.errors).toEqual([]);
+    const filesBefore = io.list(P1).then((l) => l.filter((p) => !p.startsWith('.')));
+    expect((await filesBefore).length).toBeGreaterThanOrEqual(2);
+    expect(metaP.syncedAt).toBe(P1);
+    // Q 也对好账
+    const metaQ = newVaultMeta(vaultId, 'e2e');
+    r = await syncVault(clientQ, metaQ, io, 'device-Q', Q);
+    expect(r.errors).toEqual([]);
+
+    // 事故：P 把位置换到空目录 P2，账本原样带着
+    const cursorBefore = (await clientP.pullPage(vaultId, 0)).changes.length;
+    r = await syncVault(clientP, metaP, io, 'device-P', P2);
+    expect(r.errors).toEqual([]);
+    expect(r.relocated).toEqual({ from: P1, to: P2 });
+    const stream = (await clientP.pullPage(vaultId, 0)).changes;
+    expect(stream.filter((c) => c.op === 'delete' && c.device_id === 'device-P')).toHaveLength(0);
+    expect(stream.length).toBe(cursorBefore); // 一条新变更都没有：只是把云端落到了新位置
+    const inP2 = (await io.list(P2)).filter((p) => !p.startsWith('.'));
+    expect(inP2.sort()).toEqual((await filesBefore).sort());
+    expect(readFileSync(path.join(P2, '笔记.md'), 'utf8')).toBe(readFileSync(path.join(P1, '笔记.md'), 'utf8'));
+
+    // Q 再同步：什么都没少
+    const qBefore = (await io.list(Q)).filter((p) => !p.startsWith('.'));
+    r = await syncVault(clientQ, metaQ, io, 'device-Q', Q);
+    expect(r.errors).toEqual([]);
+    expect((await io.list(Q)).filter((p) => !p.startsWith('.')).sort()).toEqual(qBefore.sort());
+
+    // 熔断：位置没换、目录被清空 → 不推删除，报告 massDelete；Q 照样一篇不少
+    for (const f of await io.list(P2)) if (!f.startsWith('.')) rmSync(path.join(P2, f));
+    r = await syncVault(clientP, metaP, io, 'device-P', P2);
+    expect(r.massDelete?.missing).toBe((await filesBefore).length);
+    expect((await clientP.pullPage(vaultId, 0)).changes.filter((c) => c.op === 'delete')).toHaveLength(0);
+    r = await syncVault(clientQ, metaQ, io, 'device-Q', Q);
+    expect((await io.list(Q)).filter((p) => !p.startsWith('.')).sort()).toEqual(qBefore.sort());
+  }, 120_000);
 });

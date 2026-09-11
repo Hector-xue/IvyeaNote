@@ -14,6 +14,7 @@ import { TagPane, TrashPane } from './SidePanes';
 import type { HistoryPaneProps } from './HistoryPane';
 import type { RightTab } from './RightPanel';
 import type { DeletedFile } from '../lib/api';
+import { vaultDisplayName } from '../lib/vaultName';
 import { PdfViewer } from './PdfViewer';
 import { ImageViewer } from './ImageViewer';
 import { BaseView } from './BaseView';
@@ -139,8 +140,15 @@ interface Props {
    */
   sidebarOpen?: boolean;
   /** 笔记库选择器（由外层注入，保持受控状态） */
-  vaultSelector: React.ReactNode;
   onCreateVault(): void;
+  /**
+   * v0.11.25：库切换 / 删除。手机端早有切换（库名旁的 ∨），桌面一直没有——
+   * 新建一个库之后旧库就再也回不去（用户原话）。
+   */
+  vaults?: { id: number; name: string; location: string }[];
+  activeVaultId?: number | null;
+  onSwitchVault?(id: number): void;
+  onDeleteVault?(id: number): void;
   /**
    * 云同步不可用（未登录）：上传/拉取按钮显式禁用并提示，
    * 替代旧的静默 no-op（v0.3.3：本地模式解门控）。
@@ -317,11 +325,25 @@ export function MainView(props: Props) {
    */
   const openVaultMenu = (el: HTMLElement) => {
     const r = el.getBoundingClientRect();
-    const items: MenuAnchor['items'] = [
-      { id: 'new-vault', label: '新建笔记库…', icon: 'folder-plus', run: () => props.onCreateVault() },
+    const items: MenuAnchor['items'] = [];
+    // 库列表排最上面：这张菜单是从库名旁边那个 ∨ 点开的，来这儿多半是为了换库
+    for (const v of props.vaults ?? []) {
+      items.push({
+        id: `vault-${v.id}`,
+        label: v.name,
+        hint: v.location,
+        icon: v.id === props.activeVaultId ? 'check' : 'folder',
+        run: () => {
+          if (v.id !== props.activeVaultId) props.onSwitchVault?.(v.id);
+        },
+      });
+    }
+    if ((props.vaults?.length ?? 0) > 0) items.push({ type: 'sep', id: 's-list' });
+    items.push(
+      { id: 'new-vault', label: '新建笔记库（选择文件夹）…', icon: 'folder-plus', run: () => props.onCreateVault() },
       { id: 'import', label: '从 Obsidian 导入…', icon: 'move', run: () => props.onImportObsidian() },
-      { type: 'sep', id: 's-vault' },
-    ];
+      { type: 'sep', id: 's-vault' }
+    );
     if (props.vault.localPath && !props.vault.localPath.startsWith('opfs://')) {
       items.push({
         id: 'unbind',
@@ -331,6 +353,16 @@ export function MainView(props: Props) {
       });
     } else {
       items.push({ id: 'bind', label: '绑定本地文件夹…', icon: 'folder', run: () => props.onBindFolder() });
+    }
+    if (props.onDeleteVault) {
+      items.push({ type: 'sep', id: 's-del' });
+      items.push({
+        id: 'delete-vault',
+        label: '删除这个笔记库…',
+        hint: '文件夹里的文件不会被删',
+        icon: 'trash',
+        run: () => props.onDeleteVault?.(props.vault.id),
+      });
     }
     setMenu({ x: r.left, y: r.bottom + 4, items });
   };
@@ -548,7 +580,7 @@ export function MainView(props: Props) {
             title="切换笔记库 / 绑定文件夹"
             onClick={(e) => openVaultMenu(e.currentTarget)}
           >
-            <span className="vault-name">{props.vault.name}</span>
+            <span className="vault-name">{vaultDisplayName(props.vault)}</span>
             <RibbonIcon name="chevron-down" size={14} />
           </button>
         </div>
@@ -880,6 +912,20 @@ export function MainView(props: Props) {
                 >
                   <RibbonIcon name="sidebar" size={13} />
                   {props.splitPath ? '关闭分栏' : '分栏'}
+                </button>
+              )}
+              {/*
+                v0.11.25 删除熔断：本地一下少了一大批，引擎没推删除。这条必须比"已同步"
+                更显眼——2026-09-11 就是在一片"已同步"的祥和里把整个库删掉的。
+              */}
+              {props.lastReport?.massDelete && props.onOpenSyncStatus && (
+                <button
+                  className="st-item st-guard"
+                  onClick={props.onOpenSyncStatus}
+                  title="本地少了一批已知文件，删除没有推送；点开看清单并决定怎么办"
+                >
+                  <RibbonIcon name="alert" size={13} />
+                  本地少了 {props.lastReport.massDelete.missing} 篇，已暂停删除
                 </button>
               )}
               {(props.conflictCount ?? 0) > 0 && props.onOpenConflicts && (

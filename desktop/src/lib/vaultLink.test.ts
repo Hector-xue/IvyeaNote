@@ -29,6 +29,12 @@ vi.mock('./fs-adapters', async () => {
       async exists(_vp: string, rel: string) {
         return bucket(getMeta().id).has(rel);
       },
+      async readBinary(_vp: string, rel: string) {
+        return new TextEncoder().encode(bucket(getMeta().id).get(rel)!);
+      },
+      async writeBinary(_vp: string, rel: string, b: Uint8Array) {
+        bucket(getMeta().id).set(rel, new TextDecoder().decode(b));
+      },
     }),
   };
 });
@@ -38,12 +44,12 @@ import { migrateFiles } from './fs-adapters';
 import { newVaultMeta, type PersistState, type VaultMeta } from './store';
 import type { SyncClient } from './api';
 
-function fakeClient(remote: { id: number; name: string }[]) {
-  let next = Math.max(0, ...remote.map((v) => v.id)) + 1;
+function fakeClient(remote: { id: number; name: string }[], deleted: number[] = []) {
+  let next = Math.max(0, ...remote.map((v) => v.id), ...deleted) + 1;
   const created: string[] = [];
   const client = {
     async listVaults() {
-      return { vaults: remote.map((v) => ({ ...v, created_at: '' })) };
+      return { vaults: remote.map((v) => ({ ...v, created_at: '' })), deleted };
     },
     async createVault(name: string) {
       created.push(name);
@@ -142,5 +148,68 @@ describe('linkVaults', () => {
     expect(created).toEqual([]);
     expect(r.linked).toBeNull();
     expect(r.activeId).toBe(3);
+  });
+});
+
+/*
+ * v0.11.25：别的设备删掉的云端库，这台设备要**放手**，不能再当孤儿收养——
+ * 否则手机上删掉的测试库会在电脑上以另一个 id 复活，删了等于没删。
+ */
+describe('linkVaults · 服务端已删除的库', () => {
+  it('绑了磁盘文件夹的：从列表去掉，文件原地不动，不新建云端库', async () => {
+    const { client, created } = fakeClient([{ id: 1, name: '主库' }], [7]);
+    const cur = state(
+      { ...local(1, '主库'), localPath: 'D:\\notes' },
+      { ...local(7, '测试库'), localPath: 'D:\\test' }
+    );
+
+    const r = await linkVaults(client, cur, 1);
+
+    expect(created).toEqual([]);
+    expect(Object.keys(r.vaults)).toEqual(['1']);
+    expect(r.released).toEqual([{ id: 7, name: '测试库', keptAs: null }]);
+    expect(r.activeId).toBe(1);
+  });
+
+  it('存在应用内部且有内容的：转成本地库留着，一篇不丢', async () => {
+    const { client, created } = fakeClient([{ id: 1, name: '主库' }], [8]);
+    bucket(8).set('草稿.md', '内容');
+    const cur = state({ ...local(1, '主库'), localPath: 'D:\\notes' }, local(8, '旧库'));
+
+    const r = await linkVaults(client, cur, 1);
+
+    expect(created).toEqual([]);
+    expect(r.vaults['8']).toBeUndefined();
+    const kept = r.released[0]!.keptAs!;
+    expect(kept).toBeLessThan(0);
+    expect(r.vaults[String(kept)]!.name).toBe('旧库');
+    expect(bucket(kept).get('草稿.md')).toBe('内容');
+  });
+
+  it('存在应用内部但空的：直接去掉（正是那些"测试用的空白库"）', async () => {
+    const { client } = fakeClient([{ id: 1, name: '主库' }], [9]);
+    const cur = state({ ...local(1, '主库'), localPath: 'D:\\notes' }, local(9, '空库'));
+
+    const r = await linkVaults(client, cur, 1);
+
+    expect(Object.keys(r.vaults)).toEqual(['1']);
+    expect(r.released).toEqual([{ id: 9, name: '空库', keptAs: null }]);
+  });
+
+  it('老服务端不给 deleted 字段：行为和以前一样（孤儿照旧收养）', async () => {
+    const client = {
+      async listVaults() {
+        return { vaults: [{ id: 1, name: '主库', created_at: '' }] };
+      },
+      async createVault(name: string) {
+        return { id: 99, name };
+      },
+    } as unknown as SyncClient;
+    const cur = state({ ...local(1, '主库'), localPath: 'D:\\notes' }, { ...local(5, '孤儿'), localPath: 'D:\\x' });
+
+    const r = await linkVaults(client, cur, 5);
+
+    expect(r.released).toEqual([]);
+    expect(r.linked?.from).toBe(5);
   });
 });

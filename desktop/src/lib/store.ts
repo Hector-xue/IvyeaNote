@@ -36,6 +36,17 @@ export interface VaultMeta {
    * 只需要回答一个问题：**这个文件自上次同步后有没有被改过**，哈希就够了。
    */
   assets?: Record<string, string>;
+  /**
+   * v0.11.25：**这本账（versions / bases / assets / cursor）是在哪个 localPath 上对出来的。**
+   *
+   * 2026-09-11 事故：手机上换了库位置（指向一个空目录），同步引擎照样拿老账本对新目录，
+   * 把"本地没有"全当成"用户删了"，一轮就把整个库的 delete 推到了云端，电脑跟着全删。
+   * 账本不认位置，任何一次 localPath 变化（换目录 / SAF 授权失效 / SD 卡拔掉）都会重演。
+   * 现在 `syncedAt !== localPath` 时引擎按"新设备冷启动"全量重新对账（lib/sync 的
+   * relocateIfMoved）——换位置只会让文件变多，不会变少。
+   * 老数据没有这个字段：第一次同步时直接记成当前位置，行为不变。
+   */
+  syncedAt?: string;
 }
 
 export interface Account {

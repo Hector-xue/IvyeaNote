@@ -62,9 +62,73 @@ export interface SyncReport {
    * 「离线」，手动同步才给完整的排查提示（见 hooks/useSyncEngine）。
    */
   offline?: boolean;
+  /**
+   * v0.11.25：账本换了位置，这一轮按"新设备冷启动"全量重新对账（见 relocateIfMoved）。
+   * 上层据此提示"库位置变了，正在把云端内容拉到新位置"，而不是让人对着一堆冲突副本发愣。
+   */
+  relocated?: { from: string; to: string };
+  /**
+   * v0.11.25：**删除熔断**。本地一下子少了太多已知文件（目录被挪走 / 授权失效 /
+   * 指错了位置），这一轮**没有**推送删除；其它改动照常。要么用户在面板上确认
+   * "确实是我删的"（带 `allowMassDelete` 再同步一次），要么去把文件找回来。
+   */
+  massDelete?: { missing: number; known: number; paths: string[] };
+}
+
+/** v0.11.25：一次同步的可选项（目前只有一项：放行被熔断的批量删除） */
+export interface SyncOptions {
+  /** 用户已确认"这些确实是我删的"：本轮不熔断，照推删除 */
+  allowMassDelete?: boolean;
 }
 
 const MAX_BATCH = 200;
+
+/**
+ * 删除熔断阈值。
+ *
+ * 一轮里"本地消失的已知文件"数达到 **已知总数的 30% 且至少 10 篇**，或者
+ * **全部**（库里本来就 ≥ 3 篇）——这不像是人一篇篇删出来的，更像是目录不见了。
+ * Dropbox / Obsidian Sync 都有这道闸，我们此前没有，2026-09-11 整个库被清就是这么来的。
+ */
+export function isMassDelete(missing: number, known: number): boolean {
+  if (missing <= 0 || known <= 0) return false;
+  if (missing >= 10 && missing / known >= 0.3) return true;
+  return missing === known && known >= 3;
+}
+
+/**
+ * v0.11.25：**账本必须跟着位置走。**
+ *
+ * `meta.syncedAt` 记的是这本账（versions / bases / assets / cursor）是在哪个 localPath
+ * 上对出来的。位置变了，"本地没有"就不能再推理成"用户删了"——2026-09-11 手机换了
+ * 库位置指向一个空目录，引擎照样拿老账本对新目录，一轮把整个库的 delete 推上了云端。
+ *
+ * 位置不一致时把账本清零、游标归零，当成一台新设备从头回放（协议 C8 场景本来就要求
+ * 能收敛）：云端有本地没有 → 落盘；两边都有且不同 → 没有共同祖先就走冲突副本，
+ * 不覆盖任何一边；本地有云端没有 → 推上去。**换位置只会让文件变多，不会变少。**
+ *
+ * 老数据没有 `syncedAt`（升级前的账本）：直接记成当前位置，行为不变——
+ * 升级本身不该触发一次全量回放。
+ */
+/** 账本是不是在别的位置对出来的（还没重置）。老账本没有 syncedAt → 不算 */
+export function movedSince(meta: VaultMeta, vaultPath: string): boolean {
+  return meta.syncedAt !== undefined && meta.syncedAt !== vaultPath;
+}
+
+export function relocateIfMoved(meta: VaultMeta, vaultPath: string, report: SyncReport): boolean {
+  if (meta.syncedAt === undefined || meta.syncedAt === vaultPath) {
+    meta.syncedAt = vaultPath;
+    return false;
+  }
+  report.relocated = { from: meta.syncedAt, to: vaultPath };
+  meta.cursor = 0;
+  meta.versions = {};
+  meta.bases = {};
+  meta.assets = {};
+  meta.tombstones = {};
+  meta.syncedAt = vaultPath;
+  return true;
+}
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -188,9 +252,21 @@ export async function syncVault(
   meta: VaultMeta,
   io: FileIO,
   deviceId: string,
-  vaultPath: string
+  vaultPath: string,
+  opts: SyncOptions = {}
 ): Promise<SyncReport> {
-  const a = await pushOnly(client, meta, io, deviceId, vaultPath);
+  /*
+   * 位置变了就**先拉后推**：账本清零之后先把云端回放到新位置，本地才知道哪些是
+   * 云端已有的；反过来先推会把每个文件都当新文件传一遍 blob，还全部 conflict。
+   */
+  if (vaultPath && meta.id >= 0 && movedSince(meta, vaultPath)) {
+    // 真正的重置发生在 pullOnly 里（它据此进入"只对账最终状态"的回放模式）
+    const b = await pullOnly(client, meta, io, deviceId, vaultPath);
+    if (b.unlinked || b.authExpired || b.errors.some((e) => e.startsWith('拉取失败：'))) return b;
+    const a = await pushOnly(client, meta, io, deviceId, vaultPath, opts);
+    return mergeReports(b, a);
+  }
+  const a = await pushOnly(client, meta, io, deviceId, vaultPath, opts);
   /*
    * **只有"整条链路断了"才停下，单个文件传不上去不算。**
    *
@@ -201,6 +277,10 @@ export async function syncVault(
    */
   if (a.unlinked || a.authExpired || a.errors.some((e) => e.startsWith('推送失败：'))) return a;
   const b = await pullOnly(client, meta, io, deviceId, vaultPath);
+  return mergeReports(a, b);
+}
+
+function mergeReports(a: SyncReport, b: SyncReport): SyncReport {
   return {
     pushed: a.pushed + b.pushed,
     pulled: a.pulled + b.pulled,
@@ -211,6 +291,8 @@ export async function syncVault(
     authExpired: a.authExpired || b.authExpired,
     // 合并报告时漏掉哪个标记，上层就等于没有它——offline 也一样
     offline: a.offline || b.offline,
+    relocated: a.relocated ?? b.relocated,
+    massDelete: a.massDelete ?? b.massDelete,
   };
 }
 
@@ -220,7 +302,8 @@ export async function pushOnly(
   meta: VaultMeta,
   io: FileIO,
   _deviceId: string,
-  vaultPath: string
+  vaultPath: string,
+  opts: SyncOptions = {}
 ): Promise<SyncReport> {
   const report: SyncReport = { pushed: 0, pulled: 0, merged: 0, conflicts: [], errors: [] };
   if (!vaultPath) {
@@ -228,6 +311,9 @@ export async function pushOnly(
     return report;
   }
   if (notLinkedYet(meta, report)) return report;
+  // 单独「只推」也可能撞上换位置：账本清零之后本地文件全是"新的"，推上去只会
+  // 拿回一堆 conflict（服务端已有更高版本）——不丢东西，下一轮 pull 再收敛。
+  relocateIfMoved(meta, vaultPath, report);
 
   // ---------- 1. 扫描本地差异 ----------
   const allFiles = (await io.list(vaultPath)).filter((p) => !isLocalOnly(p));
@@ -307,10 +393,24 @@ export async function pushOnly(
   }
 
   // 本地消失的已知文件 → 删除意图（墓碑已记录的跳过）
+  const deletes: PushChange[] = [];
+  let known = 0;
   for (const [path, ver] of Object.entries(meta.versions)) {
-    if (!localAll.has(path) && meta.tombstones?.[path] !== ver) {
-      toPush.push({ client_change_id: uuid(), path, op: 'delete', base_version: ver });
+    if (meta.tombstones?.[path] === ver || isLocalOnly(path)) continue;
+    known++;
+    if (!localAll.has(path)) {
+      deletes.push({ client_change_id: uuid(), path, op: 'delete', base_version: ver });
     }
+  }
+  /*
+   * v0.11.25 删除熔断：一下子少了这么多，不像是人一篇篇删的。**这一轮不推删除**，
+   * 其它改动照常；把缺失清单放进报告，让人来判断（面板上两条路：确实是我删的 /
+   * 从云端拉回来）。用户确认过就带 allowMassDelete 再来一轮。
+   */
+  if (!opts.allowMassDelete && isMassDelete(deletes.length, known)) {
+    report.massDelete = { missing: deletes.length, known, paths: deletes.map((d) => d.path).sort() };
+  } else {
+    toPush.push(...deletes);
   }
 
   // ---------- 2. 分批推送 ----------
@@ -363,7 +463,8 @@ export async function pullOnly(
   meta: VaultMeta,
   io: FileIO,
   deviceId: string,
-  vaultPath: string
+  vaultPath: string,
+  _opts: SyncOptions = {}
 ): Promise<SyncReport> {
   const report: SyncReport = { pushed: 0, pulled: 0, merged: 0, conflicts: [], errors: [] };
   if (!vaultPath) {
@@ -371,9 +472,29 @@ export async function pullOnly(
     return report;
   }
   if (notLinkedYet(meta, report)) return report;
+  relocateIfMoved(meta, vaultPath, report);
+
+  /*
+   * v0.11.25 换位置后的全量回放**只对账最终状态**：把整条流先收成"每个路径最后一条"，
+   * 再逐条应用。逐条回放历史会把中间版本一个个砸到新位置的文件上——一篇后来被删掉的
+   * 笔记，回放到它的 v1 时会先和本地同名文件生成一份冲突副本，再回放到 delete。
+   * 人看到的是一堆莫名其妙的 `.conflict-` 文件。对账只需要"云端现在是什么"。
+   * 这种模式下游标也等应用完再落：中途崩了下次从头再来，不会留一半。
+   */
+  const replay = report.relocated ? new Map<string, ServerChange>() : null;
+  const apply = async (ch: ServerChange) => {
+    try {
+      await applyRemote(client, meta, io, vaultPath, ch, report);
+    } catch (e) {
+      markAuthExpired(e, report);
+      markOffline(e, report);
+      report.errors.push(`应用 ${ch.path} 失败：${msg(e)}`);
+    }
+  };
 
   // ---------- 游标拉取 ----------
   let cursor = meta.cursor;
+  let fetchFailed = false;
   for (let round = 0; round < 100; round++) {
     let page;
     try {
@@ -383,22 +504,22 @@ export async function pullOnly(
       markAuthExpired(e, report);
       markOffline(e, report);
       report.errors.push(`拉取失败：${msg(e)}`);
+      fetchFailed = true;
       break;
     }
     for (const ch of page.changes) {
       if (ch.device_id === deviceId) continue; // 自己的写已在本地
-      try {
-        await applyRemote(client, meta, io, vaultPath, ch, report);
-      } catch (e) {
-        markAuthExpired(e, report);
-        markOffline(e, report);
-        report.errors.push(`应用 ${ch.path} 失败：${msg(e)}`);
-      }
+      if (replay) replay.set(ch.path, ch);
+      else await apply(ch);
     }
     const next = page.next_cursor;
-    meta.cursor = next; // 每页落盘，崩溃安全
+    if (!replay) meta.cursor = next; // 每页落盘，崩溃安全
     if (next === cursor) break;
     cursor = next;
+  }
+  if (replay && !fetchFailed) {
+    for (const ch of replay.values()) await apply(ch);
+    meta.cursor = cursor;
   }
 
   return report;
@@ -433,6 +554,17 @@ async function applyRemote(
 
   if (ch.op === 'delete') {
     const exists = await io.exists(vaultPath, ch.path);
+    /*
+     * v0.11.25：这本账从没见过这条路径（换位置后的全量回放 / 新设备冷启动），
+     * 本地却有这个文件——那是**这个位置自己的**文件，不是"上次同步留下的副本"。
+     * 一条历史里的 delete 不能把它拿走：留着，记下墓碑版本；下一轮推送会以墓碑
+     * 版本为 base 把它作为修改推上去（修改胜出，和删改冲突同一条规矩）。
+     */
+    if (exists && knownVer === undefined) {
+      meta.versions[ch.path] = ch.version;
+      meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+      return;
+    }
     if (exists) {
       const base = meta.bases[ch.path];
       const local = base !== undefined ? await io.read(vaultPath, ch.path) : '';
@@ -552,9 +684,15 @@ async function applyRemoteAsset(
 
   if (ch.op === 'delete') {
     if (await io.exists(vaultPath, ch.path)) {
+      // 同文本那条路（v0.11.25）：这本账没见过它、本地却有 → 是这个位置自己的文件，留着
+      if (knownHash === undefined) {
+        meta.versions[ch.path] = ch.version;
+        meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+        return;
+      }
       const local = await io.readBinary(vaultPath, ch.path);
       const localHash = await sha256HexOf(local);
-      if (knownHash !== undefined && localHash !== knownHash) {
+      if (localHash !== knownHash) {
         // 本地改过却收到删除 → 修改胜出，把本地这份推回去
         await pushUpsertBytes(client, meta, ch.path, local, localHash, ch.version, report);
         return;
