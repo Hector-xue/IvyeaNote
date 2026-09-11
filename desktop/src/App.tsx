@@ -73,7 +73,15 @@ import { loadRecent, pushRecent, saveRecent, remapRecent } from './lib/recent';
 import { loadLastOpen, pickRestore, saveLastOpen } from './lib/lastOpen';
 import { invertMoveOps, planMove, planRenameDir, remapDirKeys, remapPath } from './lib/movePath';
 import { noteCandidates } from './lib/links';
-import { isSafPath, pickVaultFolder, safIO } from './lib/saf';
+import {
+  isSafPath,
+  pickVaultFolder,
+  safIO,
+  takePendingPick,
+  rememberPendingPick,
+  readPendingPick,
+  clearPendingPick,
+} from './lib/saf';
 import {
   localServerAvailable,
   localServerStatus,
@@ -2369,47 +2377,104 @@ export default function App() {
    * 库名 = 文件夹名；选中的文件夹里已经有 .md 就直接当库用（Obsidian 的
    * "Open folder as vault"）。只有浏览器版（没有磁盘）还是问名字、落内部存储。
    */
+  /**
+   * 选目录这一步在安卓上可能等不到结果（见 lib/saf 的 pendingPick 注释）：
+   * 发起前先记下"我要干什么"，结果回来了就清掉；等不到的话下次启动从 SharedPreferences
+   * 里把结果领回来接着做。
+   */
+  const pickFolderFor = useCallback(
+    async (action: 'create' | 'bind', vaultIdFor: number | null): Promise<{ uri: string; name?: string } | null> => {
+      if (isAndroidUA()) {
+        rememberPendingPick({ action, vaultId: vaultIdFor, at: Date.now() });
+        try {
+          const picked = await pickVaultFolder();
+          if (!picked) {
+            toast('没有选择文件夹', 'info');
+            return null;
+          }
+          return picked;
+        } finally {
+          clearPendingPick();
+        }
+      }
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const r = await open({ directory: true, title: action === 'create' ? '选择或新建一个文件夹作为笔记库' : '把笔记库移到哪个文件夹' });
+      if (typeof r !== 'string' || !r) return null;
+      return { uri: r };
+    },
+    [toast]
+  );
+
+  /*
+   * 两段"后半段"都是普通函数（每次渲染拿最新闭包），外面用 ref 转一手再包成稳定的
+   * useCallback——它们要被 pendingPick 的启动补偿调用，而那个 effect 只能依赖稳定引用。
+   */
+  const finishCreateVaultRef = useRef(finishCreateVault);
+  finishCreateVaultRef.current = finishCreateVault;
+  const applyPickedFolderRef = useRef(applyPickedFolderImpl);
+  applyPickedFolderRef.current = applyPickedFolderImpl;
+  const applyPickedFolder = useCallback(
+    (sel: string, label: string | null) => applyPickedFolderRef.current(sel, label),
+    []
+  );
+
+  /** 新建库的后半段：文件夹已经选好（或者从 pendingPick 领回来）。sel 为 null = 浏览器版走名字 */
+  const createVaultAt = useCallback(
+    async (sel: string | null, label: string | undefined, typedName: string | null) => {
+      const cur = stateRef.current;
+      let name: string;
+      if (sel) {
+        const taken = Object.values(cur.vaults).find((v) => v.localPath === sel);
+        if (taken) {
+          toast(`这个文件夹已经是「${vaultDisplayName(taken)}」了`, 'error');
+          setVaultId(taken.id);
+          return;
+        }
+        name = vaultDisplayName({ name: '', localPath: sel, localLabel: label }) || folderName(sel);
+      } else {
+        name = (typedName ?? '').trim();
+        if (!name) return;
+      }
+      const withPlace = (m: VaultMeta): VaultMeta =>
+        sel ? { ...m, localPath: sel, localLabel: label, syncedAt: sel } : m;
+      await finishCreateVaultRef.current(cur, name, sel, withPlace);
+    },
+    [toast]
+  );
+
   const createVault = useCallback(async () => {
-    const cur = stateRef.current;
     let sel: string | null = null;
     let label: string | undefined;
-    let name: string;
     if (isTauri) {
+      let picked: { uri: string; name?: string } | null;
       try {
-        if (isAndroidUA()) {
-          const picked = await pickVaultFolder();
-          if (!picked) return;
-          sel = picked.uri;
-          label = picked.name;
-        } else {
-          const { open } = await import('@tauri-apps/plugin-dialog');
-          const r = await open({ directory: true, title: '选择或新建一个文件夹作为笔记库' });
-          if (typeof r !== 'string' || !r) return;
-          sel = r;
-        }
+        picked = await pickFolderFor('create', null);
       } catch (e) {
         toast(`选择文件夹失败：${errText(e)}`, 'error');
         return;
       }
-      const taken = Object.values(cur.vaults).find((v) => v.localPath === sel);
-      if (taken) {
-        toast(`这个文件夹已经是「${vaultDisplayName(taken)}」了`, 'error');
-        setVaultId(taken.id);
-        return;
-      }
-      name = vaultDisplayName({ name: '', localPath: sel, localLabel: label }) || folderName(sel);
-    } else {
-      const typed = await prompt({
-        title: '新建笔记库',
-        placeholder: '笔记库名称',
-        okText: '创建',
-        validate: (v) => (v.trim() ? null : '请输入名称'),
-      });
-      if (!typed) return;
-      name = typed.trim();
+      if (!picked) return;
+      sel = picked.uri;
+      label = picked.name;
+      await createVaultAt(sel, label, null);
+      return;
     }
-    const withPlace = (m: VaultMeta): VaultMeta =>
-      sel ? { ...m, localPath: sel, localLabel: label, syncedAt: sel } : m;
+    const typed = await prompt({
+      title: '新建笔记库',
+      placeholder: '笔记库名称',
+      okText: '创建',
+      validate: (v) => (v.trim() ? null : '请输入名称'),
+    });
+    if (!typed) return;
+    await createVaultAt(null, undefined, typed);
+  }, [pickFolderFor, createVaultAt, prompt, toast]);
+
+  async function finishCreateVault(
+    cur: PersistState,
+    name: string,
+    sel: string | null,
+    withPlace: (m: VaultMeta) => VaultMeta
+  ) {
     if (!client) {
       const id = nextLocalVaultId(cur.vaults);
       persist({ ...cur, vaults: { ...cur.vaults, [String(id)]: withPlace(newVaultMeta(id, name)) } });
@@ -2429,7 +2494,7 @@ export default function App() {
     } catch (e) {
       toast(`创建失败：${errText(e)}`, 'error');
     }
-  }, [client, persist, prompt, toast]);
+  }
 
   /**
    * v0.11.25：删除笔记库。此前只有新建没有删除，测试用的空库一直挂着。
@@ -2511,25 +2576,21 @@ export default function App() {
      * 上游 tauri-plugin-dialog 的安卓实现里只有选文件/另存为，**没有选目录**，
      * 所以安卓这条必须走我们自己的插件（src-tauri/plugins/ivnote-saf）。
      */
-    let sel: string | null = null;
-    let label: string | null = null;
+    let picked: { uri: string; name?: string } | null;
     try {
-      if (isAndroidUA()) {
-        const picked = await pickVaultFolder();
-        if (!picked) return; // 用户取消
-        sel = picked.uri;
-        label = picked.name;
-      } else {
-        const { open } = await import('@tauri-apps/plugin-dialog');
-        const r = await open({ directory: true });
-        if (typeof r !== 'string' || !r) return; // 用户取消
-        sel = r;
-      }
+      picked = await pickFolderFor('bind', vault.id);
     } catch (e) {
       toast(`选择文件夹失败：${errText(e)}`, 'error');
       return;
     }
+    if (!picked) return; // 用户取消
+    await applyPickedFolder(picked.uri, picked.name ?? null);
+  }, [vault, pickFolderFor, toast, applyPickedFolder]);
 
+  /** 绑定 / 换位置的后半段：文件夹已经选好（或者从 pendingPick 领回来） */
+  async function applyPickedFolderImpl(sel: string, label: string | null) {
+    const vault = stateRef.current.vaults[String(activeVaultId ?? '')];
+    if (!vault) return;
     const from = vault.localPath ?? '';
     if (from === sel) return;
     const wasVirtual = !from || from.startsWith('opfs://');
@@ -2571,7 +2632,7 @@ export default function App() {
     }
     await refreshFiles();
     toast(count > 0 ? `已移动 ${count} 个文件到新位置，库名改为「${newName}」` : `已设置笔记库位置：${newName}`, 'ok');
-  }, [vault, allPaths, patchVault, confirm, toast, refreshFiles, client]);
+  }
 
   /**
    * 撤回到应用内部存储。
@@ -2580,6 +2641,41 @@ export default function App() {
    * 这是「安卓更新完笔记没了」这类事故的源头，不该一声不响地切过去。
    * 磁盘上的原文件保留不动，所以这个动作本身不会删任何东西。
    */
+  /**
+   * v0.11.26：安卓上"选完文件夹没反应"的补偿。
+   *
+   * 系统目录选择器回来时主 Activity 可能已被回收重建，WebView 重载，等结果的 Promise
+   * 随之消失。Kotlin 侧把结果存进了 SharedPreferences（takePendingPick），JS 侧发起前
+   * 记了"我要干什么"（rememberPendingPick）。两边都在 → 启动时把没走完的那半段走完。
+   */
+  const pendingPickDone = useRef(false);
+  useEffect(() => {
+    if (pendingPickDone.current || !isTauri || !isAndroidUA() || !vault) return;
+    pendingPickDone.current = true;
+    const intent = readPendingPick();
+    if (!intent) return;
+    clearPendingPick();
+    void (async () => {
+      try {
+        const got = await takePendingPick();
+        if (!got || !got.uri) {
+          toast('上次选文件夹没有拿到结果，请再选一次', 'info');
+          return;
+        }
+        // 结果必须是这次意图**之后**产生的：正常走完的那些选择也会留在原生侧，
+        // 拿一个旧结果去配一个后来被取消的意图，就把库绑到了用户没选的地方
+        if (got.at < intent.at || Date.now() - intent.at > 15 * 60 * 1000) return;
+        if (intent.action === 'create') {
+          await createVaultAt(got.uri, got.name || undefined, null);
+        } else if (intent.vaultId === vault.id) {
+          await applyPickedFolder(got.uri, got.name || null);
+        }
+      } catch (e) {
+        toast(`接着处理上次选的文件夹失败：${errText(e)}`, 'error');
+      }
+    })();
+  }, [vault, toast, createVaultAt, applyPickedFolder]);
+
   const onUnbindFolder = useCallback(async () => {
     if (!vault) return;
     const ok = await confirm({

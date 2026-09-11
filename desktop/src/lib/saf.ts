@@ -42,6 +42,56 @@ export async function pickVaultFolder(): Promise<{ uri: string; name: string } |
   }
 }
 
+/**
+ * v0.11.26：**选目录的结果可能等不到。**
+ *
+ * 系统目录选择器是另一个 Activity。选完回来时，主 Activity 可能已经被系统回收重建
+ * （内存紧张、开发者选项"不保留活动"），WebView 一重载，上面 `pickVaultFolder` 那个
+ * Promise 就随之消失——表现是"选完文件夹什么反应都没有"（用户 2026-09-11 报的）。
+ *
+ * 所以做成两段式：原生侧把结果落到 SharedPreferences；JS 侧在发起前记下"我要干什么"
+ * （下面三个 localStorage 小函数），启动时两边都在就把没走完的那半段接着走完（App.tsx）。
+ */
+export interface PendingPickIntent {
+  action: 'create' | 'bind';
+  /** bind 时是要绑到哪个库；create 时 null */
+  vaultId: number | null;
+  at: number;
+}
+const PENDING_KEY = 'ivnote.pendingPick';
+
+export function rememberPendingPick(intent: PendingPickIntent): void {
+  try {
+    localStorage.setItem(PENDING_KEY, JSON.stringify(intent));
+  } catch {
+    /* 存不了就只能靠正常那条路 */
+  }
+}
+export function readPendingPick(): PendingPickIntent | null {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<PendingPickIntent>;
+    if ((v.action !== 'create' && v.action !== 'bind') || typeof v.at !== 'number') return null;
+    return { action: v.action, vaultId: typeof v.vaultId === 'number' ? v.vaultId : null, at: v.at };
+  } catch {
+    return null;
+  }
+}
+export function clearPendingPick(): void {
+  try {
+    localStorage.removeItem(PENDING_KEY);
+  } catch {
+    /* 同上 */
+  }
+}
+
+/** 领走原生侧存下的上一次选目录结果（领走即清空）；没有就 null */
+export async function takePendingPick(): Promise<{ uri: string; name: string; at: number } | null> {
+  const r = await call<{ uri: string; name: string; at: number }>('take_pending_pick');
+  return r && r.uri ? r : null;
+}
+
 // ---------- base64 ↔ 字节 ----------
 // 二进制走 JSON 桥必须编码。这两个函数刻意不用 fetch/Blob：
 // 附件读写在同步循环里会被调用很多次，多一次 await 就是多一帧卡顿。

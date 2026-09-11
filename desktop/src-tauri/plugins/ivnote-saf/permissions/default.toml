@@ -9,6 +9,7 @@ description = """
 """
 permissions = [
   "allow-pick-vault-folder",
+  "allow-take-pending-pick",
   "allow-list-entries",
   "allow-read-text",
   "allow-read-binary",

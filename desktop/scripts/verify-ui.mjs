@@ -2348,7 +2348,19 @@ await new Promise((r) => setTimeout(r, 2600));
   await shot('html-tool-static.png');
 
   await evaluate(`(() => { [...document.querySelectorAll('.html-hint button')].find(b => b.textContent.includes('运行脚本'))?.click(); return true })()`);
-  await new Promise((r) => setTimeout(r, 1800));
+  // 数据文件是攒 400ms 才写的，机器忙时 iframe 起得也慢：轮询到出现为止（最多 6s），别拿固定 sleep 赌
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const has = await evaluate(`(async () => {
+      const root = await navigator.storage.getDirectory();
+      for await (const [name, h] of root.entries()) {
+        if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+        try { await (await h.getDirectoryHandle('工具')).getFileHandle('台账.html.data.json'); return true; } catch (e) { return false; }
+      }
+      return false;
+    })()`);
+    if (has) break;
+  }
   const running = await evaluate(`(async () => {
     const v = document.querySelector('.html-view');
     const fr = v?.querySelector('iframe.html-frame');
@@ -2512,6 +2524,29 @@ await new Promise((r) => setTimeout(r, 2600));
   check('恢复之后：编辑器与磁盘都回到旧内容，且"恢复前那版"也留了快照（恢复可再恢复）',
     restored.editorHasOld && restored.disk === '# 历史用例\n\n原来的第二行\n' && restored.snaps === 2, restored);
   await evaluate(`(() => { [...document.querySelectorAll('.rp-tab')].find(b => b.textContent === '大纲')?.click(); return true })()`);
+}
+
+// ---------- 7.878 状态栏「AI」菜单开在按钮上方，不压状态栏（v0.11.26）----------
+/*
+ * 用户截图：菜单从按钮顶边往下铺，放不下时只是被推到贴底——整张菜单压在状态栏上，
+ * 「整理排版」盖住了「插入图片」那一行。现在下方放不下就翻到按钮之上。
+ */
+{
+  await evaluate(`(() => { document.querySelector('.status-bar [aria-label="AI"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const aiMenu = await evaluate(`(() => {
+    const btn = document.querySelector('.status-bar [aria-label="AI"]');
+    if (!btn) return { hasBtn: false };
+    const menu = document.querySelector('.ctx-menu');
+    if (!menu) return { hasBtn: true, hasMenu: false };
+    const m = menu.getBoundingClientRect(), sb = document.querySelector('.status-bar').getBoundingClientRect();
+    const out = { hasBtn: true, hasMenu: true, menuBottom: Math.round(m.bottom), barTop: Math.round(sb.top), menuTop: Math.round(m.top), fits: m.top >= 0 };
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    return out;
+  })()`);
+  check('状态栏「AI」菜单整张开在状态栏之上（不盖住插入图片那一行），且没顶出屏幕',
+    aiMenu.hasMenu && aiMenu.menuBottom <= aiMenu.barTop && aiMenu.fits, aiMenu);
+  await evaluate(`(() => { document.querySelector('.ctx-mask')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return true })()`);
 }
 
 // ---------- 7.87 导出 PDF：真的打一份出来，逐页数有没有字（v0.11.17）----------

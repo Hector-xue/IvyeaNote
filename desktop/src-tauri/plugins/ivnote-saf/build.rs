@@ -2,6 +2,7 @@
 // 少一个就是运行时「命令未注册」，多一个则生成用不上的权限文件。
 const COMMANDS: &[&str] = &[
     "pick_vault_folder",
+    "take_pending_pick",
     "list_entries",
     "read_text",
     "read_binary",
