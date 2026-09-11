@@ -61,6 +61,11 @@ private data class Node(
  * 读进来（每个目录一个 cursor，而不是每个文件一次查询），之后的读写直接查表。
  * 写入/删除会就地更新缓存，不整棵作废——否则每存一次笔记就要重新遍历全库。
  */
+private const val PREFS = "ivnote-saf"
+private const val KEY_PENDING_URI = "pending_uri"
+private const val KEY_PENDING_NAME = "pending_name"
+private const val KEY_PENDING_AT = "pending_at"
+
 @TauriPlugin
 class SafPlugin(private val activity: Activity) : Plugin(activity) {
 
@@ -101,14 +106,46 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
         uri,
         Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
       )
+      val name = displayNameOfTree(uri)
+      /*
+       * v0.11.26：结果同时落到 SharedPreferences。
+       *
+       * 系统目录选择器是另一个 Activity；选完回来时，主 Activity 可能已经被系统回收重建
+       * （内存紧、开发者选项"不保留活动"），WebView 一重载，JS 那边等着这个结果的 Promise
+       * 就没了——表现是"选完文件夹什么反应都没有"。这里先把结果存下来，JS 启动时再用
+       * takePendingPick 把它领走，把没走完的流程接着走完。
+       */
+      activity.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit()
+        .putString(KEY_PENDING_URI, uri.toString())
+        .putString(KEY_PENDING_NAME, name)
+        .putLong(KEY_PENDING_AT, System.currentTimeMillis())
+        .apply()
       val res = JSObject()
       res.put("uri", uri.toString())
-      res.put("name", displayNameOfTree(uri))
+      res.put("name", name)
       cache.remove(uri.toString())
       invoke.resolve(res)
     } catch (ex: Exception) {
       invoke.reject(ex.message ?: "无法获得该目录的长期访问权限")
     }
+  }
+
+  /**
+   * 领走上一次选目录的结果（领走即清空）。没有就 `uri` 为空串。
+   * 只在 JS 侧还记着"我发起过一次选目录、但没等到结果"时才有意义（见 App.tsx 的 pendingPick）。
+   */
+  @Command
+  fun takePendingPick(invoke: Invoke) {
+    val prefs = activity.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+    val uri = prefs.getString(KEY_PENDING_URI, null)
+    val name = prefs.getString(KEY_PENDING_NAME, null)
+    val at = prefs.getLong(KEY_PENDING_AT, 0L)
+    prefs.edit().remove(KEY_PENDING_URI).remove(KEY_PENDING_NAME).remove(KEY_PENDING_AT).apply()
+    val res = JSObject()
+    res.put("uri", uri ?: "")
+    res.put("name", name ?: "")
+    res.put("at", at)
+    invoke.resolve(res)
   }
 
   /** 目录树的显示名，给界面上"存在哪儿"用；取不到就退回 URI 末段 */

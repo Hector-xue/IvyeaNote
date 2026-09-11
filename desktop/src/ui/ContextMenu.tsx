@@ -67,6 +67,12 @@ export interface MenuAnchor {
   x: number;
   y: number;
   items: MenuItem[];
+  /**
+   * v0.11.26：下方放不下时**翻到这条线之上**（传按钮的 top）。
+   * 状态栏那颗「AI」在屏幕最底下，此前放不下只是把菜单往上挪到刚好贴底——
+   * 结果整张菜单压在状态栏上，「整理排版」盖住了「插入图片」那一行（用户截图）。
+   */
+  flipY?: number;
 }
 
 interface PanelProps {
@@ -76,6 +82,8 @@ interface PanelProps {
   y: number;
   /** 二级菜单往左翻时，要贴回父菜单的左边缘 */
   flipFromX?: number;
+  /** 下方放不下时翻到这条线之上（见 MenuAnchor.flipY） */
+  flipY?: number;
   /** 这一层是不是当前接管键盘的那一层 */
   focused: boolean;
   onCloseAll(): void;
@@ -84,7 +92,7 @@ interface PanelProps {
   depth: number;
 }
 
-function MenuPanel({ items, x, y, flipFromX, focused, onCloseAll, onBack, depth }: PanelProps) {
+function MenuPanel({ items, x, y, flipFromX, flipY, focused, onCloseAll, onBack, depth }: PanelProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [active, setActive] = useState<number>(() => selectable(items)[0] ?? -1);
@@ -103,9 +111,11 @@ function MenuPanel({ items, x, y, flipFromX, focused, onCloseAll, onBack, depth 
     if (left + w > window.innerWidth - pad) {
       left = flipFromX !== undefined ? Math.max(pad, flipFromX - w) : Math.max(pad, window.innerWidth - w - pad);
     }
-    const top = Math.max(pad, Math.min(y, window.innerHeight - h - pad));
+    let top = Math.max(pad, Math.min(y, window.innerHeight - h - pad));
+    // 下方放不下且给了翻转线：整张菜单挪到那条线之上，别压着发起它的那颗按钮
+    if (flipY !== undefined && y + h > window.innerHeight - pad) top = Math.max(pad, flipY - h);
     setPos({ left, top });
-  }, [x, y, flipFromX, items]);
+  }, [x, y, flipFromX, flipY, items]);
 
   useEffect(() => {
     return () => {
@@ -287,6 +297,7 @@ export function ContextMenu({ anchor, onClose }: Props) {
         items={anchor.items}
         x={anchor.x}
         y={anchor.y}
+        flipY={anchor.flipY}
         focused
         depth={0}
         onCloseAll={onClose}

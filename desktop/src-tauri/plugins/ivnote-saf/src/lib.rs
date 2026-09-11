@@ -160,6 +160,22 @@ fn pick_vault_folder<R: Runtime>(app: tauri::AppHandle<R>) -> Result<PickedFolde
         .call("pickVaultFolder", serde_json::json!({}))
 }
 
+/// 上一次选目录的结果（领走即清空）；`uri` 为空 = 没有。见 Kotlin 侧 takePendingPick。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingPick {
+    pub uri: String,
+    pub name: String,
+    /// 毫秒时间戳；JS 侧据此丢掉太旧的结果
+    pub at: i64,
+}
+
+#[tauri::command]
+fn take_pending_pick<R: Runtime>(app: tauri::AppHandle<R>) -> Result<PendingPick> {
+    app.state::<Saf<R>>()
+        .inner()
+        .call("takePendingPick", serde_json::json!({}))
+}
+
 #[tauri::command]
 fn list_entries<R: Runtime>(app: tauri::AppHandle<R>, tree: String) -> Result<Vec<Entry>> {
     let r: EntriesResult = app
@@ -257,6 +273,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("ivnote-saf")
         .invoke_handler(tauri::generate_handler![
             pick_vault_folder,
+            take_pending_pick,
             list_entries,
             read_text,
             read_binary,

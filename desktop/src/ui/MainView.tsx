@@ -896,7 +896,9 @@ export function MainView(props: Props) {
                         run: () => props.onTidy?.(),
                       });
                     }
-                    setMenu({ x: r.left, y: r.top, items });
+                    // 菜单开在按钮上方（状态栏在屏幕最底下，往下必然放不下）
+                    const bar = (e.currentTarget as HTMLElement).closest('.status-bar')?.getBoundingClientRect();
+                    setMenu({ x: r.left, y: r.bottom + 4, flipY: (bar?.top ?? r.top) - 4, items });
                   }}
                 >
                   <RibbonIcon name="sparkle" size={13} />
