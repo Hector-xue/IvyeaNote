@@ -2274,6 +2274,246 @@ await new Promise((r) => setTimeout(r, 2600));
   await new Promise((r) => setTimeout(r, 500));
 }
 
+// ---------- 7.876 HTML 工具跑脚本 + 数据随笔记 + 状态栏不压页面（v0.11.24）----------
+/*
+ * 用户把 AI 生成的「划线价与 BD 维护助手」存进库里，点开只有半句被状态栏压住的
+ * 「此工具需要浏览器允许 JavaScript 才能本」。三件事：
+ *   ① 带脚本的页面要有明面上的「运行脚本」，点了就跑（沙箱 allow-scripts、不给 same-origin）；
+ *   ② 工具写的 localStorage 要落到同名 .data.json，关掉再开数据还在；
+ *   ③ 主区放 HTML 时状态栏是贴底的一条，不再浮在页面上；那些笔记才有的项也不显示。
+ */
+{
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const dir = await h.getDirectoryHandle('工具', { create: true });
+      try { await dir.removeEntry('台账.html.data.json'); } catch (e) { /* 第一次跑 */ }
+      const fh = await dir.getFileHandle('台账.html', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode([
+        '<html><head><meta charset="utf-8"></head><body>',
+        '<h1 id="t">台账</h1><div id="n">-</div>',
+        '<script>var c = Number(localStorage.getItem("count") || 0) + 1; localStorage.setItem("count", String(c)); document.getElementById("n").textContent = "第" + c + "次打开"; document.title = "count=" + c;<' + '/script>',
+        '<div style="position:fixed;bottom:0;left:0;right:0;background:#fe8;padding:8px" id="foot">底部这一行必须看得见</div>',
+        '</body></html>',
+      ].join('')));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  const openTool = `(async () => {
+    const dir = [...document.querySelectorAll('.ft-dir-name')].find(x => x.textContent === '工具');
+    if (dir && !dir.closest('.ft-node')?.querySelector('.ft-children')) {
+      dir.closest('.ft-dir')?.click();
+      await new Promise(r => setTimeout(r, 400));
+    }
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('台账') && !x.textContent.includes('data'));
+    const row = el?.closest('.ft-file');
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return !!row;
+  })()`;
+  await evaluate(openTool);
+  await new Promise((r) => setTimeout(r, 1500));
+  const before = await evaluate(`(() => {
+    const v = document.querySelector('.html-view');
+    const fr = v?.querySelector('iframe.html-frame');
+    const hint = v?.querySelector('.html-hint');
+    const sb = document.querySelector('.status-bar');
+    const stage = document.querySelector('.editor-stage');
+    const frR = fr?.getBoundingClientRect(), sbR = sb?.getBoundingClientRect();
+    return {
+      open: !!v,
+      sandbox: fr?.getAttribute('sandbox') ?? null,
+      hintText: hint?.textContent ?? null,
+      hasRunButton: !![...(hint?.querySelectorAll('button') ?? [])].find(b => b.textContent.includes('运行脚本')),
+      statusStatic: sb ? getComputedStyle(sb).position : null,
+      stageFrame: !!stage && stage.classList.contains('stage-frame'),
+      overlap: frR && sbR ? Math.round(frR.bottom - sbR.top) : null,
+      statusText: sb?.textContent ?? '',
+    };
+  })()`);
+  check('带脚本的 HTML 打开时先不跑，工具条下有一条明面上的「运行脚本」',
+    before.open && before.sandbox === 'allow-same-origin' && before.hasRunButton, before);
+  check('主区放 HTML 时状态栏贴底不浮（iframe 底边不越过状态栏顶边）',
+    before.statusStatic === 'static' && before.stageFrame && before.overlap !== null && before.overlap <= 0,
+    { position: before.statusStatic, overlap: before.overlap });
+  check('HTML 视图的状态栏不再摆上一篇笔记的字数 / 反链 / 插入图片 / AI',
+    !before.statusText.includes('词') && !before.statusText.includes('反向链接') &&
+      !before.statusText.includes('插入图片') && !before.statusText.includes('AI'), before.statusText);
+  await shot('html-tool-static.png');
+
+  await evaluate(`(() => { [...document.querySelectorAll('.html-hint button')].find(b => b.textContent.includes('运行脚本'))?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 1800));
+  const running = await evaluate(`(async () => {
+    const v = document.querySelector('.html-view');
+    const fr = v?.querySelector('iframe.html-frame');
+    const root = await navigator.storage.getDirectory();
+    let data = null;
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      try {
+        const dir = await h.getDirectoryHandle('工具');
+        const fh = await dir.getFileHandle('台账.html.data.json');
+        data = await (await fh.getFile()).text();
+      } catch (e) { data = 'missing: ' + e.message; }
+    }
+    const srcdoc = fr?.getAttribute('srcdoc') ?? '';
+    return {
+      sandbox: fr?.getAttribute('sandbox') ?? null,
+      allow: fr?.getAttribute('allow') ?? null,
+      shimFirst: srcdoc.indexOf('data-ivnote="storage"') >= 0 && srcdoc.indexOf('data-ivnote="storage"') < srcdoc.indexOf('台账'),
+      hintGone: !v?.querySelector('.html-hint'),
+      toggleOn: v?.querySelector('[aria-label="运行脚本"]')?.getAttribute('aria-pressed') ?? null,
+      data,
+      treeHasData: !![...document.querySelectorAll('.ft-file-name')].find(x => x.textContent.includes('台账.html.data')),
+    };
+  })()`);
+  check('点「运行脚本」后：沙箱换成 allow-scripts（且不给 same-origin），shim 排在页面脚本之前，提示条收起',
+    running.sandbox === 'allow-scripts allow-forms allow-modals allow-downloads' && !running.sandbox.includes('same-origin') &&
+      running.shimFirst && running.hintGone && running.toggleOn === 'true',
+    { sandbox: running.sandbox, shimFirst: running.shimFirst, hintGone: running.hintGone, toggleOn: running.toggleOn });
+  check('工具写的 localStorage 落到了 台账.html.data.json（count=1）',
+    typeof running.data === 'string' && running.data.includes('"count": "1"'), running.data);
+  await shot('html-tool-running.png');
+
+  // 关掉再打开：数据要回灌进去（count 变 2）；上次点过「运行脚本」的文件直接就跑
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 500));
+  await evaluate(openTool);
+  await new Promise((r) => setTimeout(r, 2200));
+  const reopened = await evaluate(`(async () => {
+    const fr = document.querySelector('iframe.html-frame');
+    const root = await navigator.storage.getDirectory();
+    let data = null;
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      try {
+        const dir = await h.getDirectoryHandle('工具');
+        const fh = await dir.getFileHandle('台账.html.data.json');
+        data = await (await fh.getFile()).text();
+      } catch (e) { data = 'missing: ' + e.message; }
+    }
+    return { sandbox: fr?.getAttribute('sandbox') ?? null, data, hint: !!document.querySelector('.html-hint') };
+  })()`);
+  check('再次打开：记住了「运行脚本」，数据回灌（count=2）',
+    reopened.sandbox?.includes('allow-scripts') && !reopened.hint && typeof reopened.data === 'string' && reopened.data.includes('"count": "2"'),
+    reopened);
+  await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 500));
+}
+
+// ---------- 7.877 文件历史：写盘前留快照、右栏能对照、能恢复（v0.11.24）----------
+/*
+ * 用户原话：「被误修改的可真就无法找回了，有好的 git 或者备份方案吗？」
+ * 这条只验本机快照那一层（浏览器验证台没有服务端）：
+ *   ① 打开一篇已有内容的笔记，敲字落盘 → .ivyea/history/ 下多一张快照，内容是**改之前**的；
+ *   ② 右栏「历史」标签列出它，选中能看到对照；
+ *   ③ 「恢复到这一版」之后编辑器回到旧内容。
+ */
+{
+  await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      const fh = await h.getFileHandle('历史用例.md', { create: true });
+      const w = await fh.createWritable();
+      await w.write(new TextEncoder().encode('# 历史用例\\n\\n原来的第二行\\n'));
+      await w.close();
+      return 'ok';
+    }
+    return 'no-vault';
+  })()`);
+  await send('Page.reload');
+  await new Promise((r) => setTimeout(r, 2600));
+  await evaluate(`(async () => {
+    const el = [...document.querySelectorAll('.ft-file-name')].find(x => x.textContent === '历史用例');
+    const row = el?.closest('.ft-file');
+    row?.scrollIntoView({ block: 'center' });
+    row?.click();
+    return !!row;
+  })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  {
+    const cb = await evaluate(`(() => { const lines = document.querySelectorAll('.cm-line'); const last = lines[lines.length - 1] ?? document.querySelector('.cm-content');
+      const r = last.getBoundingClientRect(); return { x: Math.round(r.right - 4), y: Math.round(r.top + r.height / 2) } })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await send('Input.dispatchMouseEvent', { type, x: cb.x, y: cb.y, button: 'left', clickCount: 1, buttons: 1 });
+    }
+    await send('Input.insertText', { text: '误改的一行' });
+  }
+  await new Promise((r) => setTimeout(r, 1800)); // 800ms 防抖落盘 + 快照
+  const snap = await evaluate(`(async () => {
+    const root = await navigator.storage.getDirectory();
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      try {
+        const hist = await (await h.getDirectoryHandle('.ivyea')).getDirectoryHandle('history');
+        const d = await hist.getDirectoryHandle('历史用例.md');
+        const out = [];
+        for await (const [n, f] of d.entries()) out.push({ n, text: await (await f.getFile()).text() });
+        return out;
+      } catch (e) { return 'missing: ' + e.message; }
+    }
+    return 'no-vault';
+  })()`);
+  check('敲字落盘前，.ivyea/history/ 下留了一张快照，内容是**改之前**的',
+    Array.isArray(snap) && snap.length === 1 && snap[0].text === '# 历史用例\n\n原来的第二行\n' && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}\.md$/.test(snap[0].n),
+    snap);
+
+  // 右栏「历史」标签
+  await evaluate(`(() => {
+    const rail = document.querySelector('.right-rail button');
+    if (rail) rail.click();
+    return true;
+  })()`);
+  await new Promise((r) => setTimeout(r, 300));
+  await evaluate(`(() => { [...document.querySelectorAll('.rp-tab')].find(b => b.textContent === '历史')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 800));
+  const pane = await evaluate(`(() => {
+    const hp = document.querySelector('.hp');
+    if (!hp) return { open: false };
+    const rows = [...hp.querySelectorAll('.hp-list .sp-row')];
+    return { open: true, count: rows.length, first: rows[0]?.textContent ?? null, title: hp.querySelector('.hp-title')?.textContent ?? null };
+  })()`);
+  check('右栏「历史」标签列出那张本机快照', pane.open && pane.count === 1 && (pane.first ?? '').includes('本机快照'), pane);
+  await evaluate(`(() => { document.querySelector('.hp-list .sp-row')?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 600));
+  const diff = await evaluate(`(() => {
+    const hp = document.querySelector('.hp');
+    const rows = [...hp.querySelectorAll('.ai-row')].map(r => ({ k: r.className.replace('ai-row ', ''), t: r.querySelector('.ai-text')?.textContent }));
+    const btn = [...hp.querySelectorAll('button')].find(b => b.textContent.includes('恢复到这一版'));
+    return { rows, restoreEnabled: !!btn && !btn.disabled };
+  })()`);
+  check('选中一版后能看到对照：「误改」那行标成要去掉的，「恢复」可点',
+    diff.restoreEnabled && diff.rows.some(r => r.k === 'del' && (r.t ?? '').includes('误改')) &&
+      diff.rows.some(r => r.k === 'same' && (r.t ?? '').includes('原来的第二行')), diff);
+  await shot('history-pane.png');
+  await evaluate(`(() => { [...document.querySelectorAll('.hp button')].find(b => b.textContent.includes('恢复到这一版'))?.click(); return true })()`);
+  await new Promise((r) => setTimeout(r, 1200));
+  const restored = await evaluate(`(async () => {
+    const text = document.querySelector('.cm-content')?.innerText ?? '';
+    const root = await navigator.storage.getDirectory();
+    let disk = null, snaps = null;
+    for await (const [name, h] of root.entries()) {
+      if (h.kind !== 'directory' || !name.startsWith('vault-')) continue;
+      disk = await (await (await h.getFileHandle('历史用例.md')).getFile()).text();
+      try {
+        const d = await (await (await h.getDirectoryHandle('.ivyea')).getDirectoryHandle('history')).getDirectoryHandle('历史用例.md');
+        snaps = 0; for await (const _ of d.entries()) snaps++;
+      } catch (e) { snaps = -1; }
+    }
+    return { editorHasOld: text.includes('原来的第二行') && !text.includes('误改'), disk, snaps };
+  })()`);
+  check('恢复之后：编辑器与磁盘都回到旧内容，且"恢复前那版"也留了快照（恢复可再恢复）',
+    restored.editorHasOld && restored.disk === '# 历史用例\n\n原来的第二行\n' && restored.snaps === 2, restored);
+  await evaluate(`(() => { [...document.querySelectorAll('.rp-tab')].find(b => b.textContent === '大纲')?.click(); return true })()`);
+}
+
 // ---------- 7.87 导出 PDF：真的打一份出来，逐页数有没有字（v0.11.17）----------
 /*
  * 用户拿到的 PDF「只有第一页，总页数还多出那么多」。我把他同步到服务器上的那份

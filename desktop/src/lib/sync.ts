@@ -4,6 +4,8 @@
 import { ApiError, SyncClient, sha256Hex, uuid, type PushChange, type ServerChange } from './api';
 import { merge3, conflictCopy } from './merge';
 import type { VaultMeta } from './store';
+import { trashPathFor } from './trashPath';
+import { snapshotBeforeWrite } from './history';
 
 export interface FileIO {
   /** 递归列出 vault 目录下全部相对路径（只列文本笔记） */
@@ -152,6 +154,20 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+/**
+ * 远端删除落到本地时：先搬进本机回收站，再从原路径拿掉。
+ * `content` 传 null 表示调用方没读过，这里自己读一次。
+ */
+async function moveToTrash(io: FileIO, vaultPath: string, path: string, content: string | null): Promise<void> {
+  try {
+    const text = content ?? (await io.read(vaultPath, path));
+    await io.write(vaultPath, trashPathFor(path), text);
+  } catch {
+    // 回收站写不进去不该挡住同步收敛；此前本来就是直接删
+  }
+  await io.remove(vaultPath, path);
 }
 
 /** 冲突副本路径：保留原扩展名（`a.pdf` → `a.conflict-<ts>.pdf`） */
@@ -422,7 +438,10 @@ async function applyRemote(
       const local = base !== undefined ? await io.read(vaultPath, ch.path) : '';
       const locallyModified = base !== undefined && local !== base;
       if (!locallyModified) {
-        await io.remove(vaultPath, ch.path); // 本地没改过 → 跟随删除
+        // 本地没改过 → 跟随删除。**但先进这台机器自己的回收站**（v0.11.24）：
+        // 此前这里是直接 remove——手机上误删一篇，电脑 pull 到之后就物理没了，
+        // 回收站只在删除的那台设备上有（用户：「别的端也被同步删了，怎么办」）。
+        await moveToTrash(io, vaultPath, ch.path, base !== undefined ? local : null);
       }
       // 本地改过却收到删除 → 修改胜出：保留文件，稍后由下方 upsert 分支逻辑推回去。
       // 这里直接把本地内容当作待推送修改处理：
@@ -483,6 +502,13 @@ async function applyRemote(
   // 双端都改了 → 3-way 合并
   const r = merge3(base, local, serverText);
   if (r.merged !== null) {
+    // 自动合并会改写本地这份；先给它留一张本机快照（v0.11.24 文件历史）——
+    // 合并"成功"只是三方没撞行，不等于结果一定是人想要的。
+    try {
+      await snapshotBeforeWrite(io, vaultPath, ch.path, local, await io.list(vaultPath));
+    } catch {
+      // 快照失败不挡合并
+    }
     await io.write(vaultPath, ch.path, r.merged);
     meta.versions[ch.path] = ch.version;
     meta.bases[ch.path] = r.merged;
@@ -532,6 +558,12 @@ async function applyRemoteAsset(
         // 本地改过却收到删除 → 修改胜出，把本地这份推回去
         await pushUpsertBytes(client, meta, ch.path, local, localHash, ch.version, report);
         return;
+      }
+      // 同文本那条路：远端删的附件也先进本机回收站（v0.11.24）
+      try {
+        await io.writeBinary(vaultPath, trashPathFor(ch.path), local);
+      } catch {
+        // 回收站写不进去不该挡住同步收敛；此前本来就是直接删
       }
       await io.remove(vaultPath, ch.path);
     }

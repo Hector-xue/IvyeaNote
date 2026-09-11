@@ -230,3 +230,14 @@ describe('remapDirKeys（折叠状态跟着改名走）', () => {
     expect(remapDirKeys(['AI2'], 'AI', '人工智能')).toEqual(['AI2']);
   });
 });
+
+describe('HTML 工具的数据文件跟着搬（v0.11.24）', () => {
+  it('移动 x.html 时 x.html.data.json 一起走；没有数据文件就只搬 HTML', () => {
+    const all = ['工具/a.html', '工具/a.html.data.json', '工具/b.html', '归档/.keep'];
+    expect(planMove('工具/a.html', '归档', all, false)).toEqual([
+      { from: '工具/a.html', to: '归档/a.html' },
+      { from: '工具/a.html.data.json', to: '归档/a.html.data.json' },
+    ]);
+    expect(planMove('工具/b.html', '归档', all, false)).toEqual([{ from: '工具/b.html', to: '归档/b.html' }]);
+  });
+});

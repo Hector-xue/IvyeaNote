@@ -38,6 +38,9 @@ import { useTemplates } from './hooks/useTemplates';
 import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor, nextTrashName } from './hooks/useTrash';
+import { useFileHistory } from './hooks/useFileHistory';
+import type { DeletedFile } from './lib/api';
+import type { RightTab } from './ui/RightPanel';
 import { useToast } from './ui/Toast';
 import { allowVaultPath } from './lib/fsScope';
 import { linkVaults } from './lib/vaultLink';
@@ -160,6 +163,11 @@ export default function App() {
    */
   const [splitPath, setSplitPath] = useState<string | null>(null);
   const [splitDoc, setSplitDoc] = useState<string | null>(null);
+  /** v0.11.24：恢复历史版本前要把编辑器里还没落盘的内容先写下去，走 ref 不进依赖 */
+  const docRef = useRef<string | null>(null);
+  docRef.current = doc;
+  const splitDocRef = useRef<string | null>(null);
+  splitDocRef.current = splitDoc;
   splitPathRef.current = splitPath;
   const [showGuide, setShowGuide] = useState(false);
   /** 按需唤起的登录页（免登录模式下从侧栏打开） */
@@ -354,6 +362,21 @@ export default function App() {
     setSortMode,
     refresh: refreshFiles,
   } = useVaultFiles(io, vault ? (vault.localPath ?? '') : null);
+
+  /**
+   * v0.11.24：文件历史。写盘前留本机快照 + 列云端每一版（hooks/useFileHistory）。
+   * 用户：「被误修改的可真就无法找回了」——现在找得回。
+   */
+  const fileHistory = useFileHistory({
+    io,
+    vaultPath: vault ? (vault.localPath ?? '') : null,
+    vaultId: vault?.id ?? null,
+    client,
+    deviceId: state.account?.deviceId,
+    allPaths,
+  });
+  /** 命令面板 / 状态栏想让右栏切到某个标签（MainView 消费后清掉） */
+  const [wantRightTab, setWantRightTab] = useState<RightTab | null>(null);
 
 
   /**
@@ -1059,6 +1082,37 @@ export default function App() {
    * 现在在主区渲染（沙箱 iframe，不跑脚本），跳浏览器降级成工具条上的一个出口。
    */
   const [htmlDoc, setHtmlDoc] = useState<{ path: string; html: string } | null>(null);
+  /**
+   * v0.11.24：这个 HTML 允不允许跑脚本——「一律运行」或这个文件点过「运行脚本」。
+   * 点「运行 / 停止」只改这个文件的记录；全局那档在设置里。
+   */
+  const htmlScriptsAllowed = htmlDoc
+    ? prefs.htmlScripts === 'always' || prefs.htmlScriptFiles.includes(htmlDoc.path)
+    : false;
+  const onHtmlScriptsToggle = useCallback(
+    (allow: boolean) => {
+      if (!htmlDoc) return;
+      const path = htmlDoc.path;
+      const rest = prefs.htmlScriptFiles.filter((p) => p !== path);
+      // 「一律运行」下点停止：只对这个文件不跑没法表达（列表是白名单），退回到「按文件」再把它去掉
+      updatePrefs({
+        ...prefs,
+        htmlScripts: allow ? prefs.htmlScripts : 'ask',
+        htmlScriptFiles: allow ? [...rest, path] : rest,
+      });
+    },
+    [htmlDoc, prefs, updatePrefs]
+  );
+  /** HTML 工具的数据文件落盘：写完刷新列表（它是库里一个真文件）并推同步 */
+  const writeVaultText = useCallback(
+    async (rel: string, text: string) => {
+      if (!vault) return;
+      await io.write(vault.localPath ?? '', rel, text);
+      await refreshFiles();
+      if (prefs.autoSync) void doSync();
+    },
+    [vault, io, refreshFiles, prefs.autoSync, doSync]
+  );
   const onOpenAttachment = useCallback(
     async (rel: string) => {
       /*
@@ -1179,6 +1233,8 @@ export default function App() {
       window.clearTimeout(saveTimers.current.get(path));
       saveTimers.current.set(path, window.setTimeout(async () => {
         try {
+          // v0.11.24：覆盖之前先把盘上旧内容留一张本机快照（5 分钟一张，失败不挡写盘）
+          await fileHistory.snapshotBefore(path);
           await io.write(vault.localPath ?? '', path, text);
           // v0.7.5：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
           // 不触发 refreshFiles，光靠咽喉对账的话离线写作时反链/搜索会滞后一拍。
@@ -1196,7 +1252,36 @@ export default function App() {
         }
       }, 800));
     },
-    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex, toast]
+    [vault, io, currentPath, splitPath, prefs.autoSync, doSync, maybeRenameToH1, noteIndex, toast, fileHistory]
+  );
+
+  /**
+   * v0.11.24：把某一版历史内容恢复成当前内容。
+   *
+   * 就是一次普通写盘：先给"现在这版"强制留快照（恢复错了能再恢复回来），写盘，
+   * 编辑器回灌，索引更新，推同步——和用户手动改回去走的是同一条路，
+   * 服务端不需要知道"这是一次恢复"。
+   */
+  const restoreVersion = useCallback(
+    async (path: string, content: string) => {
+      if (!vault) return;
+      const root = vault.localPath ?? '';
+      // 编辑器里还没落盘的改动先落下去，快照才是完整的"现在"
+      const pending = saveTimers.current.get(path);
+      if (pending !== undefined) {
+        window.clearTimeout(pending);
+        saveTimers.current.delete(path);
+        const live = path === currentPathRef.current ? docRef.current : path === splitPathRef.current ? splitDocRef.current : null;
+        if (live !== null) await io.write(root, path, live);
+      }
+      await fileHistory.snapshotBefore(path, true);
+      await io.write(root, path, content);
+      if (path === currentPathRef.current) setDoc(content);
+      if (path === splitPathRef.current) setSplitDoc(content);
+      noteIndex.touch(path, content);
+      if (prefs.autoSync) void doSync();
+    },
+    [vault, io, fileHistory, noteIndex, prefs.autoSync, doSync]
   );
 
   /**
@@ -2029,6 +2114,72 @@ export default function App() {
    * 而那两条命令在这一层。ribbon 上那一排按钮从此只做一件事——切这个值。
    */
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('files');
+
+  /**
+   * v0.11.24：**云端已删除**的文件——回收站面板的第二段。
+   *
+   * 本机回收站只有"这台设备删的"（现在也包括"别的设备删的、这台 pull 到的"，
+   * 见 lib/sync 的 moveToTrash）。但在这之前被删的、或者换了台新设备，本机什么都没有；
+   * 云端那份墓碑清单才是全端共同的"可恢复"来源。只列本地现在不存在的。
+   */
+  const [cloudDeleted, setCloudDeleted] = useState<DeletedFile[]>([]);
+  const refreshCloudDeleted = useCallback(async () => {
+    if (!client || !vault || vault.id <= 0) {
+      setCloudDeleted([]);
+      return;
+    }
+    try {
+      const { files: gone } = await client.deletedFiles(vault.id);
+      const local = new Set(allPaths());
+      setCloudDeleted(gone.filter((f) => !local.has(f.path)));
+    } catch (e) {
+      // 列不到就当没有；不该因为它把回收站面板整个弄红
+      console.warn('云端已删除清单读取失败', e);
+      setCloudDeleted([]);
+    }
+  }, [client, vault, allPaths]);
+  useEffect(() => {
+    if (sidebarTab === 'trash') void refreshCloudDeleted();
+  }, [sidebarTab, refreshCloudDeleted, trash.list]);
+
+  /** 从云端把一份已删除的文件拿回来：写回原路径，下一轮 push 就是普通 upsert */
+  const restoreCloudDeleted = useCallback(
+    async (f: DeletedFile) => {
+      if (!client || !vault) return;
+      const root = vault.localPath ?? '';
+      try {
+        if (await io.exists(root, f.path)) {
+          toast(`${f.path} 本地已经有一份了，没有覆盖`, 'error');
+          return;
+        }
+        const bytes = new Uint8Array(await client.getBlob(f.blob_hash));
+        if (/\.(md|markdown|txt|base|html?|json|css|csv)$/i.test(f.path)) {
+          await io.write(root, f.path, new TextDecoder().decode(bytes));
+        } else {
+          await io.writeBinary(root, f.path, bytes);
+        }
+        await refreshFiles();
+        setCloudDeleted((cur) => cur.filter((x) => x.path !== f.path));
+        toast(`已从云端找回：${f.path}`, 'ok');
+        void doSync();
+      } catch (e) {
+        toast(`找回失败：${errText(e)}`, 'error');
+      }
+    },
+    [client, vault, io, refreshFiles, doSync, toast, errText]
+  );
+
+  /** 右栏「历史」标签的数据与动作 */
+  const historyProps = useMemo(
+    () => ({
+      path: currentPath,
+      current: doc ?? '',
+      history: fileHistory,
+      onRestore: restoreVersion,
+      toast,
+    }),
+    [currentPath, doc, fileHistory, restoreVersion, toast]
+  );
   /** 点标签面板里的标签 → 灌进侧栏搜索框（带序号，连点两次也要重搜） */
   const [sideSearchSeed, setSideSearchSeed] = useState<{ text: string; n: number } | null>(null);
 
@@ -2266,7 +2417,7 @@ export default function App() {
     const from = vault.localPath ?? '';
     if (from === sel) return;
     const wasVirtual = !from || from.startsWith('opfs://');
-    const count = allPaths.length;
+    const count = allPaths().length;
     const shownDest = label ?? sel;
     if (count > 0) {
       const ok = await confirm({
@@ -2291,7 +2442,7 @@ export default function App() {
     });
     await refreshFiles();
     toast(count > 0 ? `已移动 ${count} 个文件到新位置` : '已设置笔记库位置', 'ok');
-  }, [vault, allPaths.length, patchVault, confirm, toast, refreshFiles]);
+  }, [vault, allPaths, patchVault, confirm, toast, refreshFiles]);
 
   /**
    * 撤回到应用内部存储。
@@ -2482,6 +2633,7 @@ export default function App() {
       onOpenTags: vault ? () => setSidebarTab('tags') : null,
       onTidy: currentPath ? tidyNote : null,
       onAi: currentPath ? onEditorAi : null,
+      onOpenHistory: currentPath ? () => setWantRightTab('history') : null,
     }),
     [
       onCreateNote,
@@ -2618,7 +2770,7 @@ export default function App() {
               vault?.localPath && !vault.localPath.startsWith('opfs://')
                 ? vault.localLabel ?? vault.localPath
                 : null,
-            fileCount: allPaths.length,
+            fileCount: allPaths().length,
             // v0.10.4：安卓有自己的 SAF 选择器了，不再是"只有桌面能选"
             canPick: isTauri,
             isAndroid: isAndroidUA(),
@@ -3060,6 +3212,9 @@ export default function App() {
           onOpenHtmlExternal={(p) => void openWithSystemApp(p)}
           resolveAsset={resolveImage}
           readVaultText={(rel) => io.read(vault?.localPath ?? '', rel)}
+          writeVaultText={writeVaultText}
+          htmlScriptsAllowed={htmlScriptsAllowed}
+          onHtmlScriptsToggle={onHtmlScriptsToggle}
           pdfView={pdfView}
           pdfPath={pdfPath}
           onClosePdf={onClosePdf}
@@ -3070,9 +3225,15 @@ export default function App() {
           onOpenSettings={() => setShowSettings(true)}
           onOpenDaily={() => void openDailyNote()}
           trashList={trash.list}
-          onOpenTrash={() => void trash.reload()}
+          onOpenTrash={() => {
+            void trash.reload();
+            void refreshCloudDeleted();
+          }}
           onTrashRestore={(p) => void trash.restore(p)}
           onTrashPurge={(p) => void trash.purge(p)}
+          cloudDeleted={cloudDeleted}
+          onCloudRestore={(f) => void restoreCloudDeleted(f)}
+          historyProps={historyProps}
         />
         {/* 标签面板原本整段写在桌面分支之后，手机上根本不渲染——补入口就得连它一起搬 */}
         {showTagPanel && (
@@ -3261,6 +3422,9 @@ export default function App() {
         onOpenHtmlExternal={(p) => void openWithSystemApp(p)}
         resolveAsset={resolveImage}
         readVaultText={(rel) => io.read(vault?.localPath ?? '', rel)}
+        writeVaultText={writeVaultText}
+        htmlScriptsAllowed={htmlScriptsAllowed}
+        onHtmlScriptsToggle={onHtmlScriptsToggle}
         pdfView={pdfView}
         pdfPath={pdfPath}
         onOpenPdfExternal={(p) => void openWithSystemApp(p)}
@@ -3282,6 +3446,11 @@ export default function App() {
         onTrashRestore={(p) => void trash.restore(p)}
         onTrashPurge={(p) => void trash.purge(p)}
         onTrashPurgeAll={() => void trash.purgeAll()}
+        cloudDeleted={cloudDeleted}
+        onCloudRestore={(f) => void restoreCloudDeleted(f)}
+        historyProps={historyProps}
+        wantRightTab={wantRightTab}
+        onWantRightTabConsumed={() => setWantRightTab(null)}
         onPickTag={(tag) => {
           setSidebarTab('search');
           setSideSearchSeed((cur) => ({ text: `#${tag}`, n: (cur?.n ?? 0) + 1 }));

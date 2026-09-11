@@ -80,7 +80,16 @@ export function planMove(
   if (!isDir) {
     const name = uniqueIn(baseName(from), dest, (p) => taken.has(p));
     const to = dest ? `${dest}/${name}` : name;
-    return to === from ? null : [{ from, to }];
+    if (to === from) return null;
+    const ops: MoveOp[] = [{ from, to }];
+    /*
+     * v0.11.24：HTML 工具的数据文件（`<x>.html.data.json`）跟着 HTML 一起搬。
+     * 数据是按 HTML 的路径找的；只搬 HTML 不搬它，工具一开就是空台账，
+     * 而那份数据还躺在原目录里没人认得。
+     */
+    const sidecar = `${from}.data.json`;
+    if (/\.html?$/i.test(from) && taken.has(sidecar)) ops.push({ from: sidecar, to: `${to}.data.json` });
+    return ops;
   }
 
   // 目录：整体搬迁，内部相对结构保持不变。

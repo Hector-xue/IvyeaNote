@@ -8,8 +8,9 @@
  * 换名字等于把「反链到底有没有真的渲染出来」那条用例弄哑。搬位置不该动契约。
  */
 import { RibbonIcon } from './Icons';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { extractHeadings } from '../lib/headings';
+import { HistoryPane, type HistoryPaneProps } from './HistoryPane';
 
 const COLLAPSE_KEY = 'ivnote.rightPanel.collapsed';
 
@@ -32,7 +33,17 @@ interface Props {
   /** 由 usePanelWidth 给的宽度（方案 §4.4 可调宽） */
   width?: number;
   onToggle(): void;
+  /**
+   * v0.11.24：第三个标签「历史」——这篇笔记的本机快照 + 云端版本。
+   * 不传就没有这个标签（测试里的最小渲染）。
+   */
+  historyProps?: Omit<HistoryPaneProps, 'onClose'>;
+  /** 外面想直接切到某个标签（命令面板「查看文件历史」、状态栏反链数） */
+  wantTab?: RightTab | null;
+  onWantTabConsumed?(): void;
 }
+
+export type RightTab = 'outline' | 'links' | 'history';
 
 function titleOf(path: string): string {
   return path.split('/').pop()?.replace(/\.(md|markdown)$/i, '') ?? path;
@@ -47,7 +58,14 @@ export function RightPanel(props: Props) {
    * 用户说的"右侧窗口"是侧边栏右边那块中间区域（正文那块），不是最右边这条
    * 大纲栏。图谱现在开在主区（见 ui/MainView），这里回到大纲/反链两个标签。
    */
-  const [tab, setTab] = useState<'outline' | 'links'>('outline');
+  const [tab, setTab] = useState<RightTab>('outline');
+  useEffect(() => {
+    if (props.wantTab) {
+      setTab(props.wantTab);
+      props.onWantTabConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.wantTab]);
 
   if (props.collapsed) {
     return (
@@ -87,13 +105,25 @@ export function RightPanel(props: Props) {
           >
             反向链接{back.length > 0 ? `（${back.length}）` : ''}
           </button>
+          {props.historyProps && (
+            <button
+              role="tab"
+              aria-selected={tab === 'history'}
+              className={`rp-tab ${tab === 'history' ? 'on' : ''}`}
+              onClick={() => setTab('history')}
+              title="这篇笔记的历史版本：本机快照 + 云端每一版，可对照、可恢复"
+            >
+              历史
+            </button>
+          )}
         </div>
         <button className="icon-btn" title="收起" onClick={props.onToggle}>
           <RibbonIcon name="chevron-right" size={16} />
         </button>
       </div>
 
-      <div className="rp-body">
+      <div className={`rp-body ${tab === 'history' ? 'rp-body-fill' : ''}`}>
+        {tab === 'history' && props.historyProps && <HistoryPane {...props.historyProps} />}
         {tab === 'outline' &&
           (headings.length === 0 ? (
           <p className="rp-empty">这篇还没有标题</p>

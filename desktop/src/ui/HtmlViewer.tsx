@@ -23,6 +23,20 @@
  * 真要跑脚本的（比如自带交互的报表），工具条上有「用浏览器打开」——那条路本来就在，
  * 现在它从"唯一选择"降级成"逃生出口"。
  *
+ * ## 1b. 但工具类 HTML 要能用（v0.11.24）
+ *
+ * 用户把 AI 生成的「划线价与 BD 维护助手」存进库里，点开只有一条
+ * 「此工具需要浏览器允许 JavaScript 才能本地运行」——「这种工具类的 HTML 能做到
+ * 直接在笔记里面使用吗？」能。**脚本模式**：sandbox 给 `allow-scripts`、仍然不给
+ * `allow-same-origin`，页面在不透明来源里跑，碰不到应用的任何东西；它丢掉的
+ * localStorage 由注入的 shim 顶上，数据落到 `<文件>.data.json` 随笔记同步
+ * （细节见 lib/htmlSandbox）。默认仍不跑：带脚本的页面先给一条明面上的
+ * 「运行脚本」，点过的文件记住；设置里可以改成"一律运行"。
+ *
+ * 脚本模式下 iframe 跨源，外层读不到 contentDocument——所以窄屏重排的量法
+ * 也搬进 iframe 里跑、结果 postMessage 回来；图片得转成 data: URL（跨源读不到
+ * 父页面的 blob:）。
+ *
  * ## 2. 相对路径的图片和样式怎么办？
  *
  * `srcdoc` 没有基地址，`<img src="img/a.png">` 一定裂。所以渲染前先把 HTML 解析成
@@ -66,6 +80,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { RibbonIcon } from './Icons';
 import { resolveVaultPath } from '../lib/links';
+import {
+  blobUrlToDataUrl,
+  hasScripts as detectScripts,
+  measureScript,
+  parseStorageFile,
+  serializeStorageFile,
+  storagePathFor,
+  storageShim,
+} from '../lib/htmlSandbox';
 
 interface Props {
   /** 库内相对路径，用来解析相对资源与显示文件名 */
@@ -79,6 +102,15 @@ interface Props {
   onClose(): void;
   /** 交给系统浏览器打开（要跑脚本时的出口） */
   onOpenExternal?(): void;
+  /**
+   * v0.11.24：这个文件允许跑脚本吗（App 按偏好算：一律运行 / 这个文件点过「运行脚本」）。
+   * 不传 = 不跑，和 v0.11.18 的行为一样。
+   */
+  scriptsAllowed?: boolean;
+  /** 用户在工具条上点了「运行脚本」/「停止脚本」 */
+  onScriptsToggle?(allow: boolean): void;
+  /** 写库内文本——脚本模式下把工具的 localStorage 落到 `<path>.data.json` */
+  writeText?(rel: string, text: string): Promise<void>;
 }
 
 /** 文件名（去目录） */
@@ -161,7 +193,17 @@ function withReflow(html: string, on: boolean): string {
 export function HtmlViewer(props: Props) {
   const [doc, setDoc] = useState<string>('');
   const [note, setNote] = useState<string | null>(null);
+  /** 页面里有脚本吗（没有就不必显示「运行脚本」那条） */
+  const [scripted, setScripted] = useState(false);
+  const scripts = !!props.scriptsAllowed;
   const urls = useRef<string[]>([]);
+  /*
+   * 脚本模式下工具写 localStorage → shim postMessage → 这里攒 400ms 写一次
+   * `<path>.data.json`。攒是因为工具常常一次操作连写好几个 key。
+   */
+  const storage = useRef<Record<string, string> | null>(null);
+  const flushTimer = useRef<number | undefined>(undefined);
+  const storageDirty = useRef(false);
   /**
    * 重排开关。**先按原样渲染，量完再决定**（见 needsReflow）——
    * 判过一次就不再自动判：之后用户在工具条上怎么切就是怎么切，
@@ -178,7 +220,14 @@ export function HtmlViewer(props: Props) {
 
   /** iframe 加载完 → 量一次 → 该重排就重排。窄屏才管，桌面上一律照作者的来 */
   const onFrameLoad = () => {
-    if (decided.current || window.innerWidth >= 700) return;
+    /*
+     * 第一次 load 往往是 srcdoc 还是空串时那次（资源还在解析）：那一帧里一个文字块
+     * 都没有，量出来必然是"不用重排"，却把 decided 钉死了——之后真正的页面进来
+     * 就再也不量。这是个时序竞态（v0.11.24 加了一次 setState 之后偶发暴露），
+     * 空文档一律不算数。
+     */
+    if (!doc || decided.current || window.innerWidth >= 700) return;
+    if (scripts) return; // 跨源读不到 contentDocument；量法在 iframe 里跑，结果走 message
     decided.current = true;
     try {
       if (needsReflow(frame.current?.contentDocument ?? null, window.innerWidth)) setReflow(true);
@@ -186,6 +235,48 @@ export function HtmlViewer(props: Props) {
       // 读不到 contentDocument（理论上同源读得到）就别猜，保持原样
     }
   };
+
+  /** 把攒下的 storage 写盘 */
+  const flushStorage = () => {
+    window.clearTimeout(flushTimer.current);
+    flushTimer.current = undefined;
+    if (!storageDirty.current || !props.writeText || storage.current === null) return;
+    storageDirty.current = false;
+    const path = storagePathFor(props.path);
+    props.writeText(path, serializeStorageFile(storage.current)).catch((e) => {
+      console.error('HTML 工具数据写盘失败', path, e);
+      setNote('工具的数据没能保存（写盘失败），关掉前请把内容另存');
+    });
+  };
+
+  /*
+   * 只认自己这个 iframe 发来的消息：库里可能同时开着别的 iframe（PDF 阅读器），
+   * `e.source` 比 origin 靠得住——沙箱页面的 origin 一律是 "null"。
+   */
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (!frame.current || e.source !== frame.current.contentWindow) return;
+      const d = e.data as { type?: string; name?: string; data?: unknown; reflow?: boolean } | null;
+      if (!d || typeof d !== 'object') return;
+      if (d.type === 'ivnote-storage' && d.name === 'local' && d.data && typeof d.data === 'object') {
+        const clean: Record<string, string> = {};
+        for (const [k, v] of Object.entries(d.data as Record<string, unknown>)) clean[k] = String(v);
+        storage.current = clean;
+        storageDirty.current = true;
+        window.clearTimeout(flushTimer.current);
+        flushTimer.current = window.setTimeout(flushStorage, 400);
+      } else if (d.type === 'ivnote-measure' && !decided.current) {
+        decided.current = true;
+        if (d.reflow) setReflow(true);
+      }
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.path, props.writeText]);
+
+  // 关掉 / 切走时把没写完的数据写下去，别让最后一笔丢在定时器里
+  useEffect(() => () => flushStorage(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let cancelled = false;
@@ -197,20 +288,59 @@ export function HtmlViewer(props: Props) {
       revoke();
       const parsed = new DOMParser().parseFromString(props.html, 'text/html');
       let missing = 0;
+      setScripted(detectScripts(parsed));
 
-      // 图片：相对路径 → 库里读出来的 blob URL
+      // 图片：相对路径 → 库里读出来的 blob URL（脚本模式下跨源读不到 blob:，转 data:）
       for (const img of Array.from(parsed.querySelectorAll('img'))) {
         const src = img.getAttribute('src') ?? '';
         if (!src || /^(https?:|data:|blob:)/i.test(src)) continue;
         try {
           const url = await props.resolveAsset(resolveVaultPath(props.path, src));
           if (url) {
-            img.setAttribute('src', url);
             urls.current.push(url);
+            img.setAttribute('src', scripts ? await blobUrlToDataUrl(url) : url);
           } else missing++;
         } catch {
           missing++;
         }
+      }
+
+      if (scripts) {
+        // 相对路径的脚本文件：和样式表一样读进来内联（沙箱里相对路径什么都拿不到）
+        for (const sc of Array.from(parsed.querySelectorAll('script[src]'))) {
+          const src = sc.getAttribute('src') ?? '';
+          if (!src || /^(https?:|data:|blob:)/i.test(src)) continue;
+          try {
+            const js = await props.readText(resolveVaultPath(props.path, src));
+            sc.removeAttribute('src');
+            sc.textContent = js;
+          } catch {
+            sc.remove();
+            missing++;
+          }
+        }
+        // 工具上次存下的数据 → 注入 shim（必须排在页面自己的脚本前面）
+        let initial: Record<string, string> = {};
+        try {
+          initial = parseStorageFile(await props.readText(storagePathFor(props.path)));
+        } catch {
+          initial = {}; // 还没存过
+        }
+        storage.current = initial;
+        const head = parsed.head ?? parsed.documentElement;
+        const shim = parsed.createElement('script');
+        shim.setAttribute('data-ivnote', 'storage');
+        shim.textContent = storageShim(initial);
+        head.insertBefore(shim, head.firstChild);
+        // 窄屏才量；桌面一律照作者的来
+        if (window.innerWidth < 700) {
+          const m = parsed.createElement('script');
+          m.setAttribute('data-ivnote', 'measure');
+          m.textContent = measureScript(needsReflow.toString());
+          (parsed.body ?? parsed.documentElement).appendChild(m);
+        }
+      } else {
+        storage.current = null;
       }
 
       // 外部样式表：读成内联 <style>（sandbox 下不会去发网络请求，相对路径也拿不到）
@@ -245,7 +375,7 @@ export function HtmlViewer(props: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.path, props.html]);
+  }, [props.path, props.html, scripts]);
 
   // 组件卸载时把 blob URL 收掉，否则每开一次就漏一批
   useEffect(
@@ -282,6 +412,17 @@ export function HtmlViewer(props: Props) {
         >
           <RibbonIcon name={reflow ? 'list-ul' : 'table'} size={15} />
         </button>
+        {scripted && props.onScriptsToggle && (
+          <button
+            className={`icon-btn ${scripts ? 'on' : ''}`}
+            title={scripts ? '脚本运行中（点击停止；数据存在同名 .data.json，随笔记同步）' : '运行这个页面的脚本'}
+            aria-pressed={scripts}
+            aria-label="运行脚本"
+            onClick={() => props.onScriptsToggle?.(!scripts)}
+          >
+            <RibbonIcon name="play" size={15} />
+          </button>
+        )}
         {props.onOpenExternal && (
           <button className="icon-btn" title="用浏览器打开（可执行脚本）" onClick={props.onOpenExternal}>
             <RibbonIcon name="external-link" size={15} />
@@ -291,16 +432,35 @@ export function HtmlViewer(props: Props) {
           <RibbonIcon name="close" size={15} />
         </button>
       </div>
+      {/*
+        带脚本、没在跑：说在明处。此前页面自己那条 <noscript> 提示被状态栏压着，
+        用户看到的是半句「此工具需要浏览器允许 JavaScript 才能本」——而且就算看全了，
+        应用里也没有任何一处能"允许"。这是这个仓库第八次栽在「能力在、入口没接」上。
+      */}
+      {scripted && !scripts && props.onScriptsToggle && (
+        <div className="html-hint">
+          <span>这个页面带脚本，当前没有运行——按钮可能没反应、数据不会保存。</span>
+          <button className="btn small primary" onClick={() => props.onScriptsToggle?.(true)}>
+            运行脚本
+          </button>
+          <span className="html-hint-sub">在隔离沙箱里跑，碰不到笔记和账号；数据存到同名 .data.json，随笔记同步</span>
+        </div>
+      )}
       <iframe
+        /* 切换脚本模式必须换一个 iframe：sandbox 属性改了不会作用到已加载的页面 */
+        key={scripts ? 'scripts' : 'static'}
         ref={frame}
         onLoad={onFrameLoad}
         className="html-frame"
         title={baseName(props.path)}
         /*
-         * 只给 same-origin，不给 scripts：脚本一行都跑不了。
+         * 静态：只给 same-origin，不给 scripts——脚本一行都跑不了。
          * 空 sandbox 会让 srcdoc 根本不加载（见文件头那段），别再"更严"了。
+         * 脚本模式：给 scripts，不给 same-origin——页面在不透明来源里跑，
+         * 摸不到应用的 DOM / localStorage / IPC。**两个绝不能一起给。**
          */
-        sandbox="allow-same-origin"
+        sandbox={scripts ? 'allow-scripts allow-forms allow-modals allow-downloads' : 'allow-same-origin'}
+        allow={scripts ? 'clipboard-read; clipboard-write' : undefined}
         srcDoc={srcDoc}
       />
     </div>

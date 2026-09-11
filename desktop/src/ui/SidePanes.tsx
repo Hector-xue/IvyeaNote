@@ -24,6 +24,8 @@ import { RibbonIcon } from './Icons';
 import { buildTagIndex } from '../lib/tags';
 import { originalPathOf } from '../hooks/useTrash';
 import type { SearchDoc } from '../lib/searchIndex';
+import type { DeletedFile } from '../lib/api';
+import { fmtSize, fmtWhen } from '../lib/when';
 
 /** 名字（去扩展名）与所在目录，列表里分两级显示 */
 function splitPath(path: string): { name: string; dir: string } {
@@ -99,6 +101,12 @@ export interface TrashPaneProps {
   onPurge(path: string): void;
   /** 清空整个回收站；不传就不显示那个入口 */
   onPurgeAll?(): void;
+  /**
+   * v0.11.24：云端已删除、本地没有的文件。本机回收站只有这台设备见过的删除；
+   * 在别的设备上删掉、这台从没拉到过的（或换了台新机器），只有云端这份墓碑清单知道。
+   */
+  cloud?: readonly DeletedFile[];
+  onCloudRestore?(f: DeletedFile): void;
 }
 
 /**
@@ -109,7 +117,8 @@ export interface TrashPaneProps {
  * 两个动作收进行尾的图标里，hover 才浮现：回收站是个偶尔来一次的地方，
  * 常显的按钮只会把列表变成按钮墙。
  */
-export function TrashPane({ list, onRestore, onPurge, onPurgeAll }: TrashPaneProps) {
+export function TrashPane({ list, onRestore, onPurge, onPurgeAll, cloud, onCloudRestore }: TrashPaneProps) {
+  const cloudList = cloud ?? [];
   return (
     <div className="side-pane">
       <div className="sp-head">
@@ -121,7 +130,10 @@ export function TrashPane({ list, onRestore, onPurge, onPurgeAll }: TrashPanePro
         )}
       </div>
       {list.length === 0 ? (
-        <p className="sp-empty">回收站是空的。删掉的笔记会先到这里，可以原路恢复。</p>
+        <p className="sp-empty">
+          回收站是空的。删掉的笔记会先到这里，可以原路恢复
+          {cloudList.length === 0 ? '；别的设备删掉的，同步过来时也会先进这里。' : '。'}
+        </p>
       ) : (
         <div className="sp-list">
           {list.map((p) => {
@@ -157,6 +169,45 @@ export function TrashPane({ list, onRestore, onPurge, onPurgeAll }: TrashPanePro
             );
           })}
         </div>
+      )}
+      {cloudList.length > 0 && (
+        <>
+          <div className="sp-head sp-head-2">
+            <span className="sp-head-title">云端已删除 · {cloudList.length} 项</span>
+          </div>
+          <p className="sp-empty sp-note">
+            在别的设备上删掉、这台机器上没有的文件。找回后会写回原位置并同步到所有设备。
+          </p>
+          <div className="sp-list">
+            {cloudList.map((f) => {
+              const { name, dir } = splitPath(f.path);
+              return (
+                <div key={f.path} className="sp-row sp-row-static" title={`${f.path} · ${fmtSize(f.size)}`}>
+                  <span className="sp-ico">
+                    <RibbonIcon name="cloud" size={14} />
+                  </span>
+                  <span className="sp-text">
+                    <span className="sp-name">{name}</span>
+                    <span className="sp-sub">
+                      {dir ? `${dir} · ` : ''}
+                      {fmtWhen(Date.parse(f.deleted_at))} 删除
+                    </span>
+                  </span>
+                  <span className="sp-actions">
+                    <button
+                      className="sp-act"
+                      title="从云端找回到原位置"
+                      aria-label="从云端找回到原位置"
+                      onClick={() => onCloudRestore?.(f)}
+                    >
+                      <RibbonIcon name="undo" size={14} />
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
     </div>
   );

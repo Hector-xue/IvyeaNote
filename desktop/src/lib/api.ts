@@ -36,6 +36,26 @@ export interface ServerChange {
   device_id: string;
 }
 
+/** 某路径在云端的一个历史版本（v0.11.24 文件历史） */
+export interface HistoryVersion {
+  version: number;
+  op: 'upsert' | 'delete';
+  blob_hash?: string;
+  size: number;
+  device_id: string;
+  /** RFC3339 UTC */
+  created_at: string;
+}
+
+/** 云端当前已删除的文件（v0.11.24）；blob_hash 指向删除前最后一版 */
+export interface DeletedFile {
+  path: string;
+  version: number;
+  blob_hash: string;
+  size: number;
+  deleted_at: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -240,6 +260,21 @@ export class SyncClient {
     limit = 500
   ): Promise<{ changes: ServerChange[]; next_cursor: number }> {
     return this.req(`/sync/changes?vault_id=${vaultId}&cursor=${cursor}&limit=${limit}`);
+  }
+
+  // ---------- 文件历史（v0.11.24） ----------
+
+  /**
+   * 某路径的历史版本，新的在前。内容一直都在服务端（changes 只追加、blob 不删），
+   * 这条只是把它们列出来；拿内容仍走 `getBlob(blob_hash)`。
+   */
+  history(vaultId: number, path: string, limit = 50): Promise<{ versions: HistoryVersion[] }> {
+    return this.req(`/sync/history?vault_id=${vaultId}&path=${encodeURIComponent(path)}&limit=${limit}`);
+  }
+
+  /** 云端当前已删除的文件（全端共同的"可恢复"清单——回收站只在删除的那台设备上有） */
+  deletedFiles(vaultId: number): Promise<{ files: DeletedFile[] }> {
+    return this.req(`/sync/deleted?vault_id=${vaultId}`);
   }
 
   /*

@@ -11,6 +11,9 @@ import { aiSubmenu, type AiMenuAction } from '../lib/editorMenu';
 import { SearchPanel } from './SearchPanel';
 import { GraphView } from './GraphView';
 import { TagPane, TrashPane } from './SidePanes';
+import type { HistoryPaneProps } from './HistoryPane';
+import type { RightTab } from './RightPanel';
+import type { DeletedFile } from '../lib/api';
 import { PdfViewer } from './PdfViewer';
 import { ImageViewer } from './ImageViewer';
 import { BaseView } from './BaseView';
@@ -160,6 +163,10 @@ interface Props {
   onOpenHtmlExternal?(path: string): void;
   resolveAsset?(rel: string): Promise<string | null>;
   readVaultText?(rel: string): Promise<string>;
+  /** v0.11.24：HTML 脚本模式——工具的数据落到 `<path>.data.json` */
+  writeVaultText?(rel: string, text: string): Promise<void>;
+  htmlScriptsAllowed?: boolean;
+  onHtmlScriptsToggle?(allow: boolean): void;
   /** 库里全部笔记（.base 求值要读 frontmatter / 标签 / 链接） */
   /**
    * v0.11.15：喂给 `.base` 的是**库里的全部文件**（含图片 / PDF / 别的 .base），
@@ -198,11 +205,19 @@ interface Props {
   /** v0.11.16：左栏当前面板 + 切换回调（状态在 App） */
   sidebarTab?: SidebarTab;
   onSidebarTab?(tab: SidebarTab): void;
+  /** v0.11.24：右栏「历史」标签的数据与动作（hooks/useFileHistory） */
+  historyProps?: Omit<HistoryPaneProps, 'onClose'>;
+  /** v0.11.24：外面（命令面板）要右栏切到某个标签；收起着就先展开 */
+  wantRightTab?: RightTab | null;
+  onWantRightTabConsumed?(): void;
   /** v0.11.16：回收站现在是左栏的一个面板，数据与动作由 App 给 */
   trashList?: readonly string[];
   onTrashRestore?(path: string): void;
   onTrashPurge?(path: string): void;
   onTrashPurgeAll?(): void;
+  /** v0.11.24：云端已删除、本地没有的文件（回收站面板第二段） */
+  cloudDeleted?: readonly DeletedFile[];
+  onCloudRestore?(f: DeletedFile): void;
   /** v0.11.16：点标签 → 切到搜索面板并把 `#标签` 灌进搜索框 */
   onPickTag?(tag: string): void;
   /** v0.11.16：外部灌一个搜索词进侧栏搜索框（点标签用）。n 用来区分"又点了一次" */
@@ -266,6 +281,16 @@ export function MainView(props: Props) {
     [props]
   );
   const [rightCollapsed, setRightCollapsed] = useState(loadRightPanelCollapsed);
+  /** 主区现在放的是不是笔记编辑器（状态栏的形状和内容都按这个分） */
+  const viewingNote = !props.pdfView && !props.htmlDoc && !props.baseDoc && !props.imageView && !props.graphOpen;
+  // 命令面板「查看文件历史」：右栏收着的话先展开，不然点了什么都看不见
+  useEffect(() => {
+    if (props.wantRightTab && rightCollapsed) {
+      setRightCollapsed(false);
+      saveRightPanelCollapsed(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.wantRightTab]);
   /** 方案 §4.4：侧栏与右栏可拖拽调宽，宽度持久化 */
   const sideW = usePanelWidth({
     key: 'ivnote.sidebar.width',
@@ -579,6 +604,8 @@ export function MainView(props: Props) {
               onRestore={(p) => props.onTrashRestore?.(p)}
               onPurge={(p) => props.onTrashPurge?.(p)}
               onPurgeAll={props.onTrashPurgeAll}
+              cloud={props.cloudDeleted}
+              onCloudRestore={props.onCloudRestore}
             />
           ) : (
           <>
@@ -643,7 +670,14 @@ export function MainView(props: Props) {
           现在状态栏钉在这一层里，AI 面板排在这一层**外面**：浮层只会浮在正文上，
           永远盖不住下面那块面板。
         */}
-        <div className="editor-stage">
+        {/*
+          v0.11.24：主区放的不是笔记（HTML / PDF / 图片 / 表格 / 图谱）时，
+          状态栏改成**贴底的一条**而不是浮层：iframe 里的页面没法像正文那样给自己
+          留 40vh 底部空白，浮层一定压住它最后一行（用户截图：「下面一行字又被挡住了」）。
+          同时那几样只对笔记有意义的项（插入图片 / AI / 分栏 / 反链 / 字数）不再显示——
+          此前 HTML 开着时 currentPath 还是上一篇笔记，状态栏照旧摆着"3,786 词"。
+        */}
+        <div className={`editor-stage ${viewingNote ? '' : 'stage-frame'}`}>
           {props.graphOpen ? (
             <GraphView
               docs={props.searchDocs ?? []}
@@ -657,6 +691,9 @@ export function MainView(props: Props) {
               html={props.htmlDoc.html}
               resolveAsset={props.resolveAsset}
               readText={props.readVaultText}
+              writeText={props.writeVaultText}
+              scriptsAllowed={props.htmlScriptsAllowed}
+              onScriptsToggle={props.onHtmlScriptsToggle}
               onClose={() => props.onCloseHtml?.()}
               onOpenExternal={
                 props.onOpenHtmlExternal ? () => props.onOpenHtmlExternal?.(props.htmlDoc!.path) : undefined
@@ -787,7 +824,7 @@ export function MainView(props: Props) {
                 用户的原话是「我的 ivyeanote 怎么无法插入图片啊，obsidian 就可以」。
                 这是这个仓库第六次「能力写好了、入口没接」。
               */}
-              {props.onInsertImage && props.currentPath && !props.pdfView && (
+              {props.onInsertImage && props.currentPath && viewingNote && (
                 <button
                   className="st-item"
                   title="插入图片（也可以直接粘贴或拖进来）"
@@ -804,7 +841,7 @@ export function MainView(props: Props) {
                 这是这个仓库第七次「能力写好了、入口没接」——所以这一版给了两个明面上的
                 入口：编辑区右键（选中文字后手就在那儿）和这颗状态栏按钮。
               */}
-              {props.aiActions && props.aiActions.length > 0 && props.currentPath && !props.pdfView && (
+              {props.aiActions && props.aiActions.length > 0 && props.currentPath && viewingNote && (
                 <button
                   className="st-item"
                   title="AI：校对、润色、精简、写摘要…（替换类动作要先选中一段文字）"
@@ -834,7 +871,7 @@ export function MainView(props: Props) {
                   AI
                 </button>
               )}
-              {props.onOpenSplit && !props.pdfView && props.currentPath && (
+              {props.onOpenSplit && viewingNote && props.currentPath && (
                 <button
                   className={`st-item ${props.splitPath ? 'on' : ''}`}
                   title={props.splitPath ? '关闭分栏' : '左右分栏'}
@@ -903,7 +940,7 @@ export function MainView(props: Props) {
                 而屏幕上摆着的是一份 PDF，写 0 只会让人以为出错了。
                 另外补上反向链接数（Obsidian 状态栏就有这一项），点它展开右栏那个标签。
               */}
-              {!props.pdfView && props.currentPath && (
+              {viewingNote && props.currentPath && (
                 <>
                   {props.onOpenWikiPath && (
                     <span className="st-item st-count" title="指向这篇笔记的链接数">
@@ -937,6 +974,9 @@ export function MainView(props: Props) {
           setRightCollapsed(next);
           saveRightPanelCollapsed(next);
         }}
+        historyProps={props.historyProps}
+        wantTab={props.wantRightTab}
+        onWantTabConsumed={props.onWantRightTabConsumed}
       />
       <ContextMenu anchor={menu} onClose={() => setMenu(null)} />
     </>

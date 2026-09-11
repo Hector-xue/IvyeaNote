@@ -65,6 +65,32 @@ type Blob struct {
 	CreatedAt time.Time
 }
 
+// Version 某路径历史上的一个版本（文件历史面板用）。
+//
+// 服务端从第一天起就把每次 push 都追加进 changes、blob 一个都不删——
+// 每一版的内容其实一直都在库里，只是此前没有任何一条路能把它拿回来
+// （用户：「被误修改的可真就无法找回了」）。这个类型就是把那条路修出来。
+type Version struct {
+	Version   int64
+	Op        string
+	BlobHash  *string
+	Size      int64
+	DeviceID  string
+	CreatedAt time.Time
+}
+
+// DeletedFile 当前处于已删除状态的路径，附带删除前最后一版的内容指针。
+//
+// 回收站只在**删除的那台设备**上有；别的设备 pull 到 delete 后是直接把本地文件
+// 删掉的，那边的回收站里什么都没有。云端这份墓碑清单才是全端共同的"可恢复"来源。
+type DeletedFile struct {
+	Path      string
+	Version   int64
+	BlobHash  *string
+	Size      int64
+	DeletedAt time.Time
+}
+
 // Store 全部数据访问。
 type Store interface {
 	// Close 关闭底层连接。
@@ -118,6 +144,12 @@ type Store interface {
 	BeginTx(ctx context.Context) (Tx, error)
 	// Pull 按游标增量拉取某库的变更流。
 	Pull(ctx context.Context, vaultID, cursor int64, limit int) ([]Change, int64, error)
+
+	// ---------- 文件历史（v0.11.24） ----------
+	// History 某路径的历史版本，新的在前，最多 limit 条。
+	History(ctx context.Context, vaultID int64, path string, limit int) ([]Version, error)
+	// DeletedFiles 某库当前已删除的路径（最近删的在前）。
+	DeletedFiles(ctx context.Context, vaultID int64) ([]DeletedFile, error)
 }
 
 // mcpPrefix 取哈希前 8 位做人眼可辨的标识。**不能存明文前缀**——

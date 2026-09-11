@@ -2752,3 +2752,181 @@ button.st-item:hover {
 .pal-name {
   font-weight: 500;
 }
+
+/* ---- 文件历史面板（v0.11.24）---- */
+/*
+ * 右栏第三个标签。列表在上、选中那版的对照在下，各自滚动；
+ * 行用 .sp-row 那套，对照用 .ai-row 那套——"改了哪儿"在这个产品里只该长一个样。
+ */
+.hp {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.hp-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 2px;
+}
+.hp-title {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+.hp-hint,
+.hp-err {
+  margin: 4px 10px 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.hp-err {
+  color: #b26a3c;
+}
+.hp-list {
+  flex: 0 1 auto;
+  max-height: 46%;
+}
+.sp-row.on {
+  background: var(--panel-2);
+}
+.hp-deleted .sp-name {
+  color: var(--muted);
+}
+.hp-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.hp-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px 2px;
+  font-size: 12px;
+}
+.hp-detail-when {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.hp-detail-src {
+  color: var(--muted);
+}
+.hp-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+}
+.hp-gap {
+  flex: 1;
+}
+.hp-legend {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.hp-legend i {
+  font-style: normal;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.hp-legend i.add {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.hp-legend i.del {
+  background: color-mix(in srgb, #d95a4a 12%, transparent);
+}
+.hp-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.hp-full {
+  margin: 0;
+  padding: 6px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+}
+.hp-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+/* 面板里的对照行不要 12px 内边距——右栏本来就窄 */
+.hp .ai-row {
+  padding: 0 6px;
+}
+/* 历史标签要把面板撑满、内部自己滚，不能让整个 rp-body 一起滚 */
+.rp-body-fill {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+/* 回收站第二段「云端已删除」：与第一段之间一条发丝线，标题不再加粗抢戏 */
+.sp-head-2 {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.sp-note {
+  padding-top: 0;
+  padding-bottom: 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+/* 手机端文件历史那张纸：面板要有高度才能列表在上、对照在下各自滚 */
+.m-history2 .m-history2-body {
+  height: 72vh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 0;
+}
+.m-history2 .sp-row {
+  padding: 10px 14px;
+  font-size: 15px;
+}
+.m-history2 .hp-list {
+  max-height: 40%;
+}
+
+/* ---- HTML 查看器：脚本提示条（v0.11.24）---- */
+/*
+ * 在工具条下面、页面上面。不做成盖在页面上的浮层：它要说的话（按钮可能没反应）
+ * 恰恰是在人点了页面没反应之后才会去找的。
+ */
+.html-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.html-hint .btn.small {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+.html-hint-sub {
+  color: var(--muted);
+  font-size: 12px;
+}
+.html-bar .icon-btn.on {
+  color: var(--accent);
+  background: var(--accent-weak, color-mix(in srgb, var(--accent) 12%, transparent));
+}

@@ -63,6 +63,14 @@
 - 客户端循环拉取直到 next_cursor 不再前进；每条 change 应用到本地后更新该 path 的本地 version。
 - **应用规则**：跳过自己 device_id 的记录（自己的写已在本地）；upsert 且本地无此内容则下载 blob 写盘；delete 则删除本地文件。
 
+### 3.3b 文件历史（v0.11.24，只读）
+changes 只追加、blob 不删（§5）意味着每一版都在；这两条只是把它们列出来。**恢复不需要新接口**：客户端把旧版 blob 写回本地，下一轮 push 就是普通 upsert（base_version = 当前版本）。
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /sync/history?vault_id=1&path=a.md&limit=50 | 该路径历史版本，新的在前：`{versions:[{version,op,blob_hash?,size,device_id,created_at}]}` |
+| GET | /sync/deleted?vault_id=1 | 当前已删除的路径（最近删的在前），`blob_hash` 指向删除前最后一版：`{files:[{path,version,blob_hash,size,deleted_at}]}` |
+
 ### 3.4 Blob
 | 方法 | 路径 | 说明 |
 |---|---|---|

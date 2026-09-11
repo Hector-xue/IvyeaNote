@@ -58,6 +58,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/devices", s.authed(s.handleDeviceRegister))
 	mux.Handle("POST /api/v1/sync/push", s.authed(s.handlePush))
 	mux.Handle("GET /api/v1/sync/changes", s.authed(s.handlePull))
+	// v0.11.24：文件历史。内容一直都在（changes 只追加、blob 不删），这里只是把它们列出来
+	mux.Handle("GET /api/v1/sync/history", s.authed(s.handleHistory))
+	mux.Handle("GET /api/v1/sync/deleted", s.authed(s.handleDeleted))
 	mux.Handle("PUT /api/v1/blobs/{hash}", s.authed(s.handleBlobPut))
 	mux.Handle("GET /api/v1/blobs/{hash}", s.authed(s.handleBlobGet))
 	mux.Handle("GET /api/v1/admin/users", s.requireAdmin(s.handleAdminUsers))

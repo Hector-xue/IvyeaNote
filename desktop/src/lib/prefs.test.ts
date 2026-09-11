@@ -53,6 +53,8 @@ describe('读写与容错', () => {
       autoSync: false,
       attachMode: 'vault',
       autoDensity: true,
+      htmlScripts: 'always',
+      htmlScriptFiles: ['工具/a.html'],
       ai: {
         baseUrl: 'https://api.example.com',
         apiKey: 'k',
@@ -67,6 +69,8 @@ describe('读写与容错', () => {
       autoSync: false,
       attachMode: 'vault',
       autoDensity: true,
+      htmlScripts: 'always',
+      htmlScriptFiles: ['工具/a.html'],
       ai: {
         baseUrl: 'https://api.example.com',
         apiKey: 'k',
@@ -74,6 +78,14 @@ describe('读写与容错', () => {
         actions: [{ id: 'a1', label: '客户口吻', instruction: '改成给客户看的口吻', mode: 'replace' }],
       },
     });
+  });
+
+  it('HTML 脚本默认不跑（v0.11.24 新增，老用户升级后行为不变）', () => {
+    expect(PREF_DEFAULTS.htmlScripts).toBe('ask');
+    expect(PREF_DEFAULTS.htmlScriptFiles).toEqual([]);
+    localStorage.setItem('ivnote.prefs', JSON.stringify({ htmlScripts: 'yolo', htmlScriptFiles: [1, 'x.html'] }));
+    expect(loadPrefs().htmlScripts).toBe('ask');
+    expect(loadPrefs().htmlScriptFiles).toEqual(['x.html']);
   });
 
   /*

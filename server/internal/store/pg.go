@@ -273,6 +273,56 @@ func (s *PGStore) Pull(ctx context.Context, vaultID, cursor int64, limit int) ([
 	return out, next, rows.Err()
 }
 
+// ---------- 文件历史 ----------
+
+func (s *PGStore) History(ctx context.Context, vaultID int64, path string, limit int) ([]Version, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT c.version, c.op, c.blob_hash,
+		   COALESCE((SELECT size FROM blobs b WHERE b.hash=c.blob_hash LIMIT 1), 0),
+		   c.device_id, c.created_at
+		 FROM changes c WHERE c.vault_id=$1 AND c.path=$2 ORDER BY c.version DESC LIMIT $3`,
+		vaultID, path, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Version{}
+	for rows.Next() {
+		var v Version
+		if err := rows.Scan(&v.Version, &v.Op, &v.BlobHash, &v.Size, &v.DeviceID, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (s *PGStore) DeletedFiles(ctx context.Context, vaultID int64) ([]DeletedFile, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT h.path, h.version, u.blob_hash,
+		   COALESCE((SELECT size FROM blobs b WHERE b.hash=u.blob_hash LIMIT 1), 0),
+		   d.created_at
+		 FROM heads h
+		 JOIN changes d ON d.vault_id=h.vault_id AND d.path=h.path AND d.version=h.version
+		 LEFT JOIN changes u ON u.vault_id=h.vault_id AND u.path=h.path AND u.op='upsert'
+		   AND u.version=(SELECT MAX(version) FROM changes x WHERE x.vault_id=h.vault_id AND x.path=h.path AND x.op='upsert')
+		 WHERE h.vault_id=$1 AND h.deleted=true
+		 ORDER BY d.id DESC`, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DeletedFile{}
+	for rows.Next() {
+		var f DeletedFile
+		if err := rows.Scan(&f.Path, &f.Version, &f.BlobHash, &f.Size, &f.DeletedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // ---------- MCP 长期令牌 ----------
 
 func (s *PGStore) CreateMCPToken(ctx context.Context, hash string, userID int64, name string) error {

@@ -592,3 +592,64 @@ describe('本机私有目录不进同步（v0.11.11 修的回归）', () => {
     expect(report.pulled).toBe(1);
   });
 });
+
+describe('文件历史（v0.11.24）：远端删除进回收站、自动合并前留快照', () => {
+  it('H1 别的设备删了一篇 → 这台机器不再直接物理删，先进自己的 .trash/', async () => {
+    const local = new Map([['日记/x.md', 'x-content']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 4, path: '日记/x.md', op: 'delete', version: 4, device_id: 'other' },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 3;
+    meta.versions['日记/x.md'] = 3;
+    meta.bases['日记/x.md'] = 'x-content';
+
+    await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+
+    expect(local.has('日记/x.md')).toBe(false); // 跟随删除
+    const trashed = [...local.keys()].filter((p) => p.startsWith('.trash/'));
+    expect(trashed).toHaveLength(1);
+    expect(trashed[0]).toMatch(/^\.trash\/\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-日记__x\.md$/);
+    expect(local.get(trashed[0])).toBe('x-content');
+    // 回收站里的东西不会被当作"本地新文件"推上去
+    expect(meta.versions['.trash/' + trashed[0].slice('.trash/'.length)]).toBeUndefined();
+  });
+
+  it('H2 远端删的附件同样进回收站', async () => {
+    const local = new Map([['图/a.png', 'PNGBYTES']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 2, path: '图/a.png', op: 'delete', version: 2, device_id: 'other' },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 1;
+    meta.versions['图/a.png'] = 1;
+    meta.assets = { '图/a.png': await sha256(new TextEncoder().encode('PNGBYTES')) };
+
+    await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+
+    expect(local.has('图/a.png')).toBe(false);
+    const trashed = [...local.keys()].filter((p) => p.startsWith('.trash/'));
+    expect(trashed).toHaveLength(1);
+    expect(local.get(trashed[0])).toBe('PNGBYTES');
+  });
+
+  it('H3 三方自动合并覆盖本地之前，本地那份留在 .ivyea/history/', async () => {
+    const local = new Map([['n.md', 'base\nmine']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 2, path: 'n.md', op: 'upsert', version: 2, device_id: 'other', blob_hash: 'h-m' },
+    ];
+    blobStore.set('h-m', 'theirs\nbase');
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 1;
+    meta.versions['n.md'] = 1;
+    meta.bases['n.md'] = 'base';
+
+    const report = await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+
+    expect(report.merged).toBe(1);
+    expect(local.get('n.md')).toBe('theirs\nbase\nmine');
+    const snaps = [...local.keys()].filter((p) => p.startsWith('.ivyea/history/n.md/'));
+    expect(snaps).toHaveLength(1);
+    expect(local.get(snaps[0])).toBe('base\nmine');
+  });
+});

@@ -300,6 +300,69 @@ func (s *SQLiteStore) Pull(ctx context.Context, vaultID, cursor int64, limit int
 	return out, next, rows.Err()
 }
 
+// ---------- 文件历史 ----------
+
+// blob 大小用子查询而不是 JOIN：blobs 主键是 (hash, user_id)，而 changes 里
+// 没有 user_id；同一个 hash 不管属于谁内容都一样长，取任意一条即可。
+const sqliteHistorySQL = `SELECT c.version, c.op, c.blob_hash,
+	COALESCE((SELECT size FROM blobs b WHERE b.hash=c.blob_hash LIMIT 1), 0),
+	c.device_id, c.created_at
+	FROM changes c WHERE c.vault_id=? AND c.path=? ORDER BY c.version DESC LIMIT ?`
+
+func (s *SQLiteStore) History(ctx context.Context, vaultID int64, path string, limit int) ([]Version, error) {
+	rows, err := s.db.QueryContext(ctx, sqliteHistorySQL, vaultID, path, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Version{}
+	for rows.Next() {
+		var v Version
+		var created string
+		if err := rows.Scan(&v.Version, &v.Op, &v.BlobHash, &v.Size, &v.DeviceID, &created); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			v.CreatedAt = t
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// 已删除 = heads.deleted=1；恢复要的是删除**之前**那一版的 blob，
+// 所以再往 changes 里找该路径最后一次 upsert。
+const sqliteDeletedSQL = `SELECT h.path, h.version, u.blob_hash,
+	COALESCE((SELECT size FROM blobs b WHERE b.hash=u.blob_hash LIMIT 1), 0),
+	d.created_at
+	FROM heads h
+	JOIN changes d ON d.vault_id=h.vault_id AND d.path=h.path AND d.version=h.version
+	LEFT JOIN changes u ON u.vault_id=h.vault_id AND u.path=h.path AND u.op='upsert'
+	  AND u.version=(SELECT MAX(version) FROM changes x WHERE x.vault_id=h.vault_id AND x.path=h.path AND x.op='upsert')
+	WHERE h.vault_id=? AND h.deleted=1
+	ORDER BY d.id DESC`
+
+func (s *SQLiteStore) DeletedFiles(ctx context.Context, vaultID int64) ([]DeletedFile, error) {
+	rows, err := s.db.QueryContext(ctx, sqliteDeletedSQL, vaultID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DeletedFile{}
+	for rows.Next() {
+		var f DeletedFile
+		var created string
+		if err := rows.Scan(&f.Path, &f.Version, &f.BlobHash, &f.Size, &created); err != nil {
+			return nil, err
+		}
+		if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
+			f.DeletedAt = t
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // ---------- MCP 长期令牌 ----------
 
 func (s *SQLiteStore) CreateMCPToken(ctx context.Context, hash string, userID int64, name string) error {
