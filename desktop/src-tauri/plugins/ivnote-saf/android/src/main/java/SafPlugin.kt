@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.util.Base64
+import android.webkit.MimeTypeMap
 import androidx.activity.result.ActivityResult
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
@@ -14,6 +15,7 @@ import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSArray
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.util.concurrent.Executors
 
 @InvokeArg
 class TreeArg {
@@ -60,16 +62,57 @@ private data class Node(
  * 所以这里维护 `树URI -> (相对路径 -> Node)` 的缓存：`listEntries` 一次 BFS 把整棵树
  * 读进来（每个目录一个 cursor，而不是每个文件一次查询），之后的读写直接查表。
  * 写入/删除会就地更新缓存，不整棵作废——否则每存一次笔记就要重新遍历全库。
+ *
+ * ## 为什么不在主线程干活（v0.11.27）
+ *
+ * Tauri 的安卓插件命令是在**主线程**上被调用的（`run_on_android_context`）。
+ * 整树 BFS、跨进程 query、文件读写全压在 UI 线程上，迁移几十篇笔记的那几秒里整个
+ * 界面纹丝不动——2026-09-12 用户报的「特别卡、按钮没反应」就是这个。
+ * 现在所有磁盘活都排到 [worker]（单线程，保持命令的先后顺序）上跑，主线程只负责
+ * 收命令、起系统目录选择器；`Invoke.resolve/reject` 本身允许在任意线程调用。
+ * 缓存只在 worker 线程上读写，所以不用加锁。
  */
 private const val PREFS = "ivnote-saf"
 private const val KEY_PENDING_URI = "pending_uri"
 private const val KEY_PENDING_NAME = "pending_name"
 private const val KEY_PENDING_AT = "pending_at"
 
+/** 没有更好的答案时给系统的 MIME；ExternalStorageProvider 对它**不改名**（见 mimeOf） */
+private const val MIME_UNKNOWN = "application/octet-stream"
+
 @TauriPlugin
 class SafPlugin(private val activity: Activity) : Plugin(activity) {
 
   private val cache = HashMap<String, HashMap<String, Node>>()
+
+  /** 所有 ContentResolver 读写都排在这一条线程上（见类注释） */
+  private val worker = Executors.newSingleThreadExecutor { r ->
+    Thread(r, "ivnote-saf").also { it.isDaemon = true }
+  }
+
+  /**
+   * 把一条命令挪到 worker 上执行：body 算出结果就 resolve，抛异常就 reject。
+   * `fallback` 是异常没带消息时给前端看的那句话，和以前各命令里写死的一样。
+   */
+  private fun onWorker(invoke: Invoke, fallback: String, body: () -> JSObject) {
+    worker.execute {
+      val res = try {
+        body()
+      } catch (ex: Exception) {
+        invoke.reject(ex.message ?: fallback)
+        return@execute
+      }
+      invoke.resolve(res)
+    }
+  }
+
+  private val projection = arrayOf(
+    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+    DocumentsContract.Document.COLUMN_MIME_TYPE,
+    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+    DocumentsContract.Document.COLUMN_SIZE,
+  )
 
   // ---------------------------------------------------------------- 选目录
 
@@ -123,7 +166,9 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
       val res = JSObject()
       res.put("uri", uri.toString())
       res.put("name", name)
-      cache.remove(uri.toString())
+      // 缓存只在 worker 线程上碰（见类注释），这里也排过去
+      val key = uri.toString()
+      worker.execute { cache.remove(key) }
       invoke.resolve(res)
     } catch (ex: Exception) {
       invoke.reject(ex.message ?: "无法获得该目录的长期访问权限")
@@ -152,19 +197,25 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
   private fun displayNameOfTree(tree: Uri): String {
     val docId = DocumentsContract.getTreeDocumentId(tree)
     val docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+    displayNameOf(docUri)?.let { return it }
+    return docId.substringAfterLast(':').ifEmpty { tree.lastPathSegment ?: "已选目录" }
+  }
+
+  /** 某个文档在提供方那里的显示名；查不到就 null */
+  private fun displayNameOf(doc: Uri): String? {
     activity.contentResolver.query(
-      docUri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null
+      doc, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null
     )?.use { c ->
       if (c.moveToFirst() && !c.isNull(0)) return c.getString(0)
     }
-    return docId.substringAfterLast(':').ifEmpty { tree.lastPathSegment ?: "已选目录" }
+    return null
   }
 
   // ---------------------------------------------------------------- 遍历
 
   @Command
   fun listEntries(invoke: Invoke) {
-    try {
+    onWorker(invoke, "读取目录失败") {
       val args = invoke.parseArgs(TreeArg::class.java)
       val map = buildIndex(args.tree)
       val arr = JSArray()
@@ -178,9 +229,7 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
       }
       val res = JSObject()
       res.put("entries", arr)
-      invoke.resolve(res)
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "读取目录失败")
+      res
     }
   }
 
@@ -192,42 +241,77 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
     // (documentId, 相对路径前缀)
     val queue = ArrayDeque<Pair<String, String>>()
     queue.add(Pair(rootId, ""))
-    val projection = arrayOf(
-      DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-      DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-      DocumentsContract.Document.COLUMN_MIME_TYPE,
-      DocumentsContract.Document.COLUMN_LAST_MODIFIED,
-      DocumentsContract.Document.COLUMN_SIZE,
-    )
     while (queue.isNotEmpty()) {
       val (parentId, prefix) = queue.removeFirst()
-      val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
-      activity.contentResolver.query(childrenUri, projection, null, null, null)?.use { c ->
-        while (c.moveToNext()) {
-          val id = c.getString(0)
-          val name = c.getString(1) ?: continue
-          val mime = c.getString(2)
-          val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
-          val mtime = if (c.isNull(3)) 0L else c.getLong(3)
-          val size = if (c.isNull(4)) 0L else c.getLong(4)
-          val rel = if (prefix.isEmpty()) name else "$prefix/$name"
-          out[rel] = Node(id, isDir, mtime, size)
-          if (isDir) queue.add(Pair(id, rel))
-        }
+      for ((name, node) in queryChildren(treeUri, parentId)) {
+        val rel = if (prefix.isEmpty()) name else "$prefix/$name"
+        out[rel] = node
+        if (node.isDir) queue.add(Pair(node.documentId, rel))
       }
     }
     cache[tree] = out
     return out
   }
 
+  /** 一个目录的直接子项：显示名 -> Node。一次 cursor。 */
+  private fun queryChildren(treeUri: Uri, parentId: String): List<Pair<String, Node>> {
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+    val out = ArrayList<Pair<String, Node>>()
+    activity.contentResolver.query(childrenUri, projection, null, null, null)?.use { c ->
+      while (c.moveToNext()) {
+        val id = c.getString(0)
+        val name = c.getString(1) ?: continue
+        val mime = c.getString(2)
+        val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
+        val mtime = if (c.isNull(3)) 0L else c.getLong(3)
+        val size = if (c.isNull(4)) 0L else c.getLong(4)
+        out.add(Pair(name, Node(id, isDir, mtime, size)))
+      }
+    }
+    return out
+  }
+
   /** 拿缓存；没有就建一次。 */
   private fun index(tree: String): HashMap<String, Node> = cache[tree] ?: buildIndex(tree)
 
+  /**
+   * 按相对路径定位一个条目。
+   *
+   * 缓存命中直接返回；未命中**只沿着这条路径逐级查**（每层一个 cursor），顺手把沿途
+   * 目录的子项也填进缓存。v0.11.26 及之前这里未命中就整棵树重扫：同步引擎对每个
+   * 还不存在的文件 exists/write 一次，就重扫一次全库——迁移 30 篇笔记要扫 30 遍树，
+   * 而且全在主线程上。
+   *
+   * 逐级查而不是"缓存里没有就当没有"，是为了别的应用刚写进来的文件也能被看见。
+   */
   private fun nodeOf(tree: String, path: String): Node? {
-    val cached = index(tree)[path]
-    if (cached != null) return cached
-    // 缓存里没有：可能是别的应用刚刚写进来的，重扫一次再判定
-    return buildIndex(tree)[path]
+    val map = index(tree)
+    map[path]?.let { return it }
+    val segs = path.split('/').filter { it.isNotEmpty() }
+    if (segs.isEmpty()) return null
+    val treeUri = Uri.parse(tree)
+    var parentId = DocumentsContract.getTreeDocumentId(treeUri)
+    var prefix = ""
+    var found: Node? = null
+    for ((i, seg) in segs.withIndex()) {
+      val built = if (prefix.isEmpty()) seg else "$prefix/$seg"
+      val cached = map[built]
+      if (cached != null) {
+        found = cached
+      } else {
+        var hit: Node? = null
+        for ((name, node) in queryChildren(treeUri, parentId)) {
+          map[if (prefix.isEmpty()) name else "$prefix/$name"] = node
+          if (name == seg) hit = node
+        }
+        found = hit ?: return null
+      }
+      // 中间段必须是目录，否则这条路径不存在
+      if (i < segs.lastIndex && !found.isDir) return null
+      parentId = found.documentId
+      prefix = built
+    }
+    return found
   }
 
   private fun docUri(tree: String, node: Node): Uri =
@@ -237,45 +321,37 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun readText(invoke: Invoke) {
-    try {
+    onWorker(invoke, "读取失败") {
       val args = invoke.parseArgs(PathArg::class.java)
-      val node = nodeOf(args.tree, args.path) ?: throw Exception("文件不存在：${args.path}")
-      val bytes = activity.contentResolver.openInputStream(docUri(args.tree, node))?.use {
-        it.readBytes()
-      } ?: throw Exception("无法读取：${args.path}")
       val res = JSObject()
-      res.put("content", String(bytes, Charsets.UTF_8))
-      invoke.resolve(res)
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "读取失败")
+      res.put("content", String(readAll(args.tree, args.path), Charsets.UTF_8))
+      res
     }
   }
 
   @Command
   fun readBinary(invoke: Invoke) {
-    try {
+    onWorker(invoke, "读取失败") {
       val args = invoke.parseArgs(PathArg::class.java)
-      val node = nodeOf(args.tree, args.path) ?: throw Exception("文件不存在：${args.path}")
-      val bytes = activity.contentResolver.openInputStream(docUri(args.tree, node))?.use {
-        it.readBytes()
-      } ?: throw Exception("无法读取：${args.path}")
       val res = JSObject()
-      res.put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP))
-      invoke.resolve(res)
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "读取失败")
+      res.put("base64", Base64.encodeToString(readAll(args.tree, args.path), Base64.NO_WRAP))
+      res
     }
+  }
+
+  private fun readAll(tree: String, path: String): ByteArray {
+    val node = nodeOf(tree, path) ?: throw Exception("文件不存在：$path")
+    return activity.contentResolver.openInputStream(docUri(tree, node))?.use { it.readBytes() }
+      ?: throw Exception("无法读取：$path")
   }
 
   @Command
   fun entryExists(invoke: Invoke) {
-    try {
+    onWorker(invoke, "判断失败") {
       val args = invoke.parseArgs(PathArg::class.java)
       val res = JSObject()
       res.put("value", nodeOf(args.tree, args.path) != null)
-      invoke.resolve(res)
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "判断失败")
+      res
     }
   }
 
@@ -283,23 +359,19 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun writeText(invoke: Invoke) {
-    try {
+    onWorker(invoke, "写入失败") {
       val args = invoke.parseArgs(WriteTextArg::class.java)
       writeBytes(args.tree, args.path, args.content.toByteArray(Charsets.UTF_8))
-      invoke.resolve(JSObject())
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "写入失败")
+      JSObject()
     }
   }
 
   @Command
   fun writeBinary(invoke: Invoke) {
-    try {
+    onWorker(invoke, "写入失败") {
       val args = invoke.parseArgs(WriteBinaryArg::class.java)
       writeBytes(args.tree, args.path, Base64.decode(args.base64, Base64.DEFAULT))
-      invoke.resolve(JSObject())
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "写入失败")
+      JSObject()
     }
   }
 
@@ -318,13 +390,12 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
       val dirPath = if (slash < 0) "" else path.substring(0, slash)
       val name = if (slash < 0) path else path.substring(slash + 1)
       val parentId = ensureDir(tree, dirPath)
-      val created = DocumentsContract.createDocument(
-        activity.contentResolver,
+      createChecked(
         DocumentsContract.buildDocumentUriUsingTree(Uri.parse(tree), parentId),
         mimeOf(name),
-        name
-      ) ?: throw Exception("无法创建文件：$path")
-      created
+        name,
+        path
+      )
     }
     activity.contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) }
       ?: throw Exception("无法写入：$path")
@@ -332,6 +403,33 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
     // 就地更新缓存，别把整棵树作废——否则每存一次笔记都要重新遍历全库
     val id = DocumentsContract.getDocumentId(uri)
     index(tree)[path] = Node(id, false, System.currentTimeMillis(), bytes.size.toLong())
+  }
+
+  /**
+   * 建文件/目录，并**核对系统真正落下的名字**。
+   *
+   * `createDocument` 只是"请求"这个名字：ExternalStorageProvider 遇到同名会自动改成
+   * `x (1)`，MIME 与后缀对不上会再补一个后缀（见 mimeOf）。v0.11.26 及之前这里
+   * 拿到什么就往缓存里记成请求的那个路径——磁盘上是 `CNC.md.txt`，缓存说是 `CNC.md`，
+   * 下一次重扫之后缓存对不上，再写一次就再建一份 `CNC.md (1).txt`……每同步一轮多一份，
+   * 还全被当新文件推上云端（2026-09-12 事故）。
+   *
+   * 现在名字不一致就把刚建的空文件删掉、报错。宁可这一次写失败让人看见，也不能让
+   * 磁盘和缓存各说各话。
+   */
+  private fun createChecked(parentUri: Uri, mime: String, name: String, path: String): Uri {
+    val created = DocumentsContract.createDocument(activity.contentResolver, parentUri, mime, name)
+      ?: throw Exception("无法创建：$path")
+    val actual = displayNameOf(created)
+    if (actual != null && actual != name) {
+      try {
+        DocumentsContract.deleteDocument(activity.contentResolver, created)
+      } catch (ignored: Exception) {
+        // 删不掉也只是多一个空文件；下面的报错才是要紧的
+      }
+      throw Exception("系统把「$name」落成了「$actual」，已放弃写入：$path")
+    }
+    return created
   }
 
   /** 确保目录存在，返回它的 documentId。空路径＝树根。 */
@@ -344,16 +442,16 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
     for (seg in dirPath.split('/')) {
       if (seg.isEmpty()) continue
       built = if (built.isEmpty()) seg else "$built/$seg"
-      val hit = map[built]
+      val hit = nodeOf(tree, built)
       parentId = if (hit != null && hit.isDir) {
         hit.documentId
       } else {
-        val created = DocumentsContract.createDocument(
-          activity.contentResolver,
+        val created = createChecked(
           DocumentsContract.buildDocumentUriUsingTree(treeUri, parentId),
           DocumentsContract.Document.MIME_TYPE_DIR,
-          seg
-        ) ?: throw Exception("无法创建文件夹：$built")
+          seg,
+          built
+        )
         val id = DocumentsContract.getDocumentId(created)
         map[built] = Node(id, true, System.currentTimeMillis(), 0)
         id
@@ -364,7 +462,7 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
 
   @Command
   fun removeEntry(invoke: Invoke) {
-    try {
+    onWorker(invoke, "删除失败") {
       val args = invoke.parseArgs(PathArg::class.java)
       val node = nodeOf(args.tree, args.path)
       if (node != null) {
@@ -377,20 +475,25 @@ class SafPlugin(private val activity: Activity) : Plugin(activity) {
           map.keys.filter { it.startsWith(prefix) }.forEach { map.remove(it) }
         }
       }
-      invoke.resolve(JSObject())
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "删除失败")
+      JSObject()
     }
   }
 
-  /** 按后缀给 MIME。给错会让系统文件管理器把 .md 显示成未知类型，但不影响读写。 */
-  private fun mimeOf(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-    "md", "markdown", "txt" -> "text/plain"
-    "png" -> "image/png"
-    "jpg", "jpeg" -> "image/jpeg"
-    "gif" -> "image/gif"
-    "webp" -> "image/webp"
-    "pdf" -> "application/pdf"
-    else -> "application/octet-stream"
+  /**
+   * 给 `createDocument` 的 MIME。**这个值决定系统会不会改我们的文件名。**
+   *
+   * ExternalStorageProvider 建文件时（`FileUtils.buildUniqueFile` → `splitFileName`）会拿
+   * 请求名的后缀去 `MimeTypeMap` 反查 MIME，和我们传的比：对得上就照原名建；对不上就
+   * 把整个请求名当基名、再补上 MIME 对应的后缀。v0.11.26 及之前 `.md` 传的是
+   * `text/plain`，后缀 `md` 反查不是它，于是 `CNC.md` 落盘成 `CNC.md.txt`。
+   *
+   * 所以：后缀在这台机器的 `MimeTypeMap` 里查得到就传查到的那个（必然对得上）；
+   * 查不到就传 `application/octet-stream`——`splitFileName` 对这个值**不补后缀**
+   * （`extFromMimeType` 为 null），名字原样落盘。两条路都不会改名。
+   */
+  private fun mimeOf(name: String): String {
+    val ext = name.substringAfterLast('.', "").lowercase()
+    if (ext.isEmpty()) return MIME_UNKNOWN
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: MIME_UNKNOWN
   }
 }

@@ -13,7 +13,8 @@
  * 这里用一个内存版 OPFS 假实现盯死四个方法都会拆路径。
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { opfsIO } from './fs-adapters';
+import { migrateFiles, opfsIO } from './fs-adapters';
+import type { FileIO } from './sync';
 import type { VaultMeta } from './store';
 
 // ---------- 内存版 OPFS ----------
@@ -158,5 +159,67 @@ describe('OPFS 子目录（本地模式的默认存储）', () => {
 
   it('读不存在的文件仍然抛错（不能被 locate 吞掉）', async () => {
     await expect(io.read('', '没有/这个.md')).rejects.toBeTruthy();
+  });
+});
+
+/**
+ * v0.11.27：migrateFiles 复制完必须回头核对目标端的 list。
+ *
+ * 起因（2026-09-12）：安卓 SAF 把 `CNC.md` 落成了 `CNC.md.txt`，write 却一路成功；
+ * 库指向新位置后每同步一轮多一份副本、云端进了 122 条 .txt。目标端自己说"有"才算搬到了。
+ */
+function memIO(opts: { renameOnWrite?: (rel: string) => string } = {}): FileIO & { files: Map<string, string> } {
+  const files = new Map<string, string>();
+  const rename = opts.renameOnWrite ?? ((r: string) => r);
+  return {
+    files,
+    async list() {
+      return [...files.keys()];
+    },
+    async listMeta() {
+      return [...files.keys()].map((path) => ({ path, mtime: 0, size: files.get(path)!.length }));
+    },
+    async read(_v, rel) {
+      const c = files.get(rel);
+      if (c === undefined) throw new Error(`no ${rel}`);
+      return c;
+    },
+    async write(_v, rel, content) {
+      files.set(rename(rel), content);
+    },
+    async readBinary(_v, rel) {
+      return new TextEncoder().encode(await this.read(_v, rel));
+    },
+    async writeBinary(_v, rel, data) {
+      files.set(rename(rel), new TextDecoder().decode(data));
+    },
+    async remove(_v, rel) {
+      files.delete(rel);
+    },
+    async exists(_v, rel) {
+      return files.has(rel);
+    },
+  };
+}
+
+describe('migrateFiles 复制后核对目标端', () => {
+  it('目标端原样落盘 → 返回复制数，内容一致', async () => {
+    const src = memIO();
+    src.files.set('a.md', 'A');
+    src.files.set('d/b.md', 'B');
+    src.files.set('img.png', 'PNG');
+    src.files.set('.ivyea/index.json', '{}'); // 派生数据不搬
+    const dst = memIO();
+    await expect(migrateFiles(src, '', dst, '')).resolves.toBe(3);
+    expect([...dst.files.keys()].sort()).toEqual(['a.md', 'd/b.md', 'img.png']);
+    expect(dst.files.get('d/b.md')).toBe('B');
+  });
+
+  it('目标端把名字改了（安卓 SAF 补 .txt）→ 整体失败，错误里点名文件', async () => {
+    const src = memIO();
+    src.files.set('CNC.md', 'C');
+    src.files.set('ok.png', 'P');
+    const dst = memIO({ renameOnWrite: (r) => (r.endsWith('.md') ? `${r}.txt` : r) });
+    await expect(migrateFiles(src, '', dst, '')).rejects.toThrow(/找不到 1 个文件.*CNC\.md/);
   });
 });
