@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 浅色：暖白底、近黑字。夜间在 values-night 里覆盖 -->
+    <color name="ivw_bg">#FFFDFCF9</color>
+    <color name="ivw_text">#FF1D1D1F</color>
+    <color name="ivw_muted">#FF8E8E93</color>
+    <color name="ivw_line">#14000000</color>
+    <!-- 品牌绿（logo 渐变的深端）：快捷方式图标底色、快捷创建的 ＋ -->
+    <color name="ivw_accent">#FF35603C</color>
+    <color name="ivw_accent_soft">#FFE7F0E4</color>
+    <color name="ivw_on_accent">#FFFFFFFF</color>
+</resources>

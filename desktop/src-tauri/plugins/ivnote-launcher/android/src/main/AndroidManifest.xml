@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  这份 manifest 会被合并进 app 的 manifest（app 那份由 tauri CLI 生成、不入库，改不得）。
+  两个 receiver 就是两种桌面小部件；快捷方式是运行时用 ShortcutManager 发布的，
+  不需要在这里声明任何东西。不需要任何权限。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name="com.ivyea.note.launcher.NoteWidget"
+            android:label="@string/ivw_note_widget_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ivw_note_info" />
+        </receiver>
+
+        <receiver
+            android:name="com.ivyea.note.launcher.QuickWidget"
+            android:label="@string/ivw_quick_widget_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ivw_quick_info" />
+        </receiver>
+    </application>
+</manifest>

@@ -53,6 +53,14 @@ export interface VaultFiles {
   setSortMode(m: SortMode): void;
   /** 重新扫描。**所有会改动文件的操作最后都必须调它** */
   refresh(): Promise<void>;
+  /**
+   * v0.11.30：**当前这个库**的列表至少成功扫过一次。
+   *
+   * `files.length === 0` 分不清"空库"和"还没扫完"——从桌面快捷方式进来要「新建笔记」时
+   * 必须等它：新建靠 files 算不重名的文件名，列表没到就可能覆盖已有的 untitled.md。
+   * 换库即回到 false。
+   */
+  loaded: boolean;
 }
 
 export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles {
@@ -65,6 +73,8 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
   const [emptyDirs, setEmptyDirs] = useState<string[]>([]);
   const [sortMode, setSortModeState] = useState<SortMode>(loadSortMode);
   const metasRef = useRef<Map<string, FileMeta>>(new Map());
+  /** 哪个 vaultPath 已经扫成功过；与当前 vaultPath 不等就是"还没" */
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (vaultPath === null) return;
@@ -90,6 +100,7 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
       setEmptyDirs(
         visible.filter((p) => p.endsWith(KEEP)).map((p) => p.slice(0, -KEEP.length))
       );
+      setLoadedFor(vaultPath);
     } catch (e) {
       console.error('列出文件失败', e);
     }
@@ -125,9 +136,10 @@ export function useVaultFiles(io: FileIO, vaultPath: string | null): VaultFiles 
     []
   );
   const metaOf = useCallback((path: string) => metasRef.current.get(path), []);
+  const loaded = vaultPath !== null && loadedFor === vaultPath;
 
   return useMemo(
-    () => ({ files, pdfs, allFiles, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh }),
-    [files, pdfs, allFiles, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh]
+    () => ({ files, pdfs, allFiles, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh, loaded }),
+    [files, pdfs, allFiles, mdStamps, emptyDirs, allPaths, metaOf, sortMode, setSortMode, refresh, loaded]
   );
 }

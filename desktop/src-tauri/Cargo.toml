@@ -1,6 +1,6 @@
 [package]
 name = "ivyea-note-desktop"
-version = "0.11.29"
+version = "0.11.30"
 description = "Ivyea Note 桌面端：本地 Markdown · 多端同步"
 authors = ["ivyea"]
 license = "MIT"
@@ -24,6 +24,9 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # 安卓 SAF：让笔记库能落在用户自己选的系统目录里（上游 dialog 插件没实现选目录）
 tauri-plugin-ivnote-saf = { path = "plugins/ivnote-saf" }
+# 安卓桌面入口（v0.11.30）：长按图标快捷方式 + 笔记卡片 / 快捷创建小部件。gen/android 不入库，
+# 原生代码只能以插件形式随库打包（见 plugins/ivnote-launcher/src/lib.rs）
+tauri-plugin-ivnote-launcher = { path = "plugins/ivnote-launcher" }
 
 # 导出 PDF（v0.11.16）：WebView2 的 PrintToPdf 直接写文件，不经打印机。
 # 版本必须跟着 tauri/wry 走——它们用的也是 webview2-com 0.38 / windows-core 0.61，

@@ -56,6 +56,7 @@
     "dialog:default",
     "updater:default",
     "process:allow-restart",
-    "ivnote-saf:default"
+    "ivnote-saf:default",
+    "ivnote-launcher:default"
   ]
 }

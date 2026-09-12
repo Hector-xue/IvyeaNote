@@ -23,9 +23,20 @@ export type IconName =
   // v0.11.16：回收站里的「恢复」。用 sync 那个圆环会和"同步中"撞语义
   | 'undo'
   // v0.11.24：文件历史（时钟带回转箭头）、云端版本、HTML 里「运行脚本」
-  | 'history' | 'cloud' | 'play';
+  | 'history' | 'cloud' | 'play'
+  // v0.11.30：桌面小部件（2×2 格子）
+  | 'widget';
 
 const PATHS: Record<IconName, React.ReactNode> = {
+  /** 桌面小部件：四个圆角小格 */
+  widget: (
+    <>
+      <rect x="4" y="4" width="7" height="7" rx="1.5" />
+      <rect x="13" y="4" width="7" height="7" rx="1.5" />
+      <rect x="4" y="13" width="7" height="7" rx="1.5" />
+      <rect x="13" y="13" width="7" height="7" rx="1.5" />
+    </>
+  ),
   /** 文件历史：时钟 + 逆时针回转的一小段弧 */
   history: (
     <>

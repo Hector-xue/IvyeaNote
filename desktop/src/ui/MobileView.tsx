@@ -101,6 +101,11 @@ interface Props {
   /** v0.11.16：今日日记（桌面在 ribbon 上，手机放进「⋯」这张单子） */
   onOpenDaily?(): void;
   /**
+   * v0.11.30：把一篇笔记钉成桌面小部件（安卓）。
+   * 只有安卓 Tauri 壳会传这个 prop；没传就不显示这一条——网页版 / 桌面端没有这回事。
+   */
+  onPinToHome?(path: string): void;
+  /**
    * v0.11.16：**回收站**。用户原话：「手机端为什么没有回收站的入口」。
    * 桌面是左栏的一个面板，手机没有 ribbon，所以放进「⋯」→ 一张底部弹层。
    * 删掉的东西在手机上此前既看不见也恢复不了——而手机恰恰是最容易误删的那一端。
@@ -458,6 +463,18 @@ export function MobileView(props: Props) {
           },
         ]
       : [];
+    // v0.11.30：添加到桌面（安卓小部件）。和「移动到…」放一组：都是"把这篇放到别处"
+    const pinGroup: SheetItem[] = props.onPinToHome
+      ? [
+          {
+            key: 'pin',
+            icon: 'widget' as const,
+            label: '添加到桌面',
+            sub: '钉成一张桌面卡片，点一下直接打开',
+            onClick: () => props.onPinToHome?.(cur),
+          },
+        ]
+      : [];
     return [
       [
         { key: 'outline', icon: 'outline', label: '大纲', disabled: headings.length === 0, onClick: () => setShowOutline(true) },
@@ -465,7 +482,7 @@ export function MobileView(props: Props) {
         ...dailyGroup,
       ],
       aiGroup,
-      fileActions,
+      [...pinGroup, ...fileActions],
       appGroup,
     ];
   };
@@ -513,6 +530,12 @@ export function MobileView(props: Props) {
           label: isDir ? '把这个文件夹移动到…' : '移动到…',
           onClick: () => props.onRequestMove?.(st.path, isDir),
         },
+      ]);
+    }
+    // v0.11.30：长按侧栏里任意一篇也能钉到桌面——不必先打开它（安卓才有）
+    if (!isDir && props.onPinToHome) {
+      groups.push([
+        { key: 'pin', icon: 'widget', label: '添加到桌面', onClick: () => props.onPinToHome?.(st.path) },
       ]);
     }
     if (!isDir) {

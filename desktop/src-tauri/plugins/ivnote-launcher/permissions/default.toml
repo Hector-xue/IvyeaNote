@@ -1,0 +1,20 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+允许应用维护安卓桌面入口：长按图标的快捷方式、桌面小部件的内容快照，
+以及领取「从快捷方式 / 小部件进来时要做什么」。
+
+这些命令只碰本应用自己的 SharedPreferences 与系统的 ShortcutManager / AppWidgetManager，
+不读写笔记文件本身。
+"""
+permissions = [
+  "allow-take-launch-action",
+  "allow-set-shortcuts",
+  "allow-set-note-snapshot",
+  "allow-bound-notes",
+  "allow-rebind-notes",
+  "allow-pin-note-widget",
+  "allow-register-listener",
+  "allow-remove-listener",
+]
