@@ -823,3 +823,49 @@ describe('删除熔断（isMassDelete / massDelete）', () => {
     expect(changes.filter((c) => c.op === 'delete')).toHaveLength(2);
   });
 });
+
+/*
+ * v0.11.28：账本对象被克隆之后，这一轮的墓碑 / 附件哈希 / 游标不能丢。
+ *
+ * 2026-09-12 手机：云端已经把 183 条 .txt 打了 delete，手机拉下来之后横幅却一直是
+ * 「本地少了 184 篇，已暂停删除」——版本号记住了（versions 是共享引用、就地改），墓碑没记住
+ * （tombstones 是整体替换、只落在旧对象上）。启动对齐 relink 每次都克隆 VaultMeta，与启动
+ * 时的自动同步撞在一起就是这个结果。
+ */
+describe('账本写入不怕 VaultMeta 被克隆', () => {
+  it('远端 delete 应用后，克隆体通过共享引用也能看到墓碑和游标（commitLedger）', async () => {
+    const { commitLedger } = await import('./store');
+    const local = new Map<string, string>();
+    const used: VaultMeta = { ...newVaultMeta(7, 'v'), versions: { 'x.md.txt': 1 }, assets: { 'x.md.txt': 'h' } };
+    // relink 那种克隆：顶层字段拷贝，子对象共享
+    const live: VaultMeta = { ...used, name: 'v-renamed' };
+    const server = mockServer({
+      changes: [{ seq: 1, path: 'x.md.txt', op: 'delete', version: 2, device_id: 'cleanup' }],
+    });
+    await run(used, memIO(local), server);
+    expect(used.tombstones?.['x.md.txt']).toBe(2);
+    expect(used.cursor).toBe(1);
+
+    commitLedger(live, used);
+    expect(live.tombstones?.['x.md.txt']).toBe(2);
+    expect(live.assets?.['x.md.txt']).toBeUndefined();
+    expect(live.cursor).toBe(1);
+    expect(live.name).toBe('v-renamed'); // 只搬账本，别的字段不动
+
+    // 再同步一轮：这个"本地没有的已知文件"已有墓碑，不能再算成"本地少了"
+    const r = await run(live, memIO(local), server);
+    expect(r.massDelete).toBeUndefined();
+    expect(r.pushed).toBe(0);
+  });
+
+  it('tombstones / assets 是就地写入：克隆前就存在的子对象两边共享', async () => {
+    const local = new Map<string, string>();
+    const used: VaultMeta = { ...newVaultMeta(8, 'v'), versions: { 'a.md': 1 }, tombstones: {}, assets: {} };
+    const clone: VaultMeta = { ...used };
+    const server = mockServer({
+      changes: [{ seq: 1, path: 'a.md', op: 'delete', version: 2, device_id: 'other' }],
+    });
+    await run(used, memIO(local), server);
+    expect(clone.tombstones?.['a.md']).toBe(2);
+  });
+});

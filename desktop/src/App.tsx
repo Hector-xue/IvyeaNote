@@ -110,6 +110,7 @@ import {
   type VaultMeta,
   loadActiveVaultId,
   saveActiveVaultId,
+  commitLedger,
 } from './lib/store';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -583,7 +584,17 @@ export default function App() {
     io,
     deviceId: state.account?.deviceId,
     refresh: refreshFiles,
-    persist: () => persist({ ...stateRef.current }),
+    persist: (used) => {
+      /*
+       * v0.11.28：同步引擎改的是它闭包里那个 VaultMeta；如果这期间 state 里同一个库已经
+       * 换成了别的对象（任何克隆），就把账本六个字段搬过去再落盘，否则这一轮的
+       * 墓碑/附件哈希/游标就丢了（见 lib/vaultLink 里的注释）。
+       */
+      const cur = stateRef.current;
+      const live = cur.vaults[String(used.id)];
+      if (live) commitLedger(live, used);
+      persist({ ...cur });
+    },
     afterPull,
     errText,
     onUnlinked: relink,
