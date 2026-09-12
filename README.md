@@ -158,6 +158,9 @@ IVNOTE_DOMAIN=note.example.com sudo -E deploy/install.sh
 **外观**
 浅色/深色 · 字体与字号自定义 · 可拖拽调宽的侧栏与右栏 · Windows 上无边框圆角窗口
 
+**安卓桌面入口**
+长按图标：新建笔记 · 今日日记 · 最近打开的两篇 · **笔记卡片小部件**（2×2 起可拉伸，显示一篇笔记的标题 / 正文 / 修改时间，点一下直接编辑；默认最近一篇，笔记「⋯」→「添加到桌面」可钉指定的一篇）· **快捷创建小部件**（打开 / 新建）
+
 **给 Agent 用**
 服务端带 MCP endpoint，笔记库可以直接当 Agent 的读写终端。见 [`docs/Agent接入-MCP.md`](docs/Agent接入-MCP.md)。
 

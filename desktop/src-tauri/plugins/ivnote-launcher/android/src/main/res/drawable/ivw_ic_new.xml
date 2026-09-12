@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 新建笔记：铅笔 + 角上一个加号（对应 Icons.tsx 的 file-plus / edit） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M4,20h4L19.5,8.5a2.1,2.1 0 0 0 -3,-3L5,17v3z M14,6l3,3"
+        android:strokeColor="@color/ivw_on_accent" android:strokeWidth="2"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

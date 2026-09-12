@@ -24,6 +24,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         // 安卓 SAF：桌面端注册后所有命令返回 Unsupported，前端按平台分流，不影响桌面
         .plugin(tauri_plugin_ivnote_saf::init())
+        // 安卓桌面入口（快捷方式 / 小部件）：同样只在安卓有实现，其它平台 Unsupported 且前端不会调
+        .plugin(tauri_plugin_ivnote_launcher::init())
         .manage(localserver::LocalServer::default())
         .invoke_handler(tauri::generate_handler![
             discover_servers,

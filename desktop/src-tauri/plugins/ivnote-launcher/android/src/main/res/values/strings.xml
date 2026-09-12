@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="ivw_app_name">Ivyea Note</string>
+    <string name="ivw_note_widget_label">笔记卡片</string>
+    <string name="ivw_note_widget_desc">把一篇笔记放在桌面上，点一下直接编辑</string>
+    <string name="ivw_quick_widget_label">快捷创建</string>
+    <string name="ivw_quick_widget_desc">一键新建笔记、打开 Ivyea Note</string>
+    <string name="ivw_untitled">未命名</string>
+    <string name="ivw_empty_note">（这篇还是空的，点一下开始写）</string>
+    <string name="ivw_no_snapshot">点一下打开这篇笔记</string>
+    <string name="ivw_hint_open_first">打开 Ivyea Note 后，最近打开的笔记会显示在这里；也可以在笔记的「⋯」菜单里选「添加到桌面」，把指定的一篇钉在这儿。</string>
+    <string name="ivw_quick_open">Ivyea Note</string>
+    <string name="ivw_quick_open_sub">点击打开</string>
+    <string name="ivw_quick_new">新建笔记</string>
+    <!-- 小部件选择器里的预览用（真实卡片会被运行时文字覆盖） -->
+    <string name="ivw_preview_title">每周复盘</string>
+    <string name="ivw_preview_body">• 广告：否词 12 个，ACoS 降了 5 个点\n• 新品：样品周三到，先拍主图\n☐ 给供应商回邮件\n☐ 周五前把发票整理好</string>
+    <string name="ivw_preview_time">08-21 08:22</string>
+</resources>

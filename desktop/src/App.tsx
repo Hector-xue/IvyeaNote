@@ -35,6 +35,7 @@ import { useCommands } from './hooks/useCommands';
 import { useAttachments } from './hooks/useAttachments';
 import { useObsidianImport } from './hooks/useObsidianImport';
 import { useTemplates } from './hooks/useTemplates';
+import { useLauncher, type Launcher } from './hooks/useLauncher';
 import { useVaultFiles } from './hooks/useVaultFiles';
 import { useSyncEngine } from './hooks/useSyncEngine';
 import { useTrash, trashPathFor, nextTrashName } from './hooks/useTrash';
@@ -371,6 +372,7 @@ export default function App() {
     sortMode,
     setSortMode,
     refresh: refreshFiles,
+    loaded: filesLoaded,
   } = useVaultFiles(io, vault ? (vault.localPath ?? '') : null);
 
   /**
@@ -815,9 +817,15 @@ export default function App() {
   useEffect(() => {
     if (!vault || files.length === 0) return;
     if (restoredFor.current === vault.id) return;
-    restoredFor.current = vault.id;
     // 库里已经没有的标签先清掉（换库、外部删除都会留下死标签）
     pruneTabs(files);
+    /*
+     * v0.11.30：从桌面快捷方式 / 小部件进来时让路。那边马上要新建或打开某一篇，
+     * 这里再还原上次那篇就是两个 openFile 赛跑，谁后读完谁赢。先不还原也不记"已还原"：
+     * 那个动作若没开成任何东西（比如要开的笔记已删），下一次列表变化仍会回到这里补上。
+     */
+    if (launcherRef.current?.hasPendingAction()) return;
+    restoredFor.current = vault.id;
     const target = pickRestore(loadLastOpen(vault.id), files, currentPath);
     // 走 openFileInTab 而不是 openFile：还原的那篇也该出现在标签栏里
     if (target) void openFileInTab(target);
@@ -966,6 +974,12 @@ export default function App() {
 
   /** v0.7.10 E6：最近打开，供快速切换器排序 */
   const [recent, setRecent] = useState<string[]>(loadRecent);
+  /**
+   * v0.11.30：安卓桌面入口（快捷方式 / 小部件）。hook 本身要等 openDailyNote 等声明完才能
+   * 调（见下面 useLauncher 那段），而落盘 / 改名这两条更早的路径也要通知它，所以先留个 ref。
+   * 非安卓平台上它的每个方法都是 no-op。
+   */
+  const launcherRef = useRef<Launcher | null>(null);
 
   /**
    * v0.11.22：正在主区里看的图片（`{路径, blob URL}`；null = 没在看图）。
@@ -1062,6 +1076,8 @@ export default function App() {
       saveRecent(next);
       return next;
     });
+    // 桌面小部件钉的也是路径，改名 / 移动同样要跟（v0.11.30；非安卓 no-op）
+    launcherRef.current?.remapBindings(ops);
   }, []);
 
   /**
@@ -1274,6 +1290,8 @@ export default function App() {
           // v0.7.5：即时更新索引。未登录的本地模式下 doSync() 会直接 return、
           // 不触发 refreshFiles，光靠咽喉对账的话离线写作时反链/搜索会滞后一拍。
           noteIndex.touch(path, text);
+          // v0.11.30：桌面小部件上的这篇跟着更新（非安卓 no-op）
+          launcherRef.current?.notePersisted(path, text);
           // 「自动同步」关掉时，落盘后也不再顺手推——设置里写的是「关掉后只能手动同步」，
           // 只挡住启动/回前台/轮询那三条而放行这一条，说明就成了假话（v0.8.6 的疏漏）。
           if (prefs.autoSync) void doSync();
@@ -1314,6 +1332,7 @@ export default function App() {
       if (path === currentPathRef.current) setDoc(content);
       if (path === splitPathRef.current) setSplitDoc(content);
       noteIndex.touch(path, content);
+      launcherRef.current?.notePersisted(path, content);
       if (prefs.autoSync) void doSync();
     },
     [vault, io, fileHistory, noteIndex, prefs.autoSync, doSync]
@@ -3402,6 +3421,47 @@ export default function App() {
     />
   );
 
+  /** 切库：主区上一个库的东西（笔记 / PDF / 表格 / HTML / 图片）全部让开 */
+  const switchVault = useCallback(
+    (id: number) => {
+      setVaultId(id);
+      setCurrentPath(null);
+      setDoc(null);
+      onClosePdf();
+      setBaseDoc(null);
+      setHtmlDoc(null);
+      setImageView(null);
+      setShowGraph(false);
+    },
+    [onClosePdf]
+  );
+
+  /*
+   * v0.11.30：安卓桌面入口——长按图标的快捷方式、桌面小部件、从它们进来时该做的事。
+   * 放在这里是因为它要用到 openDailyNote / onCreateNote / switchVault；非安卓平台整个 hook
+   * 等于不存在（launcherAvailable() 为 false，所有效果与方法都是 no-op）。
+   */
+  const launcher = useLauncher({
+    vault,
+    // 云端库（正数 id）没登录时选了也会被 activeVaultId 回落成本地库，那就别切
+    canSwitchTo: (id) => !!state.vaults[String(id)] && (id < 0 || !!state.account),
+    knowsVault: (id) => !!state.vaults[String(id)],
+    switchVault,
+    io,
+    files,
+    filesLoaded,
+    mdStamps,
+    metaOf,
+    recent,
+    currentPath,
+    doc,
+    openInTab: (p) => void openFileInTab(p),
+    createNote: () => onCreateNote(),
+    openDaily: () => openDailyNote(),
+    toast,
+  });
+  launcherRef.current = launcher;
+
   // ---------- 渲染 ----------
 
   if (!state.account && showWelcome) {
@@ -3458,17 +3518,6 @@ export default function App() {
   }
 
   // 未登录：列表里展示全部**本地**库（负数 id）；云端库要登录后才能用
-  /** 切库：主区上一个库的东西（笔记 / PDF / 表格 / HTML / 图片）全部让开 */
-  const switchVault = (id: number) => {
-    setVaultId(id);
-    setCurrentPath(null);
-    setDoc(null);
-    onClosePdf();
-    setBaseDoc(null);
-    setHtmlDoc(null);
-    setImageView(null);
-    setShowGraph(false);
-  };
   const vaultList = Object.values(state.vaults)
     .filter((v) => state.account || v.id < 0)
     .map((v) => ({ id: v.id, name: vaultDisplayName(v), location: vaultLocationLabel(v) }));
@@ -3549,6 +3598,7 @@ export default function App() {
           onOpenPath={onOpenLinkPath}
           onOpenSettings={() => setShowSettings(true)}
           onOpenDaily={() => void openDailyNote()}
+          onPinToHome={launcher.enabled ? (p) => void launcher.pinToHome(p) : undefined}
           trashList={trash.list}
           onOpenTrash={() => {
             void trash.reload();

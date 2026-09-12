@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 卡片圆角：Android 12+ 用系统统一的小部件圆角（values-v31 覆盖） -->
+    <dimen name="ivw_radius">20dp</dimen>
+    <!-- 下面四个 NoteWidget.bodyLines 用来算正文能放几行，改布局时要一起改 -->
+    <dimen name="ivw_pad">12dp</dimen>
+    <dimen name="ivw_header_h">26dp</dimen>
+    <dimen name="ivw_time_h">16dp</dimen>
+    <!-- 14sp 正文 + 2dp 行距 ≈ 19dp，取 20 留余量 -->
+    <dimen name="ivw_line_h">20dp</dimen>
+</resources>
