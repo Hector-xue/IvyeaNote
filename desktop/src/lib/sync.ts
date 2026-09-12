@@ -424,12 +424,12 @@ export async function pushOnly(
           const change = batch.find((c) => c.client_change_id === r.client_change_id)!;
           if (change.op === 'delete') {
             meta.versions[change.path] = r.version!;
-            meta.tombstones = { ...(meta.tombstones ?? {}), [change.path]: r.version! };
+            (meta.tombstones ??= {})[change.path] = r.version!;
             delete meta.bases[change.path];
             if (meta.assets) delete meta.assets[change.path];
           } else if (pushAssets.has(change.path)) {
             meta.versions[change.path] = r.version!;
-            meta.assets = { ...(meta.assets ?? {}), [change.path]: pushAssets.get(change.path)! };
+            (meta.assets ??= {})[change.path] = pushAssets.get(change.path)!;
             delete meta.tombstones?.[change.path];
           } else {
             meta.versions[change.path] = r.version!;
@@ -562,7 +562,7 @@ async function applyRemote(
      */
     if (exists && knownVer === undefined) {
       meta.versions[ch.path] = ch.version;
-      meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+      (meta.tombstones ??= {})[ch.path] = ch.version;
       return;
     }
     if (exists) {
@@ -583,7 +583,7 @@ async function applyRemote(
       }
     }
     meta.versions[ch.path] = ch.version;
-    meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+    (meta.tombstones ??= {})[ch.path] = ch.version;
     delete meta.bases[ch.path];
     return;
   }
@@ -679,7 +679,7 @@ async function applyRemoteAsset(
 ): Promise<void> {
   const knownHash = meta.assets?.[ch.path];
   const setHash = (h: string) => {
-    meta.assets = { ...(meta.assets ?? {}), [ch.path]: h };
+    (meta.assets ??= {})[ch.path] = h;
   };
 
   if (ch.op === 'delete') {
@@ -687,7 +687,7 @@ async function applyRemoteAsset(
       // 同文本那条路（v0.11.25）：这本账没见过它、本地却有 → 是这个位置自己的文件，留着
       if (knownHash === undefined) {
         meta.versions[ch.path] = ch.version;
-        meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+        (meta.tombstones ??= {})[ch.path] = ch.version;
         return;
       }
       const local = await io.readBinary(vaultPath, ch.path);
@@ -706,7 +706,7 @@ async function applyRemoteAsset(
       await io.remove(vaultPath, ch.path);
     }
     meta.versions[ch.path] = ch.version;
-    meta.tombstones = { ...(meta.tombstones ?? {}), [ch.path]: ch.version };
+    (meta.tombstones ??= {})[ch.path] = ch.version;
     if (meta.assets) delete meta.assets[ch.path];
     return;
   }
@@ -778,7 +778,7 @@ async function pushUpsertBytes(
   if (r?.status === 'accepted') {
     report.pushed++;
     meta.versions[path] = r.version!;
-    meta.assets = { ...(meta.assets ?? {}), [path]: hash };
+    (meta.assets ??= {})[path] = hash;
     delete meta.tombstones?.[path];
   } else if (r?.status === 'conflict') {
     report.errors.push(`${path} 回推遇到新冲突，将在下轮同步重试`);

@@ -213,3 +213,18 @@ describe('linkVaults · 服务端已删除的库', () => {
     expect(r.linked?.from).toBe(5);
   });
 });
+
+describe('linkVaults 不克隆已有的库（v0.11.28）', () => {
+  /*
+   * 启动对齐每次都跑，而同一时刻自动同步正拿着旧对象写账本。克隆 = 那一轮的墓碑 /
+   * 附件哈希 / 游标只落在旧对象上、被 persist 丢掉（2026-09-12「本地少了 184 篇」）。
+   */
+  it('服务端认得的库保持同一个对象，名字就地改', async () => {
+    const { client } = fakeClient([{ id: 11, name: 'obsidian-renamed' }]);
+    const had: VaultMeta = { ...newVaultMeta(11, 'obsidian'), localPath: 'content://tree/x' };
+    const r = await linkVaults(client, state(had), 11);
+    expect(r.vaults['11']).toBe(had);
+    expect(had.name).toBe('obsidian-renamed');
+    expect(had.localPath).toBe('content://tree/x');
+  });
+});

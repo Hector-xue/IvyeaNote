@@ -26,8 +26,11 @@ export interface SyncEngineDeps {
   deviceId: string | undefined;
   /** 同步完必须刷新文件列表——它是索引/侧栏/搜索的共同上游 */
   refresh(): Promise<void>;
-  /** 把游标等状态落盘 */
-  persist(): void;
+  /**
+   * 把账本落盘。参数是**这一轮真正改过的那个 VaultMeta 对象**：state 里此时可能已经换成
+   * 了另一个对象（启动对齐 relink 曾经克隆），落盘方要把账本从这个对象搬到 state 里那个上。
+   */
+  persist(used: VaultMeta): void;
   /** 拉取之后的额外动作：远端可能改了当前打开的那篇，要重读 */
   afterPull(): Promise<void>;
   errText(e: unknown): string;
@@ -146,7 +149,7 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
         // 用磁盘内容盖掉编辑器里的 doc，有丢按键的风险。重构里不改行为——
         // 这个取舍留给「同步状态面板」那批（方案 v2 P4.3）一起处理。
         if (mode === 'pull') await afterPull();
-        persist();
+        persist(vault);
       } catch (e) {
         // 失败也要出一份报告：静默失败会让用户以为同步成功了
         setLastReport(

@@ -67,8 +67,21 @@ export async function linkVaults(
   const vaults: Record<string, VaultMeta> = { ...cur.vaults };
   for (const v of remote) {
     const had = vaults[String(v.id)];
-    // 名字以服务端为准；本地已有的同步进度原样保留
-    vaults[String(v.id)] = had ? { ...had, name: v.name } : newVaultMeta(v.id, v.name);
+    /*
+     * 名字以服务端为准；本地已有的同步进度原样保留。
+     *
+     * v0.11.28：**已有的库必须保持同一个对象，不能 `{ ...had }` 克隆。**
+     * 这一步每次启动都跑（relink），而启动时的自动同步正拿着旧对象在改账本：
+     * `versions[p] = v` 这种就地改动两边共享看得见，`tombstones = {…}` / `assets = {…}` /
+     * `cursor = n` 这种整体替换只落在旧对象上——persist 存的是克隆，于是墓碑、附件哈希、
+     * 游标全丢，版本号却还在。2026-09-12 手机上「本地少了 184 篇」（云端早删了的 .txt
+     * 被当成"已知但本地没有"）和"附件每次同步都重推一遍"都是它。
+     */
+    if (had) {
+      if (had.name !== v.name) had.name = v.name;
+    } else {
+      vaults[String(v.id)] = newVaultMeta(v.id, v.name);
+    }
   }
 
   /*

@@ -192,6 +192,22 @@ export function mergeLocalIntoCloud(local: VaultMeta, cloud: VaultMeta): VaultMe
  * 登录时的 `migrateFiles` 也正是往那儿搬的）。桌面端用户之后可以「绑定文件夹」
  * 覆盖成磁盘真实路径，那条路不受影响。
  */
+/**
+ * v0.11.28：把一轮同步改过的账本（六个字段）从引擎用的那个对象搬到 state 里现在这个对象上。
+ * 两者是同一个对象时什么都不做。引擎只认闭包里的对象；state 里的对象一旦被谁克隆过
+ * （启动对齐 relink 曾经这么干），整体替换型的写入（cursor / tombstones / assets…）就落不到
+ * state 上——版本号还在、墓碑没了，云端早删掉的文件在这台设备上永远算"本地少了"。
+ */
+export function commitLedger(live: VaultMeta, used: VaultMeta): void {
+  if (live === used) return;
+  live.cursor = used.cursor;
+  live.versions = used.versions;
+  live.bases = used.bases;
+  live.assets = used.assets;
+  live.tombstones = used.tombstones;
+  live.syncedAt = used.syncedAt;
+}
+
 export function newVaultMeta(id: number, name: string): VaultMeta {
   return { id, name, cursor: 0, versions: {}, bases: {}, localPath: `opfs://${id}` };
 }
