@@ -10,17 +10,19 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { LaunchAction } from '../lib/launcher';
+import type { BoundNote, LaunchAction, NoteSnapshot, PinResult, RebindOp, ShortcutSpec } from '../lib/launcher';
 
+// mock 的签名要和真函数一致：vi.fn(async () => {}) 会把参数推成 []，
+// 下面 mock.calls[0][0] 在 tsc 下就是"空元组取下标"的类型错。
 const native = vi.hoisted(() => ({
   available: true,
   queue: [] as LaunchAction[],
   listeners: [] as Array<() => void>,
-  setShortcuts: vi.fn(async () => {}),
-  setNoteSnapshot: vi.fn(async () => {}),
-  boundNotes: vi.fn(async () => [] as { vaultId: number; path: string }[]),
-  rebindNotes: vi.fn(async () => {}),
-  pinNoteWidget: vi.fn(async () => ({ mode: 'requested' as const, count: 0 })),
+  setShortcuts: vi.fn<(shortcuts: ShortcutSpec[]) => Promise<void>>(async () => {}),
+  setNoteSnapshot: vi.fn<(snapshot: NoteSnapshot) => Promise<void>>(async () => {}),
+  boundNotes: vi.fn<() => Promise<BoundNote[]>>(async () => []),
+  rebindNotes: vi.fn<(ops: RebindOp[]) => Promise<void>>(async () => {}),
+  pinNoteWidget: vi.fn<(snapshot: NoteSnapshot) => Promise<PinResult>>(async () => ({ mode: 'requested', count: 0 })),
 }));
 
 vi.mock('../lib/launcher', async () => {
@@ -184,7 +186,7 @@ describe('useLauncher：快捷方式与快照', () => {
     const deps = makeDeps({ recent: ['b.md', 'zz.md', 'a.md'] });
     renderHook(() => useLauncher(deps));
     await waitFor(() => expect(native.setShortcuts).toHaveBeenCalled(), { timeout: 3000 });
-    const specs = native.setShortcuts.mock.calls[0][0] as { kind: string; path: string }[];
+    const specs = native.setShortcuts.mock.calls[0][0];
     expect(specs.map((s) => s.kind)).toEqual(['new', 'daily', 'open', 'open']);
     expect(specs.map((s) => s.path)).toEqual(['', '', 'b.md', 'a.md']);
   });
@@ -193,7 +195,7 @@ describe('useLauncher：快捷方式与快照', () => {
     const deps = makeDeps({ currentPath: 'a.md', doc: '# 标题\n\n- [ ] 事项' });
     const { result } = renderHook(() => useLauncher(deps));
     await waitFor(() => expect(native.setNoteSnapshot).toHaveBeenCalledTimes(1));
-    const snap = native.setNoteSnapshot.mock.calls[0][0] as { title: string; preview: string; recent: boolean; vaultId: number };
+    const snap = native.setNoteSnapshot.mock.calls[0][0];
     expect(snap).toMatchObject({ vaultId: -1, title: 'a', preview: '标题\n\n☐ 事项', recent: true });
 
     result.current.notePersisted('a.md', '改了');
@@ -218,7 +220,7 @@ describe('useLauncher：快捷方式与快照', () => {
     const { rerender } = renderHook((d: LauncherDeps) => useLauncher(d), { initialProps: deps });
     await waitFor(() => expect(native.setNoteSnapshot).toHaveBeenCalledTimes(2));
     expect(native.rebindNotes).toHaveBeenCalledWith([{ fromVaultId: -99, from: 'b.md', toVaultId: -1, to: 'b.md' }]);
-    const pushed = native.setNoteSnapshot.mock.calls.map((c) => (c[0] as { path: string; preview: string }).path).sort();
+    const pushed = native.setNoteSnapshot.mock.calls.map((c) => c[0].path).sort();
     expect(pushed).toEqual(['a.md', 'b.md']);
 
     // 指纹没变：不重推
@@ -236,7 +238,7 @@ describe('useLauncher：快捷方式与快照', () => {
     // a.md 没了：推一条"已删除"
     rerender({ ...deps, mdStamps: [{ path: 'b.md', mtime: 1, size: 1 }] });
     await waitFor(() => expect(native.setNoteSnapshot).toHaveBeenCalledTimes(4));
-    expect(String((native.setNoteSnapshot.mock.calls[3][0] as { preview: string }).preview)).toContain('已被删除');
+    expect(String(native.setNoteSnapshot.mock.calls[3][0].preview)).toContain('已被删除');
   });
 
   it('添加到桌面：按原生返回的三种结果给不同回执', async () => {
