@@ -2423,6 +2423,27 @@ button.st-item:hover {
   margin-top: 16px;
 }
 
+/*
+ * **该缩的是滚动区，不该缩的是分组。** 纸是纵向 flex（max-height 82vh），
+ * 滚动区是它的孩子，分组又是滚动区（也是纵向 flex）的孩子。分组带着
+ * overflow:hidden（v0.11.18 之前它是圆角小卡），而 overflow 非 visible 的
+ * flex 孩子最小高度是 0——于是纸不够高时，flex 不是让滚动区滚，而是把分组
+ * 一路压到"装得下"为止，压掉的那几行既看不见也滚不到：
+ * AI 助手 12 项，「整理排版」以下全没了，手指怎么划都不动（headless 实测：
+ * 12 项 scrollHeight 被压成 618 = clientHeight）。
+ * 分组 flex-shrink:0 之后，多出来的高度才落到滚动区头上。
+ * 大纲、回收站、文件历史都走同一个壳，一并修好。
+ * overscroll-behavior: 滚到头别把手势传给背后的正文。
+ */
+.m-sheet2-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+.m-sheet2-scroll > .m-sheet2-group {
+  flex-shrink: 0;
+}
+
 /* ---- 头部：把手 + 上下文标题 ---- */
 /*
  * 手势挂在这一块上（见 ui/mobile/BottomSheet）：所以它要吃满宽度、
@@ -2898,8 +2919,21 @@ button.st-item:hover {
   padding: 10px 14px;
   font-size: 15px;
 }
+/* 选中一版后列表守住 40%、不再跟对照区按比例互相挤（否则一屏只剩两行版本）；
+   对照区自己有 min-height:0 + hp-body 内滚，让它去缩 */
 .m-history2 .hp-list {
+  flex: 0 0 auto;
   max-height: 40%;
+}
+/*
+ * 还没选中任何一版时下面没有对照区，列表却仍被压在 40% 里——纸的下半截整块空白，
+ * 8 个版本只露出三行半（用户：「显示到一半就被截断了」）。
+ * 列表是 .hp 的最后一个孩子 = 没有对照区，这时让它吃满整张纸；选中一版后
+ * .hp-detail 出现，列表退回 40%，对照在下面自己滚。
+ */
+.m-history2 .hp-list:last-child {
+  flex: 1 1 auto;
+  max-height: none;
 }
 
 /* ---- HTML 查看器：脚本提示条（v0.11.24）---- */
