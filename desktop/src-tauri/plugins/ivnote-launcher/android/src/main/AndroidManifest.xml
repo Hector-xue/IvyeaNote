@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   这份 manifest 会被合并进 app 的 manifest（app 那份由 tauri CLI 生成、不入库，改不得）。
-  两个 receiver 就是两种桌面小部件；快捷方式是运行时用 ShortcutManager 发布的，
+  五个 receiver 就是五种桌面小部件；快捷方式是运行时用 ShortcutManager 发布的，
   不需要在这里声明任何东西。不需要任何权限。
+  待办的「勾掉」是发给 TodoWidget 自己的显式广播（component 指定），不需要 intent-filter。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
@@ -28,6 +29,42 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/ivw_quick_info" />
+        </receiver>
+
+        <receiver
+            android:name="com.ivyea.note.launcher.QuickCardWidget"
+            android:label="@string/ivw_quick_card_widget_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ivw_quick_card_info" />
+        </receiver>
+
+        <receiver
+            android:name="com.ivyea.note.launcher.RecentWidget"
+            android:label="@string/ivw_recent_widget_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ivw_recent_info" />
+        </receiver>
+
+        <receiver
+            android:name="com.ivyea.note.launcher.TodoWidget"
+            android:label="@string/ivw_todo_widget_label"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/ivw_todo_info" />
         </receiver>
     </application>
 </manifest>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 浅绿胶囊底（计数角标 / 次要按钮） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/ivw_accent_soft" />
+    <corners android:radius="999dp" />
+</shape>

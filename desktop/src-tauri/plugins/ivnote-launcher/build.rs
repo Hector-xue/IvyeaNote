@@ -11,6 +11,10 @@ const COMMANDS: &[&str] = &[
     "bound_notes",
     "rebind_notes",
     "pin_note_widget",
+    "set_recent_notes",
+    "set_todo_snapshot",
+    "take_pending_toggles",
+    "set_todo_live",
     "register_listener",
     "remove_listener",
 ];

@@ -2,10 +2,16 @@
 <resources>
     <!-- 卡片圆角：Android 12+ 用系统统一的小部件圆角（values-v31 覆盖） -->
     <dimen name="ivw_radius">20dp</dimen>
-    <!-- 下面四个 NoteWidget.bodyLines 用来算正文能放几行，改布局时要一起改 -->
-    <dimen name="ivw_pad">12dp</dimen>
-    <dimen name="ivw_header_h">26dp</dimen>
-    <dimen name="ivw_time_h">16dp</dimen>
-    <!-- 14sp 正文 + 2dp 行距 ≈ 19dp，取 20 留余量 -->
+    <!-- 笔记卡片：NoteWidget.bodyLines 用下面几个算正文能放几行，改布局时要一起改 -->
+    <dimen name="ivw_pad">14dp</dimen>
+    <dimen name="ivw_header_h">24dp</dimen>
+    <dimen name="ivw_footer_h">30dp</dimen>
+    <!-- 13sp 正文 + 3dp 行距 ≈ 19dp，取 20 留余量 -->
     <dimen name="ivw_line_h">20dp</dimen>
+    <!-- 列表类（最近 / 待办）：RecentWidget.rows / TodoWidget.rows 用 -->
+    <dimen name="ivw_list_pad">12dp</dimen>
+    <dimen name="ivw_list_header_h">30dp</dimen>
+    <dimen name="ivw_row_h">34dp</dimen>
+    <!-- 圆形动作钮 -->
+    <dimen name="ivw_fab">30dp</dimen>
 </resources>

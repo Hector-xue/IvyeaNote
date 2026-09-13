@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 最近笔记：默认 4×2，可竖着拉到 4×4 多列几行；横向最窄 3 格 -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="180dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/ivw_list"
+    android:previewLayout="@layout/ivw_recent_preview"
+    android:previewImage="@drawable/ivw_preview_recent"
+    android:description="@string/ivw_recent_widget_desc"
+    android:widgetCategory="home_screen" />

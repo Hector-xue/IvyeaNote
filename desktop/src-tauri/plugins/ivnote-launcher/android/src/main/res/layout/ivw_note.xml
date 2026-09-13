@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  笔记卡片。只用 RemoteViews 认识的控件（LinearLayout / ImageView / TextView）。
-  高度相关的三个尺寸（ivw_pad / ivw_header_h / ivw_time_h / ivw_line_h）与 NoteWidget.bodyLines 联动。
+  笔记卡片：标题 / 正文 / 底栏（相对时间 + 右下角铅笔钮）。
+  只用 RemoteViews 认识的控件（LinearLayout / ImageView / TextView）。
+  ivw_pad / ivw_header_h / ivw_footer_h / ivw_line_h 与 NoteWidget.bodyLines 联动。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/ivw_root"
@@ -11,52 +12,55 @@
     android:background="@drawable/ivw_bg"
     android:padding="@dimen/ivw_pad">
 
-    <LinearLayout
+    <TextView
+        android:id="@+id/ivw_title"
         android:layout_width="match_parent"
         android:layout_height="@dimen/ivw_header_h"
-        android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:paddingBottom="4dp">
-
-        <ImageView
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:src="@drawable/ivw_logo"
-            android:contentDescription="@string/ivw_app_name" />
-
-        <TextView
-            android:id="@+id/ivw_title"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:text="@string/ivw_preview_title"
-            android:textColor="@color/ivw_text"
-            android:textSize="15sp"
-            android:textStyle="bold"
-            android:maxLines="1"
-            android:ellipsize="end" />
-    </LinearLayout>
+        android:text="@string/ivw_preview_title"
+        android:textColor="@color/ivw_text"
+        android:textSize="16sp"
+        android:fontFamily="sans-serif-medium"
+        android:maxLines="1"
+        android:ellipsize="end" />
 
     <TextView
         android:id="@+id/ivw_body"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
+        android:layout_marginTop="4dp"
         android:text="@string/ivw_preview_body"
-        android:textColor="@color/ivw_text"
-        android:textSize="14sp"
-        android:lineSpacingExtra="2dp"
+        android:textColor="@color/ivw_body"
+        android:textSize="13sp"
+        android:lineSpacingExtra="3dp"
         android:maxLines="4"
         android:ellipsize="end" />
 
-    <TextView
-        android:id="@+id/ivw_time"
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="@dimen/ivw_time_h"
-        android:gravity="bottom"
-        android:text="@string/ivw_preview_time"
-        android:textColor="@color/ivw_muted"
-        android:textSize="12sp"
-        android:maxLines="1" />
+        android:layout_height="@dimen/ivw_footer_h"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/ivw_time"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/ivw_preview_time"
+            android:textColor="@color/ivw_muted"
+            android:textSize="11sp"
+            android:maxLines="1"
+            android:ellipsize="end" />
+
+        <ImageView
+            android:id="@+id/ivw_edit"
+            android:layout_width="@dimen/ivw_fab"
+            android:layout_height="@dimen/ivw_fab"
+            android:padding="7dp"
+            android:background="@drawable/ivw_plus_circle"
+            android:src="@drawable/ivw_ic_edit"
+            android:contentDescription="@string/ivw_continue_writing" />
+    </LinearLayout>
 </LinearLayout>

@@ -9,6 +9,6 @@
     android:updatePeriodMillis="0"
     android:initialLayout="@layout/ivw_quick"
     android:previewLayout="@layout/ivw_quick"
-    android:previewImage="@drawable/ivw_preview"
+    android:previewImage="@drawable/ivw_preview_quick"
     android:description="@string/ivw_quick_widget_desc"
     android:widgetCategory="home_screen" />

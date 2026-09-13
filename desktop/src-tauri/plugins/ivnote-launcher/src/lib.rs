@@ -1,4 +1,4 @@
-//! 安卓桌面入口：长按图标快捷方式 + 桌面小部件（v0.11.30）。
+//! 安卓桌面入口：长按图标快捷方式 + 桌面小部件（v0.11.30；v0.11.31 加最近笔记 / 待办 / 快速记录）。
 //!
 //! # 为什么是一个独立插件
 //!
@@ -130,6 +130,58 @@ pub struct PinResult {
     pub count: i64,
 }
 
+/// 「最近笔记」小部件的一行
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentNote {
+    pub vault_id: i64,
+    pub path: String,
+    pub title: String,
+    /// 毫秒时间戳
+    pub mtime: i64,
+}
+
+/// 「待办」小部件的一条：`raw` 是 `- [ ]` 后面的 Markdown 原文（改文件时拿它核对那一行），
+/// `text` 是剥掉记号后给人看的；`line` 是 0 起的行号。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoItem {
+    /// 只有原生交回来的队列条目才带（当时列表属于哪个库）；JS 推列表时为 0
+    #[serde(default)]
+    pub vault_id: i64,
+    pub path: String,
+    pub title: String,
+    pub line: i64,
+    pub raw: String,
+    pub text: String,
+}
+
+/// 整份待办列表。`root` 是库在磁盘上的位置（`content://` 树 / 绝对路径 / `opfs://…`），
+/// App 没在跑时原生据此决定能不能自己改文件。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoSnapshot {
+    pub vault_id: i64,
+    pub root: String,
+    pub items: Vec<TodoItem>,
+}
+
+#[derive(Deserialize)]
+struct PendingResult {
+    items: Vec<TodoItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecentListArg<'a> {
+    items: &'a [RecentNote],
+}
+
+#[derive(Serialize)]
+struct TodoLiveArg {
+    live: bool,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ShortcutsArg<'a> {
@@ -224,6 +276,46 @@ fn pin_note_widget<R: Runtime>(app: tauri::AppHandle<R>, snapshot: NoteSnapshot)
         .call("pinNoteWidget", snapshot)
 }
 
+/// 「最近笔记」小部件的整份列表（顺序即显示顺序，JS 已截过条数）。
+#[tauri::command]
+fn set_recent_notes<R: Runtime>(app: tauri::AppHandle<R>, items: Vec<RecentNote>) -> Result<()> {
+    let _: serde_json::Value = app
+        .state::<Launcher<R>>()
+        .inner()
+        .call("setRecentNotes", RecentListArg { items: &items })?;
+    Ok(())
+}
+
+/// 「待办」小部件的整份列表；原生侧存下并立刻重画。
+#[tauri::command]
+fn set_todo_snapshot<R: Runtime>(app: tauri::AppHandle<R>, snapshot: TodoSnapshot) -> Result<()> {
+    let _: serde_json::Value = app
+        .state::<Launcher<R>>()
+        .inner()
+        .call("setTodoSnapshot", snapshot)?;
+    Ok(())
+}
+
+/// 桌面上勾掉了、原生没能写进文件的那些（领走即清空）。JS 起来后逐条落到笔记里。
+#[tauri::command]
+fn take_pending_toggles<R: Runtime>(app: tauri::AppHandle<R>) -> Result<Vec<TodoItem>> {
+    let r: PendingResult = app
+        .state::<Launcher<R>>()
+        .inner()
+        .call("takePendingToggles", serde_json::json!({}))?;
+    Ok(r.items)
+}
+
+/// 告诉原生 JS 正在（或不再）监听 `todo` 事件：在听时勾选交给 JS 改文件，不在听时原生自己来。
+#[tauri::command]
+fn set_todo_live<R: Runtime>(app: tauri::AppHandle<R>, live: bool) -> Result<()> {
+    let _: serde_json::Value = app
+        .state::<Launcher<R>>()
+        .inner()
+        .call("setTodoLive", TodoLiveArg { live })?;
+    Ok(())
+}
+
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     Builder::new("ivnote-launcher")
         .invoke_handler(tauri::generate_handler![
@@ -232,7 +324,11 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             set_note_snapshot,
             bound_notes,
             rebind_notes,
-            pin_note_widget
+            pin_note_widget,
+            set_recent_notes,
+            set_todo_snapshot,
+            take_pending_toggles,
+            set_todo_live
         ])
         .setup(|app, _api| {
             #[cfg(target_os = "android")]

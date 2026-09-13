@@ -12,8 +12,12 @@
  * 3. **推笔记快照**给小部件：打开一篇、保存一篇时推"最近"快照；被钉在桌面上的那几篇，
  *    只要文件指纹（mtime/size）变了——同步拉下来的、别的应用改的——就重读再推。
  * 4. **添加到桌面**：把当前这篇钉成一张小部件（走系统一键添加；不支持的启动器有两条退路）。
+ * 5. **最近笔记列表**（v0.11.31）：和快捷方式一起、最近列表一变就推。
+ * 6. **待办**（v0.11.31）：从全文索引里捞出所有未完成的 `- [ ]` 推给小部件；桌面上勾掉一条时
+ *    原生发 `todo` 事件过来，这里走 App 的写盘路径改那一行（和手动勾选同一段代码）；
+ *    App 没在跑时勾掉的会排在原生的队列里，起来后领走补做。
  *
- * 原生侧不读笔记文件，所以"卡片上显示什么"完全由这里决定：见 lib/widgetText。
+ * 原生侧不读笔记文件，所以"卡片上显示什么"完全由这里决定：见 lib/widgetText、lib/todoTasks。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FileIO, FileMeta } from '../lib/sync';
@@ -21,6 +25,7 @@ import type { FileStamp } from '../lib/noteIndex';
 import type { VaultMeta } from '../lib/store';
 import { titleOfPath } from '../lib/wikilink';
 import { widgetPreview } from '../lib/widgetText';
+import { collectTasks } from '../lib/todoTasks';
 import {
   launcherAvailable,
   takeLaunchAction,
@@ -30,9 +35,16 @@ import {
   boundNotes,
   rebindNotes,
   pinNoteWidget,
+  setRecentNotes,
+  setTodoSnapshot,
+  takePendingToggles,
+  setTodoLive,
+  onTodoToggle,
   buildShortcuts,
+  buildRecentNotes,
   isActionFresh,
   type LaunchAction,
+  type TodoItem,
 } from '../lib/launcher';
 
 export interface LauncherDeps {
@@ -55,6 +67,14 @@ export interface LauncherDeps {
   createNote(): void | Promise<void>;
   openDaily(): void | Promise<void>;
   toast(msg: string, kind?: 'info' | 'ok' | 'error'): void;
+  /** 全文索引（useNoteIndex.docs / ready）：待办列表从这里捞 */
+  docs: readonly { path: string; content: string }[];
+  indexReady: boolean;
+  /**
+   * 把某篇第 `line` 行的 `- [ ] raw` 标成完成（走 App 的写盘路径：编辑器回灌、索引、同步）。
+   * 那一行对不上返回 false，文件不动。
+   */
+  toggleTask(path: string, line: number, raw: string): Promise<boolean>;
 }
 
 export interface Launcher {
@@ -78,7 +98,7 @@ const SHORTCUT_DEBOUNCE_MS = 800;
 
 export function useLauncher(deps: LauncherDeps): Launcher {
   const enabled = useMemo(() => launcherAvailable(), []);
-  const { vault, canSwitchTo, switchVault, files, filesLoaded, mdStamps, recent, currentPath, doc } = deps;
+  const { vault, canSwitchTo, switchVault, files, filesLoaded, mdStamps, recent, currentPath, doc, docs, indexReady } = deps;
 
   // 最新值走 ref，异步回调 / 执行动作时不吃陈旧闭包
   const depsRef = useRef(deps);
@@ -165,9 +185,16 @@ export function useLauncher(deps: LauncherDeps): Launcher {
       setShortcuts(buildShortcuts(vaultId, recent, files, titleOfPath)).catch((e) =>
         console.warn('发布快捷方式失败', e)
       );
+      // 5. 「最近笔记」小部件吃同一份最近列表
+      const mtimeOf = (p: string) => depsRef.current.metaOf(p)?.mtime ?? 0;
+      setRecentNotes(buildRecentNotes(vaultId, recent, files, titleOfPath, mtimeOf)).catch((e) =>
+        console.warn('更新最近笔记小部件失败', e)
+      );
     }, SHORTCUT_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
-  }, [enabled, vaultId, filesLoaded, recent, files]);
+    // mdStamps 变了修改时间才会变；metaOf 走 ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, vaultId, filesLoaded, recent, files, mdStamps]);
 
   // ---------------------------------------------------------------- 3. 快照
 
@@ -286,6 +313,95 @@ export function useLauncher(deps: LauncherDeps): Launcher {
     },
     [enabled]
   );
+
+  // ---------------------------------------------------------------- 6. 待办
+
+  /** 上次推给小部件的列表（序列化后），一样就不再推 */
+  const lastTodo = useRef<string>('');
+
+  const pushTodo = useCallback((force = false) => {
+    const cur = depsRef.current;
+    const v = cur.vault;
+    if (!v || !cur.indexReady) return;
+    const mtimeOf = (p: string) => cur.metaOf(p)?.mtime ?? 0;
+    const items = collectTasks(cur.docs, mtimeOf, titleOfPath);
+    const snapshot = { vaultId: v.id, root: v.localPath ?? '', items };
+    const key = JSON.stringify(snapshot);
+    if (!force && key === lastTodo.current) return;
+    lastTodo.current = key;
+    setTodoSnapshot(snapshot).catch((e) => console.warn('更新待办小部件失败', e));
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || vaultId === null || !indexReady) return;
+    const t = window.setTimeout(() => pushTodo(), SHORTCUT_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+    // docs 一变（写盘 touch / 同步对账）就重算；其余走 ref
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, vaultId, indexReady, docs]);
+
+  /** 勾掉一条：改那一行；改不了要说清楚；无论成败都把最新列表推回去（清掉"刚勾掉"的标记） */
+  const applyToggle = useCallback(async (item: TodoItem) => {
+    const cur = depsRef.current;
+    const v = cur.vault;
+    if (!v) return;
+    if (item.vaultId && item.vaultId !== v.id && cur.knowsVault(item.vaultId)) {
+      cur.toast(`「${item.text}」在别的库里，切过去再勾`, 'info');
+      return;
+    }
+    try {
+      const ok = await cur.toggleTask(item.path, item.line, item.raw);
+      if (!ok) cur.toast(`「${item.text}」这一行已经变了，没有改`, 'error');
+    } catch (e) {
+      cur.toast(`勾选失败：${e instanceof Error ? e.message : String(e)}`, 'error');
+    }
+    // 成功时写盘会 touch 索引、docs 变化会触发上面的 effect；失败时 docs 不变，这里强推一次
+    pushTodo(true);
+  }, [pushTodo]);
+
+  // 原生推来的「桌面上勾掉了一条」事件；挂上之后告诉原生"我在听"
+  useEffect(() => {
+    if (!enabled) return;
+    let off: (() => void) | null = null;
+    let gone = false;
+    void onTodoToggle((item) => void applyToggle(item))
+      .then((f) => {
+        if (gone) {
+          f();
+          return;
+        }
+        off = f;
+        return setTodoLive(true);
+      })
+      .catch((e) => console.warn('监听待办勾选失败', e));
+    return () => {
+      gone = true;
+      off?.();
+      setTodoLive(false).catch(() => {});
+    };
+  }, [enabled, applyToggle]);
+
+  // App 没在跑时勾掉的：列表就绪后领走补做（换库也再领一次——排队的可能属于新切到的库）
+  useEffect(() => {
+    if (!enabled || vaultId === null || !filesLoaded) return;
+    let cancelled = false;
+    void (async () => {
+      let items: TodoItem[];
+      try {
+        items = await takePendingToggles();
+      } catch (e) {
+        console.warn('领取待办队列失败', e);
+        return;
+      }
+      for (const item of items) {
+        if (cancelled) return;
+        await applyToggle(item);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, vaultId, filesLoaded, applyToggle]);
 
   // ---------------------------------------------------------------- 4. 添加到桌面
 

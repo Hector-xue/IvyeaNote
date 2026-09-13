@@ -54,9 +54,45 @@ class RebindArg {
   var ops: List<RebindOpArg> = emptyList()
 }
 
+@InvokeArg
+class RecentItemArg {
+  var vaultId: Long = 0L
+  lateinit var path: String
+  var title: String = ""
+  var mtime: Long = 0L
+}
+
+@InvokeArg
+class RecentListArg {
+  var items: List<RecentItemArg> = emptyList()
+}
+
+@InvokeArg
+class TodoItemArg {
+  // Rust 侧 TodoItem 带 vaultId（队列条目用），推列表时是 0，这里收下不用
+  var vaultId: Long = 0L
+  lateinit var path: String
+  var title: String = ""
+  var line: Int = -1
+  var raw: String = ""
+  var text: String = ""
+}
+
+@InvokeArg
+class TodoSnapshotArg {
+  var vaultId: Long = 0L
+  var root: String = ""
+  var items: List<TodoItemArg> = emptyList()
+}
+
+@InvokeArg
+class TodoLiveArg {
+  var live: Boolean = false
+}
+
 /**
  * 桌面入口的插件本体：接住「从快捷方式 / 小部件进来」的 intent，
- * 并把 JS 推来的快捷方式列表 / 笔记快照交给系统。
+ * 并把 JS 推来的快捷方式列表 / 笔记快照 / 最近列表 / 待办列表交给系统。
  *
  * ## intent 是怎么接到的（这是这个文件最要紧的一段）
  *
@@ -86,6 +122,7 @@ class LauncherPlugin(private val activity: Activity) : Plugin(activity) {
   private val app: Context = activity.applicationContext
 
   init {
+    instance = this
     (activity.application as Application).registerActivityLifecycleCallbacks(
       object : Application.ActivityLifecycleCallbacks {
         override fun onActivityCreated(a: Activity, savedInstanceState: Bundle?) {
@@ -99,7 +136,10 @@ class LauncherPlugin(private val activity: Activity) : Plugin(activity) {
         override fun onActivityPaused(a: Activity) {}
         override fun onActivityStopped(a: Activity) {}
         override fun onActivitySaveInstanceState(a: Activity, outState: Bundle) {}
-        override fun onActivityDestroyed(a: Activity) {}
+        override fun onActivityDestroyed(a: Activity) {
+          // WebView 随 Activity 一起没了：JS 不在了，待办的勾选别再往它那边发
+          if (a.javaClass == activity.javaClass) todoLive = false
+        }
       }
     )
   }
@@ -246,6 +286,83 @@ class LauncherPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.resolve(res)
     } catch (ex: Exception) {
       invoke.reject(ex.message ?: "添加到桌面失败")
+    }
+  }
+
+  // ---------------------------------------------------------------- 最近笔记 / 待办
+
+  @Command
+  fun setRecentNotes(invoke: Invoke) {
+    try {
+      val a = invoke.parseArgs(RecentListArg::class.java)
+      WidgetStore(app).putRecentList(a.items.map { WidgetStore.RecentItem(it.vaultId, it.path, it.title, it.mtime) })
+      RecentWidget.updateAll(app)
+      invoke.resolve(JSObject())
+    } catch (ex: Exception) {
+      invoke.reject(ex.message ?: "更新最近笔记失败")
+    }
+  }
+
+  @Command
+  fun setTodoSnapshot(invoke: Invoke) {
+    try {
+      val a = invoke.parseArgs(TodoSnapshotArg::class.java)
+      WidgetStore(app).putTodoSnapshot(
+        a.vaultId,
+        a.root,
+        a.items.map { WidgetStore.TodoItem(it.path, it.title, it.line, it.raw, it.text) }
+      )
+      TodoWidget.updateAll(app)
+      invoke.resolve(JSObject())
+    } catch (ex: Exception) {
+      invoke.reject(ex.message ?: "更新待办失败")
+    }
+  }
+
+  /** 桌面上勾掉了、原生没能写进文件的那些：JS 起来后领走处理（领走即清空） */
+  @Command
+  fun takePendingToggles(invoke: Invoke) {
+    val res = JSObject()
+    res.put("items", WidgetStore(app).takePendingToggles())
+    invoke.resolve(res)
+  }
+
+  /** JS 告诉原生"我在听 todo 事件"（true）/ 卸载了（false） */
+  @Command
+  fun setTodoLive(invoke: Invoke) {
+    try {
+      todoLive = invoke.parseArgs(TodoLiveArg::class.java).live
+      invoke.resolve(JSObject())
+    } catch (ex: Exception) {
+      invoke.reject(ex.message ?: "参数错误")
+    }
+  }
+
+  companion object {
+    /** 每个进程只有一个插件实例（PluginManager 只建一次） */
+    @Volatile
+    private var instance: LauncherPlugin? = null
+
+    /** JS 那边的 useLauncher 正挂着、能接 todo 事件 */
+    @Volatile
+    var todoLive: Boolean = false
+
+    /**
+     * 桌面上勾掉了一条待办：App 活着就交给 JS（返回 true），JS 改文件后会推来新列表。
+     * 不在就返回 false，由 TodoWidget 自己想办法。
+     */
+    fun notifyTodoToggle(vaultId: Long, item: WidgetStore.TodoItem): Boolean {
+      val p = instance ?: return false
+      if (!todoLive) return false
+      val o = JSObject()
+      o.put("vaultId", vaultId)
+      o.put("path", item.path)
+      o.put("title", item.title)
+      o.put("line", item.line)
+      o.put("raw", item.raw)
+      o.put("text", item.text)
+      p.trigger("todo", o)
+      return true
     }
   }
 }

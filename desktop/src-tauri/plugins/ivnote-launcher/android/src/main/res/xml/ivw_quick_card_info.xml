@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 快速记录：2×2，不可拉伸，无状态（日期是 TextClock 自己走） -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:resizeMode="none"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/ivw_quick_card"
+    android:previewLayout="@layout/ivw_quick_card"
+    android:previewImage="@drawable/ivw_preview_quick_card"
+    android:description="@string/ivw_quick_card_widget_desc"
+    android:widgetCategory="home_screen" />

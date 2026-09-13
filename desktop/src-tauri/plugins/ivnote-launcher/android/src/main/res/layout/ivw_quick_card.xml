@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  快速记录（2×2）：今天的日期、一句提示、底栏「今日日记」+ 圆形 ＋。
+  点卡片任何空白处 = 新建笔记。日期用 TextClock，系统自己走字，不需要定时唤醒。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ivw_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/ivw_bg"
+    android:padding="@dimen/ivw_pad">
+
+    <TextClock
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:format12Hour="@string/ivw_date_format"
+        android:format24Hour="@string/ivw_date_format"
+        android:textColor="@color/ivw_muted"
+        android:textSize="12sp"
+        android:maxLines="1" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="6dp"
+        android:text="@string/ivw_quick_prompt"
+        android:textColor="@color/ivw_text"
+        android:textSize="17sp"
+        android:fontFamily="sans-serif-medium"
+        android:lineSpacingExtra="3dp"
+        android:maxLines="3"
+        android:ellipsize="end" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/ivw_footer_h"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <LinearLayout
+            android:id="@+id/ivw_daily"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <ImageView
+                android:layout_width="16dp"
+                android:layout_height="16dp"
+                android:src="@drawable/ivw_ic_calendar"
+                android:contentDescription="@string/ivw_daily" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:text="@string/ivw_daily"
+                android:textColor="@color/ivw_accent"
+                android:textSize="12sp"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1" />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/ivw_new"
+            android:layout_width="@dimen/ivw_fab"
+            android:layout_height="@dimen/ivw_fab"
+            android:padding="7dp"
+            android:background="@drawable/ivw_plus_circle"
+            android:src="@drawable/ivw_ic_plus"
+            android:contentDescription="@string/ivw_quick_new" />
+    </LinearLayout>
+</LinearLayout>
