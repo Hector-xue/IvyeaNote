@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 待办：刚勾掉的（实心绿圈 + 勾） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M12,12m-8.5,0a8.5,8.5 0 1 1 17,0a8.5,8.5 0 1 1 -17,0"
+        android:fillColor="@color/ivw_accent" />
+    <path android:pathData="M8,12.2l2.8,2.8L16.5,9.5"
+        android:strokeColor="@color/ivw_on_accent" android:strokeWidth="2"
+        android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

@@ -11,6 +11,33 @@
 /** 预览最多保留多少字符。4×4 的卡片也就三四十行，再多只是白白撑大 SharedPreferences */
 export const PREVIEW_MAX = 1200;
 
+/**
+ * 剥掉一行里的行内记号（链接 / 强调 / 行内代码 / HTML），不碰行首的列表 / 标题记号。
+ * 待办小部件的事项文字也用它（`- [ ] **回邮件**` → `回邮件`）。
+ */
+export function stripInline(line: string): string {
+  let s = line;
+  // 图片：整个去掉（卡片放不下，留个"![]"只会碍眼）
+  s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+  // 双链 [[路径|显示名]] → 显示名（没有 | 就取最后一段）
+  s = s.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target: string, alias?: string) => {
+    if (alias) return alias;
+    const base = target.split('/').pop() ?? target;
+    return base.replace(/\.(md|markdown)$/i, '');
+  });
+  // 普通链接 [文字](url) → 文字
+  s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+  // 强调 / 删除线 / 高亮 / 行内代码：去记号留内容
+  s = s.replace(/(\*\*|__)(.+?)\1/g, '$2');
+  s = s.replace(/(\*|_)(?=\S)(.+?)(?<=\S)\1/g, '$2');
+  s = s.replace(/~~(.+?)~~/g, '$1');
+  s = s.replace(/==(.+?)==/g, '$1');
+  s = s.replace(/`([^`]+)`/g, '$1');
+  // HTML 标签
+  s = s.replace(/<[^>]+>/g, '');
+  return s;
+}
+
 export function widgetPreview(markdown: string, max = PREVIEW_MAX): string {
   let text = markdown.replace(/\r\n?/g, '\n');
   // YAML frontmatter：整块去掉（tags/date 这类元数据不该出现在卡片上）
@@ -20,8 +47,6 @@ export function widgetPreview(markdown: string, max = PREVIEW_MAX): string {
   const out: string[] = [];
   for (const raw of text.split('\n')) {
     let line = raw;
-    // 图片：整个去掉（卡片放不下，留个"![]"只会碍眼）
-    line = line.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
     // 任务框：☐ / ☑，比 "- [ ]" 直观得多
     line = line.replace(/^(\s*)[-*+]\s+\[[xX]\]\s*/, '$1☑ ');
     line = line.replace(/^(\s*)[-*+]\s+\[\s\]\s*/, '$1☐ ');
@@ -30,22 +55,7 @@ export function widgetPreview(markdown: string, max = PREVIEW_MAX): string {
     // 标题井号、引用符号
     line = line.replace(/^\s*#{1,6}\s+/, '');
     line = line.replace(/^\s*>\s?/, '');
-    // 双链 [[路径|显示名]] → 显示名（没有 | 就取最后一段）
-    line = line.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target: string, alias?: string) => {
-      if (alias) return alias;
-      const base = target.split('/').pop() ?? target;
-      return base.replace(/\.(md|markdown)$/i, '');
-    });
-    // 普通链接 [文字](url) → 文字
-    line = line.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
-    // 强调 / 删除线 / 高亮 / 行内代码：去记号留内容
-    line = line.replace(/(\*\*|__)(.+?)\1/g, '$2');
-    line = line.replace(/(\*|_)(?=\S)(.+?)(?<=\S)\1/g, '$2');
-    line = line.replace(/~~(.+?)~~/g, '$1');
-    line = line.replace(/==(.+?)==/g, '$1');
-    line = line.replace(/`([^`]+)`/g, '$1');
-    // HTML 标签
-    line = line.replace(/<[^>]+>/g, '');
+    line = stripInline(line);
     // 分隔线整行去掉
     if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) line = '';
     out.push(line.replace(/\s+$/, ''));

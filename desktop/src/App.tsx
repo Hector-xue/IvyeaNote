@@ -98,6 +98,7 @@ import {
   type FileSyncStatus,
 } from './lib/syncStatus';
 import { extractLinks, titleOfPath } from './lib/wikilink';
+import { toggleTaskLine } from './lib/todoTasks';
 import {
   loadState,
   saveState,
@@ -1334,6 +1335,39 @@ export default function App() {
       noteIndex.touch(path, content);
       launcherRef.current?.notePersisted(path, content);
       if (prefs.autoSync) void doSync();
+    },
+    [vault, io, fileHistory, noteIndex, prefs.autoSync, doSync]
+  );
+
+  /**
+   * v0.11.31：不经过编辑器、程序性地改一篇笔记（桌面待办小部件勾掉一条走这里）。
+   *
+   * 与 restoreVersion 同一条路：先把编辑器里没落盘的改动落下去，拿"现在这版"给 `mutate`，
+   * 它返回 null 就什么都不动（比如那一行已经变了）；否则留快照、写盘、编辑器回灌、索引、
+   * 小部件、推同步——和用户手动改是同一个结果，服务端不需要知道是谁改的。
+   */
+  const rewriteNote = useCallback(
+    async (path: string, mutate: (content: string) => string | null): Promise<boolean> => {
+      if (!vault) return false;
+      const root = vault.localPath ?? '';
+      const live = path === currentPathRef.current ? docRef.current : path === splitPathRef.current ? splitDocRef.current : null;
+      const pending = saveTimers.current.get(path);
+      if (pending !== undefined) {
+        window.clearTimeout(pending);
+        saveTimers.current.delete(path);
+        if (live !== null) await io.write(root, path, live);
+      }
+      const before = live ?? (await io.read(root, path));
+      const after = mutate(before);
+      if (after === null || after === before) return false;
+      await fileHistory.snapshotBefore(path);
+      await io.write(root, path, after);
+      if (path === currentPathRef.current) setDoc(after);
+      if (path === splitPathRef.current) setSplitDoc(after);
+      noteIndex.touch(path, after);
+      launcherRef.current?.notePersisted(path, after);
+      if (prefs.autoSync) void doSync();
+      return true;
     },
     [vault, io, fileHistory, noteIndex, prefs.autoSync, doSync]
   );
@@ -3459,6 +3493,9 @@ export default function App() {
     createNote: () => onCreateNote(),
     openDaily: () => openDailyNote(),
     toast,
+    docs: searchDocs,
+    indexReady: noteIndex.ready,
+    toggleTask: (path, line, raw) => rewriteNote(path, (c) => toggleTaskLine(c, line, raw)),
   });
   launcherRef.current = launcher;
 

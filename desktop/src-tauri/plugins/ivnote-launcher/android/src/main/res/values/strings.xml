@@ -1,19 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="ivw_app_name">Ivyea Note</string>
+
     <string name="ivw_note_widget_label">笔记卡片</string>
-    <string name="ivw_note_widget_desc">把一篇笔记放在桌面上，点一下直接编辑</string>
+    <string name="ivw_note_widget_desc">把一篇笔记放在桌面上，点一下接着写</string>
     <string name="ivw_quick_widget_label">快捷创建</string>
-    <string name="ivw_quick_widget_desc">一键新建笔记、打开 Ivyea Note</string>
+    <string name="ivw_quick_widget_desc">一键新建笔记、进今日日记</string>
+    <string name="ivw_quick_card_widget_label">快速记录</string>
+    <string name="ivw_quick_card_widget_desc">零碎念头随手记，也能一步进今日日记</string>
+    <string name="ivw_recent_widget_label">最近笔记</string>
+    <string name="ivw_recent_widget_desc">最近打开的几篇，点哪篇开哪篇</string>
+    <string name="ivw_todo_widget_label">待办</string>
+    <string name="ivw_todo_widget_desc">笔记里没完成的待办，在桌面上直接勾掉</string>
+
     <string name="ivw_untitled">未命名</string>
-    <string name="ivw_empty_note">（这篇还是空的，点一下开始写）</string>
+    <string name="ivw_empty_note">还没有内容，点一下开始写</string>
     <string name="ivw_no_snapshot">点一下打开这篇笔记</string>
     <string name="ivw_hint_open_first">打开 Ivyea Note 后，最近打开的笔记会显示在这里；也可以在笔记的「⋯」菜单里选「添加到桌面」，把指定的一篇钉在这儿。</string>
-    <string name="ivw_quick_open">Ivyea Note</string>
-    <string name="ivw_quick_open_sub">点击打开</string>
+    <string name="ivw_continue_writing">继续写</string>
     <string name="ivw_quick_new">新建笔记</string>
-    <!-- 小部件选择器里的预览用（真实卡片会被运行时文字覆盖） -->
+    <string name="ivw_quick_new_sub">随手记一条</string>
+    <string name="ivw_quick_prompt">零碎念头，\n随手记下</string>
+    <string name="ivw_daily">今日日记</string>
+    <!-- TextClock 的格式：9月13日 周六 -->
+    <string name="ivw_date_format">M月d日 EEE</string>
+    <string name="ivw_recent_empty">打开 Ivyea Note 后，\n最近看过的笔记会列在这里</string>
+    <string name="ivw_todo_empty">没有未完成的待办\n在笔记里写「- [ ] 事项」就会出现在这里</string>
+    <string name="ivw_todo_done">标为完成</string>
+    <!-- 相对时间 -->
+    <string name="ivw_time_now">刚刚</string>
+    <string name="ivw_time_minutes">%d 分钟前</string>
+    <string name="ivw_time_today">今天 %s</string>
+    <string name="ivw_time_yesterday">昨天 %s</string>
+
+    <!-- 小部件选择器 / 添加确认框里的预览文字（真实卡片会被运行时文字覆盖） -->
     <string name="ivw_preview_title">每周复盘</string>
-    <string name="ivw_preview_body">• 广告：否词 12 个，ACoS 降了 5 个点\n• 新品：样品周三到，先拍主图\n☐ 给供应商回邮件\n☐ 周五前把发票整理好</string>
-    <string name="ivw_preview_time">08-21 08:22</string>
+    <string name="ivw_preview_body">• 新品样品周三到\n• 先拍主图再上架\n☐ 给供应商回邮件\n☐ 周五前把发票整理好</string>
+    <string name="ivw_preview_time">昨天 21:40</string>
+    <string name="ivw_preview_count">3</string>
+    <string name="ivw_preview_r1_title">每周复盘</string>
+    <string name="ivw_preview_r1_time">昨天</string>
+    <string name="ivw_preview_r2_title">供应商清单</string>
+    <string name="ivw_preview_r2_time">周三</string>
+    <string name="ivw_preview_r3_title">读书笔记：卓有成效的管理者</string>
+    <string name="ivw_preview_r3_time">9月8日</string>
+    <string name="ivw_preview_todo">给供应商回邮件</string>
+    <string name="ivw_preview_t1_text">给供应商回邮件</string>
+    <string name="ivw_preview_t1_note">每周复盘</string>
+    <string name="ivw_preview_t2_text">周五前把发票整理好</string>
+    <string name="ivw_preview_t2_note">每周复盘</string>
+    <string name="ivw_preview_t3_text">样品到了先拍主图</string>
+    <string name="ivw_preview_t3_note">新品</string>
 </resources>

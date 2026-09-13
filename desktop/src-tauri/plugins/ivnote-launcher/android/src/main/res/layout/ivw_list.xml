@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  列表类小部件的壳（最近笔记 / 待办共用）：标题行 + 右上角圆形 ＋ + 行容器。
+  行是运行时用 RemoteViews.addView 一行行加进 ivw_rows 的（ivw_recent_row / ivw_todo_row），
+  行数按小部件实际高度算（RecentWidget.rows / TodoWidget.rows）。
+  ivw_list_pad / ivw_list_header_h / ivw_row_h 与那两个算法联动。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ivw_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/ivw_bg"
+    android:paddingStart="@dimen/ivw_list_pad"
+    android:paddingEnd="@dimen/ivw_list_pad"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <LinearLayout
+        android:id="@+id/ivw_header"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/ivw_list_header_h"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/ivw_head"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ivw_recent_widget_label"
+            android:textColor="@color/ivw_text"
+            android:textSize="13sp"
+            android:fontFamily="sans-serif-medium"
+            android:maxLines="1" />
+
+        <TextView
+            android:id="@+id/ivw_count"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:paddingStart="7dp"
+            android:paddingEnd="7dp"
+            android:paddingTop="1dp"
+            android:paddingBottom="1dp"
+            android:background="@drawable/ivw_pill"
+            android:text="@string/ivw_preview_count"
+            android:textColor="@color/ivw_accent"
+            android:textSize="10sp"
+            android:fontFamily="sans-serif-medium"
+            android:visibility="gone" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <ImageView
+            android:id="@+id/ivw_new"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:padding="6dp"
+            android:background="@drawable/ivw_plus_circle"
+            android:src="@drawable/ivw_ic_plus"
+            android:contentDescription="@string/ivw_quick_new" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/ivw_rows"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:divider="@drawable/ivw_hairline"
+        android:showDividers="middle" />
+
+    <TextView
+        android:id="@+id/ivw_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="@string/ivw_todo_empty"
+        android:textColor="@color/ivw_muted"
+        android:textSize="12sp"
+        android:lineSpacingExtra="2dp"
+        android:visibility="gone" />
+</LinearLayout>

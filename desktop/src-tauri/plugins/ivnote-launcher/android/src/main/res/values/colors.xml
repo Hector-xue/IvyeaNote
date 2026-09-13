@@ -1,12 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 浅色：暖白底、近黑字。夜间在 values-night 里覆盖 -->
+    <!-- 浅色：暖白底、近黑标题、深灰正文。夜间在 values-night 里覆盖 -->
     <color name="ivw_bg">#FFFDFCF9</color>
     <color name="ivw_text">#FF1D1D1F</color>
+    <color name="ivw_body">#FF48484A</color>
     <color name="ivw_muted">#FF8E8E93</color>
     <color name="ivw_line">#14000000</color>
-    <!-- 品牌绿（logo 渐变的深端）：快捷方式图标底色、快捷创建的 ＋ -->
+    <!-- 品牌绿（logo 渐变的深端）：快捷方式图标底色、圆形动作钮、待办勾 -->
     <color name="ivw_accent">#FF35603C</color>
     <color name="ivw_accent_soft">#FFE7F0E4</color>
     <color name="ivw_on_accent">#FFFFFFFF</color>
+    <!-- 待办的空圈 -->
+    <color name="ivw_ring">#FFB9B9BE</color>
 </resources>

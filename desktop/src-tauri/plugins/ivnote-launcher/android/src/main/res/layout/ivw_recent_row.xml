@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 最近笔记的一行：小圆点 + 标题 + 相对时间。整行点了打开那篇 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ivw_row"
+    android:layout_width="match_parent"
+    android:layout_height="@dimen/ivw_row_h"
+    android:orientation="horizontal"
+    android:gravity="center_vertical">
+
+    <ImageView
+        android:layout_width="6dp"
+        android:layout_height="6dp"
+        android:layout_marginEnd="10dp"
+        android:src="@drawable/ivw_dot"
+        android:contentDescription="@null" />
+
+    <TextView
+        android:id="@+id/ivw_row_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:text="@string/ivw_preview_title"
+        android:textColor="@color/ivw_text"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/ivw_row_time"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:text="@string/ivw_preview_time"
+        android:textColor="@color/ivw_muted"
+        android:textSize="11sp"
+        android:maxLines="1" />
+</LinearLayout>

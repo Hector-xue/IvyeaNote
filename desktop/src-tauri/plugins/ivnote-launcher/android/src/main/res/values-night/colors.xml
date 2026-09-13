@@ -2,9 +2,11 @@
 <resources>
     <color name="ivw_bg">#FF1F2022</color>
     <color name="ivw_text">#FFECECEC</color>
+    <color name="ivw_body">#FFC4C4C8</color>
     <color name="ivw_muted">#FF9A9A9F</color>
     <color name="ivw_line">#1FFFFFFF</color>
     <color name="ivw_accent">#FF8FAE79</color>
     <color name="ivw_accent_soft">#FF2A3A2C</color>
     <color name="ivw_on_accent">#FF10200F</color>
+    <color name="ivw_ring">#FF5C5C62</color>
 </resources>

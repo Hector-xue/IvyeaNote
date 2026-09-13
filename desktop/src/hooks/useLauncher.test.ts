@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { BoundNote, LaunchAction, NoteSnapshot, PinResult, RebindOp, ShortcutSpec } from '../lib/launcher';
+import type { BoundNote, LaunchAction, NoteSnapshot, PinResult, RebindOp, RecentNote, ShortcutSpec, TodoItem, TodoSnapshot } from '../lib/launcher';
 
 // mock 的签名要和真函数一致：vi.fn(async () => {}) 会把参数推成 []，
 // 下面 mock.calls[0][0] 在 tsc 下就是"空元组取下标"的类型错。
@@ -23,6 +23,11 @@ const native = vi.hoisted(() => ({
   boundNotes: vi.fn<() => Promise<BoundNote[]>>(async () => []),
   rebindNotes: vi.fn<(ops: RebindOp[]) => Promise<void>>(async () => {}),
   pinNoteWidget: vi.fn<(snapshot: NoteSnapshot) => Promise<PinResult>>(async () => ({ mode: 'requested', count: 0 })),
+  setRecentNotes: vi.fn<(items: RecentNote[]) => Promise<void>>(async () => {}),
+  setTodoSnapshot: vi.fn<(snapshot: TodoSnapshot) => Promise<void>>(async () => {}),
+  takePendingToggles: vi.fn<() => Promise<TodoItem[]>>(async () => []),
+  setTodoLive: vi.fn<(live: boolean) => Promise<void>>(async () => {}),
+  todoListeners: [] as Array<(item: TodoItem) => void>,
 }));
 
 vi.mock('../lib/launcher', async () => {
@@ -40,6 +45,14 @@ vi.mock('../lib/launcher', async () => {
     boundNotes: native.boundNotes,
     rebindNotes: native.rebindNotes,
     pinNoteWidget: native.pinNoteWidget,
+    setRecentNotes: native.setRecentNotes,
+    setTodoSnapshot: native.setTodoSnapshot,
+    takePendingToggles: native.takePendingToggles,
+    setTodoLive: native.setTodoLive,
+    onTodoToggle: async (cb: (item: TodoItem) => void) => {
+      native.todoListeners.push(cb);
+      return () => {};
+    },
   };
 });
 
@@ -76,6 +89,9 @@ function makeDeps(over: Partial<LauncherDeps> = {}): LauncherDeps {
     createNote: vi.fn(),
     openDaily: vi.fn(),
     toast: vi.fn(),
+    docs: [],
+    indexReady: true,
+    toggleTask: vi.fn(async () => true),
     ...over,
   };
 }
@@ -84,6 +100,7 @@ beforeEach(() => {
   native.available = true;
   native.queue = [];
   native.listeners = [];
+  native.todoListeners = [];
   vi.clearAllMocks();
 });
 // 没开 globals 时 RTL 不会自动卸载：上一条用例的 hook 还挂着，它的防抖定时器会串进下一条的断言
@@ -259,5 +276,74 @@ describe('useLauncher：快捷方式与快照', () => {
     native.pinNoteWidget.mockRejectedValueOnce(new Error('boom'));
     await result.current.pinToHome('a.md');
     expect((deps.toast as ReturnType<typeof vi.fn>).mock.calls[2][1]).toBe('error');
+  });
+});
+
+describe('useLauncher：最近笔记 / 待办', () => {
+  it('列表就绪后把最近打开的几篇（带修改时间）推给「最近笔记」小部件', async () => {
+    const deps = makeDeps({
+      recent: ['b.md', 'zz.md', 'a.md'],
+      metaOf: (p) => (p === 'a.md' ? { path: p, mtime: 123, size: 1 } : undefined),
+    });
+    renderHook(() => useLauncher(deps));
+    await waitFor(() => expect(native.setRecentNotes).toHaveBeenCalled(), { timeout: 3000 });
+    expect(native.setRecentNotes.mock.calls[0][0]).toEqual([
+      { vaultId: -1, path: 'b.md', title: 'b', mtime: 0 },
+      { vaultId: -1, path: 'a.md', title: 'a', mtime: 123 },
+    ]);
+  });
+
+  it('索引就绪后从全文里捞未完成的任务推给待办小部件；内容没变不重推', async () => {
+    const deps = makeDeps({
+      docs: [{ path: 'a.md', content: '- [ ] 回邮件\n- [x] 完了\n' }],
+    });
+    const { rerender } = renderHook((d: LauncherDeps) => useLauncher(d), { initialProps: deps });
+    await waitFor(() => expect(native.setTodoSnapshot).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(native.setTodoSnapshot.mock.calls[0][0]).toEqual({
+      vaultId: -1,
+      root: 'opfs://-1',
+      items: [{ path: 'a.md', title: 'a', line: 0, raw: '回邮件', text: '回邮件' }],
+    });
+    rerender({ ...deps, docs: [...deps.docs] });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1000));
+    });
+    expect(native.setTodoSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('挂上就告诉原生"在听"；原生推来勾选事件 → 走 toggleTask；改不了要提示并把列表推回去', async () => {
+    const toggleTask = vi.fn(async (_p: string, line: number) => line === 0);
+    const deps = makeDeps({ docs: [{ path: 'a.md', content: '- [ ] x\n- [ ] y\n' }], toggleTask });
+    renderHook(() => useLauncher(deps));
+    await waitFor(() => expect(native.setTodoLive).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(native.setTodoSnapshot).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+    await act(async () => {
+      native.todoListeners[0]({ path: 'a.md', title: 'a', line: 0, raw: 'x', text: 'x' });
+    });
+    expect(toggleTask).toHaveBeenCalledWith('a.md', 0, 'x');
+    expect(deps.toast).not.toHaveBeenCalled();
+    // 成败都推一次最新列表（清掉原生那边"刚勾掉"的标记）
+    await waitFor(() => expect(native.setTodoSnapshot).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      native.todoListeners[0]({ path: 'a.md', title: 'a', line: 1, raw: 'y', text: 'y' });
+    });
+    expect(String((deps.toast as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain('已经变了');
+    await waitFor(() => expect(native.setTodoSnapshot).toHaveBeenCalledTimes(3));
+  });
+
+  it('App 没在跑时勾掉的排在原生队列里：列表就绪后领走逐条补做；别的库的不碰', async () => {
+    native.takePendingToggles.mockResolvedValueOnce([
+      { vaultId: -1, path: 'a.md', title: 'a', line: 2, raw: 'p', text: 'p' },
+      { vaultId: -7, path: 'b.md', title: 'b', line: 0, raw: 'q', text: 'q' },
+    ]);
+    const toggleTask = vi.fn(async () => true);
+    const deps = makeDeps({ toggleTask, knowsVault: (id) => id === -1 || id === -7 });
+    renderHook(() => useLauncher(deps));
+    await waitFor(() => expect(toggleTask).toHaveBeenCalledTimes(1));
+    expect(toggleTask).toHaveBeenCalledWith('a.md', 2, 'p');
+    await waitFor(() => expect(deps.toast).toHaveBeenCalled());
+    expect(String((deps.toast as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain('别的库');
   });
 });

@@ -6,7 +6,8 @@ description = """
 以及领取「从快捷方式 / 小部件进来时要做什么」。
 
 这些命令只碰本应用自己的 SharedPreferences 与系统的 ShortcutManager / AppWidgetManager，
-不读写笔记文件本身。
+不读写笔记文件本身（待办在桌面上被勾掉、而 App 没在跑时，是小部件的 receiver 自己改文件，
+不经过这些命令）。
 """
 permissions = [
   "allow-take-launch-action",
@@ -15,6 +16,10 @@ permissions = [
   "allow-bound-notes",
   "allow-rebind-notes",
   "allow-pin-note-widget",
+  "allow-set-recent-notes",
+  "allow-set-todo-snapshot",
+  "allow-take-pending-toggles",
+  "allow-set-todo-live",
   "allow-register-listener",
   "allow-remove-listener",
 ]

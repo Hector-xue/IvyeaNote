@@ -1,5 +1,5 @@
 /**
- * 安卓桌面入口的前端桥（v0.11.30）：长按图标快捷方式 + 桌面小部件。
+ * 安卓桌面入口的前端桥（v0.11.30；v0.11.31 加最近笔记 / 待办）：长按图标快捷方式 + 桌面小部件。
  *
  * 原生那边（plugins/ivnote-launcher）不读笔记文件，只存 JS 推过去的快照、发布 JS 给的
  * 快捷方式列表、把"从桌面进来要做什么"交回来。这个文件是所有原生调用的唯一出口，
@@ -106,6 +106,81 @@ export function rebindNotes(ops: RebindOp[]): Promise<void> {
 
 export function pinNoteWidget(snapshot: NoteSnapshot): Promise<PinResult> {
   return call('pin_note_widget', { snapshot });
+}
+
+// ---------- v0.11.31：最近笔记 / 待办 ----------
+
+export interface RecentNote {
+  vaultId: number;
+  path: string;
+  title: string;
+  mtime: number;
+}
+
+/** 「最近笔记」小部件的整份列表（顺序即显示顺序） */
+export function setRecentNotes(items: RecentNote[]): Promise<void> {
+  return call('set_recent_notes', { items });
+}
+
+/** 与 lib/todoTasks 的 TodoTask 同形（原生 / Rust 侧 TodoItem） */
+export interface TodoItem {
+  /** 只有原生交回来的（事件 / 队列）才带：当时是哪个库的列表 */
+  vaultId?: number;
+  path: string;
+  title: string;
+  line: number;
+  raw: string;
+  text: string;
+}
+
+export interface TodoSnapshot {
+  vaultId: number;
+  /** 库在磁盘上的位置（vault.localPath）：App 没在跑时原生据此决定能不能自己改文件 */
+  root: string;
+  items: TodoItem[];
+}
+
+export function setTodoSnapshot(snapshot: TodoSnapshot): Promise<void> {
+  return call('set_todo_snapshot', { snapshot });
+}
+
+/** 桌面上勾掉了、原生没能写进文件的（领走即清空） */
+export function takePendingToggles(): Promise<TodoItem[]> {
+  return call('take_pending_toggles');
+}
+
+/** 告诉原生"JS 在听 todo 事件"：在听时勾选交给 JS 改文件，不在听时原生自己来 */
+export function setTodoLive(live: boolean): Promise<void> {
+  return call('set_todo_live', { live });
+}
+
+/** 桌面上勾掉了一条、App 正在跑：原生把这条交过来，JS 改文件 */
+export async function onTodoToggle(cb: (item: TodoItem) => void): Promise<() => void> {
+  const { addPluginListener } = await import('@tauri-apps/api/core');
+  const l = await addPluginListener<TodoItem>('ivnote-launcher', 'todo', (item) => cb(item));
+  return () => void l.unregister();
+}
+
+/** 最近笔记小部件最多列几行（4×4 也就八行） */
+export const RECENT_MAX = 8;
+
+/** 「最近笔记」列表：最近打开的、还在库里的 Markdown，带修改时间 */
+export function buildRecentNotes(
+  vaultId: number,
+  recent: readonly string[],
+  files: readonly string[],
+  titleOf: (path: string) => string,
+  mtimeOf: (path: string) => number,
+  max = RECENT_MAX
+): RecentNote[] {
+  const exists = new Set(files);
+  const out: RecentNote[] = [];
+  for (const p of recent) {
+    if (out.length >= max) break;
+    if (!exists.has(p) || !/\.(md|markdown)$/i.test(p)) continue;
+    out.push({ vaultId, path: p, title: titleOf(p), mtime: mtimeOf(p) });
+  }
+  return out;
 }
 
 // ---------- 纯函数（便于单测） ----------

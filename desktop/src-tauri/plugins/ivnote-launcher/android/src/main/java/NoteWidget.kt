@@ -6,13 +6,9 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
-import android.view.View
 import android.widget.RemoteViews
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import androidx.core.content.ContextCompat
 
 /**
  * 「笔记卡片」小部件：桌面上预览一篇笔记，点一下直接打开它编辑。
@@ -24,7 +20,7 @@ import java.util.Locale
  *
  * 全部数据来自 [WidgetStore]，所以 App 进程没起来时系统要求重画也画得出来。
  * 尺寸自适应只做一件事：按卡片高度算正文行数——RemoteViews 能用的控件有限，
- * 一套布局 + 行数比三套布局更稳。
+ * 一套布局 + 行数比三套布局更稳。样式见 layout/ivw_note.xml：标题 / 正文 / 底栏（相对时间 + 铅笔钮）。
  */
 class NoteWidget : AppWidgetProvider() {
 
@@ -68,8 +64,6 @@ class NoteWidget : AppWidgetProvider() {
     /** 「添加到桌面」成功回调的 action（显式投给本 receiver，不对外） */
     const val ACTION_PIN_DONE = "com.ivyea.note.launcher.PIN_DONE"
 
-    private val TIME_FMT = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-
     /** 重画所有笔记卡片（JS 推来新快照 / 绑定变化时调） */
     fun updateAll(context: Context) {
       val manager = AppWidgetManager.getInstance(context)
@@ -100,6 +94,7 @@ class NoteWidget : AppWidgetProvider() {
     /**
      * 造 RemoteViews。`options` 可为 null（「添加到桌面」确认框里的预览）。
      * 拆出来是为了预览和真实卡片走同一份画法。
+     * 整张卡片和右下角的铅笔钮点了都是打开这篇——铅笔只是把"能写"说出来。
      */
     fun build(
       context: Context,
@@ -110,47 +105,41 @@ class NoteWidget : AppWidgetProvider() {
     ): RemoteViews {
       val views = RemoteViews(context.packageName, R.layout.ivw_note)
       val res = context.resources
+      val open: Intent
       when {
         snap != null -> {
           views.setTextViewText(R.id.ivw_title, snap.title.ifEmpty { res.getString(R.string.ivw_untitled) })
-          views.setTextViewText(
-            R.id.ivw_body,
-            snap.preview.ifEmpty { res.getString(R.string.ivw_empty_note) }
-          )
-          views.setTextViewText(R.id.ivw_time, if (snap.mtime > 0) TIME_FMT.format(Date(snap.mtime)) else "")
-          views.setViewVisibility(R.id.ivw_time, if (snap.mtime > 0) View.VISIBLE else View.GONE)
-          views.setOnClickPendingIntent(
-            R.id.ivw_root,
-            activity(context, requestCode, LaunchIntents.launch(context, LaunchIntents.ACTION_OPEN_NOTE, snap.vaultId, snap.path))
-          )
+          views.setTextViewText(R.id.ivw_body, snap.preview.ifEmpty { res.getString(R.string.ivw_empty_note) })
+          views.setTextColor(R.id.ivw_body, ContextCompat.getColor(context, if (snap.preview.isEmpty()) R.color.ivw_muted else R.color.ivw_body))
+          views.setTextViewText(R.id.ivw_time, Widgets.relativeLong(context, snap.mtime))
+          open = LaunchIntents.launch(context, LaunchIntents.ACTION_OPEN_NOTE, snap.vaultId, snap.path)
         }
         bound != null -> {
           // 绑了、但快照还没来（或那篇已经不在了）：把标题从路径里抠出来，点了仍然去打开——
           // JS 那边会核实存在与否并给出准确的提示
           views.setTextViewText(R.id.ivw_title, titleOf(bound.path))
           views.setTextViewText(R.id.ivw_body, res.getString(R.string.ivw_no_snapshot))
-          views.setViewVisibility(R.id.ivw_time, View.GONE)
-          views.setOnClickPendingIntent(
-            R.id.ivw_root,
-            activity(context, requestCode, LaunchIntents.launch(context, LaunchIntents.ACTION_OPEN_NOTE, bound.vaultId, bound.path))
-          )
+          views.setTextColor(R.id.ivw_body, ContextCompat.getColor(context, R.color.ivw_muted))
+          views.setTextViewText(R.id.ivw_time, "")
+          open = LaunchIntents.launch(context, LaunchIntents.ACTION_OPEN_NOTE, bound.vaultId, bound.path)
         }
         else -> {
           views.setTextViewText(R.id.ivw_title, res.getString(R.string.ivw_app_name))
           views.setTextViewText(R.id.ivw_body, res.getString(R.string.ivw_hint_open_first))
-          views.setViewVisibility(R.id.ivw_time, View.GONE)
-          views.setOnClickPendingIntent(
-            R.id.ivw_root,
-            activity(context, requestCode, LaunchIntents.launch(context, LaunchIntents.ACTION_OPEN_APP))
-          )
+          views.setTextColor(R.id.ivw_body, ContextCompat.getColor(context, R.color.ivw_muted))
+          views.setTextViewText(R.id.ivw_time, "")
+          open = LaunchIntents.launch(context, LaunchIntents.ACTION_OPEN_APP)
         }
       }
+      val pi = Widgets.activity(context, requestCode, open)
+      views.setOnClickPendingIntent(R.id.ivw_root, pi)
+      views.setOnClickPendingIntent(R.id.ivw_edit, pi)
       views.setInt(R.id.ivw_body, "setMaxLines", bodyLines(context, options))
       return views
     }
 
     /**
-     * 正文能放几行：卡片高度(dp) 去掉头部、时间行和内边距，再除以行高。
+     * 正文能放几行：卡片高度(dp) 去掉标题行、底栏和内边距，再除以行高。
      * `OPTION_APPWIDGET_MIN_HEIGHT` 是竖屏下的高度（横屏更矮，宁可少显示也不截半行）。
      */
     private fun bodyLines(context: Context, options: Bundle?): Int {
@@ -160,7 +149,7 @@ class NoteWidget : AppWidgetProvider() {
       fun dp(id: Int) = res.getDimension(id) / res.displayMetrics.density
       // 文字尺寸是 sp：用户把系统字体调大，行高和标题行都跟着长，dp 算出来的行数要按 fontScale 缩
       val scale = res.configuration.fontScale.coerceAtLeast(1f)
-      val fixed = dp(R.dimen.ivw_pad) * 2 + dp(R.dimen.ivw_header_h) * scale + dp(R.dimen.ivw_time_h) * scale
+      val fixed = dp(R.dimen.ivw_pad) * 2 + 4f + dp(R.dimen.ivw_header_h) * scale + dp(R.dimen.ivw_footer_h)
       val line = dp(R.dimen.ivw_line_h) * scale
       return ((minH - fixed) / line).toInt().coerceIn(1, 40)
     }
@@ -170,11 +159,7 @@ class NoteWidget : AppWidgetProvider() {
       return base.replace(Regex("\\.(md|markdown)$", RegexOption.IGNORE_CASE), "")
     }
 
-    /** 点击用的 PendingIntent：内容固定、系统不需要往里填东西 → IMMUTABLE */
-    fun activity(context: Context, requestCode: Int, intent: Intent): PendingIntent {
-      var flags = PendingIntent.FLAG_UPDATE_CURRENT
-      if (Build.VERSION.SDK_INT >= 23) flags = flags or PendingIntent.FLAG_IMMUTABLE
-      return PendingIntent.getActivity(context, requestCode, intent, flags)
-    }
+    fun activity(context: Context, requestCode: Int, intent: Intent): PendingIntent =
+      Widgets.activity(context, requestCode, intent)
   }
 }
