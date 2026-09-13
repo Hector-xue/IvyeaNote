@@ -17,6 +17,7 @@ permissions = [
   "allow-rebind-notes",
   "allow-pin-note-widget",
   "allow-set-recent-notes",
+  "allow-set-note-list",
   "allow-set-todo-snapshot",
   "allow-take-pending-toggles",
   "allow-set-todo-live",

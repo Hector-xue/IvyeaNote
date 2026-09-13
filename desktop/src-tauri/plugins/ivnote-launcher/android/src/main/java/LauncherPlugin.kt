@@ -68,6 +68,13 @@ class RecentListArg {
 }
 
 @InvokeArg
+class NoteListArg {
+  var vaultId: Long = 0L
+  var root: String = ""
+  var items: List<RecentItemArg> = emptyList()
+}
+
+@InvokeArg
 class TodoItemArg {
   // Rust 侧 TodoItem 带 vaultId（队列条目用），推列表时是 0，这里收下不用
   var vaultId: Long = 0L
@@ -300,6 +307,18 @@ class LauncherPlugin(private val activity: Activity) : Plugin(activity) {
       invoke.resolve(JSObject())
     } catch (ex: Exception) {
       invoke.reject(ex.message ?: "更新最近笔记失败")
+    }
+  }
+
+  /** 当前库的全部笔记（配置页选用）。JS 在文件列表变化时推 */
+  @Command
+  fun setNoteList(invoke: Invoke) {
+    try {
+      val a = invoke.parseArgs(NoteListArg::class.java)
+      WidgetStore(app).putNoteList(a.vaultId, a.root, a.items.map { WidgetStore.RecentItem(a.vaultId, it.path, it.title, it.mtime) })
+      invoke.resolve(JSObject())
+    } catch (ex: Exception) {
+      invoke.reject(ex.message ?: "更新笔记列表失败")
     }
   }
 

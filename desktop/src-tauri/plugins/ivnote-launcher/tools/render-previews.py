@@ -122,26 +122,6 @@ def quick():
     return img
 
 
-# ---------------------------------------------------------------- 快速记录 2×2
-
-def quick_card():
-    W, H, P = 150, 150, 14
-    img, d = card(W, H)
-    x = dp(P)
-    text(d, (x, dp(P)), "9月13日 周六", font("regular", 12), MUTED)
-    f = font("medium", 17)
-    text(d, (x, dp(P + 16 + 6)), "零碎念头，", f, TEXT)
-    text(d, (x, dp(P + 16 + 6 + 26)), "随手记下", f, TEXT)
-    fy = dp(H - P - 15)
-    # 日历小图标 + 「今日日记」
-    cx, cy, s = x, fy, dp(7)
-    d.rounded_rectangle((cx, cy - s + dp(1), cx + 2 * s, cy + s), radius=dp(1.5), outline=ACCENT, width=dp(1.6))
-    d.line((cx, cy - s + dp(5), cx + 2 * s, cy - s + dp(5)), fill=ACCENT, width=dp(1.6))
-    text(d, (x + dp(16 + 5), fy), "今日日记", font("medium", 12), ACCENT, "lm")
-    fab(d, dp(W - P - 15), fy, 15, "plus")
-    return img
-
-
 # ---------------------------------------------------------------- 列表壳（最近 / 待办）
 
 def list_shell(W, H, title, count=None):
@@ -199,7 +179,7 @@ def todo():
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    for name, fn in [("note", note), ("quick", quick), ("quick_card", quick_card), ("recent", recent), ("todo", todo)]:
+    for name, fn in [("note", note), ("quick", quick), ("recent", recent), ("todo", todo)]:
         p = OUT / f"ivw_preview_{name}.png"
         fn().save(p, optimize=True)
         print(p.name, Image.open(p).size)

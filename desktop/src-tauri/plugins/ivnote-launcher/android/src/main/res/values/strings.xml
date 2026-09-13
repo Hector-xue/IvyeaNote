@@ -3,11 +3,9 @@
     <string name="ivw_app_name">Ivyea Note</string>
 
     <string name="ivw_note_widget_label">笔记卡片</string>
-    <string name="ivw_note_widget_desc">把一篇笔记放在桌面上，点一下接着写</string>
+    <string name="ivw_note_widget_desc">选一篇笔记放在桌面上，点一下接着写</string>
     <string name="ivw_quick_widget_label">快捷创建</string>
     <string name="ivw_quick_widget_desc">一键新建笔记、进今日日记</string>
-    <string name="ivw_quick_card_widget_label">快速记录</string>
-    <string name="ivw_quick_card_widget_desc">零碎念头随手记，也能一步进今日日记</string>
     <string name="ivw_recent_widget_label">最近笔记</string>
     <string name="ivw_recent_widget_desc">最近打开的几篇，点哪篇开哪篇</string>
     <string name="ivw_todo_widget_label">待办</string>
@@ -20,10 +18,14 @@
     <string name="ivw_continue_writing">继续写</string>
     <string name="ivw_quick_new">新建笔记</string>
     <string name="ivw_quick_new_sub">随手记一条</string>
-    <string name="ivw_quick_prompt">零碎念头，\n随手记下</string>
     <string name="ivw_daily">今日日记</string>
-    <!-- TextClock 的格式：9月13日 周六 -->
-    <string name="ivw_date_format">M月d日 EEE</string>
+    <!-- 笔记卡片的配置页 -->
+    <string name="ivw_pick_title">选择要显示的笔记</string>
+    <string name="ivw_pick_search">搜索笔记</string>
+    <string name="ivw_pick_auto">最近打开的一篇（自动）</string>
+    <string name="ivw_pick_auto_sub">跟着你最近打开的笔记走</string>
+    <string name="ivw_pick_empty">还没有笔记列表\n先打开一次 Ivyea Note，这里就会列出库里的笔记</string>
+    <string name="ivw_pick_none">没有匹配的笔记</string>
     <string name="ivw_recent_empty">打开 Ivyea Note 后，\n最近看过的笔记会列在这里</string>
     <string name="ivw_todo_empty">没有未完成的待办\n在笔记里写「- [ ] 事项」就会出现在这里</string>
     <string name="ivw_todo_done">标为完成</string>

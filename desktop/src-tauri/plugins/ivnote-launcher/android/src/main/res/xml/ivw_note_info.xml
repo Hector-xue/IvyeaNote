@@ -4,6 +4,8 @@
   尺寸公式：n 格 = 70×n − 30 dp。updatePeriodMillis=0：内容由 App 推，不让系统定时唤醒。
   targetCell* / previewLayout / description 是 Android 12 的属性，旧系统忽略；
   previewImage 是选择器里那张图（大多数国产桌面只认它）。
+  configure：从选择器添加时先开 PickNoteActivity 选一篇；reconfigurable 让长按卡片能重选；
+  configuration_optional 让 App 里「添加到桌面」（requestPinAppWidget）不再弹配置页（API 28+）。
 -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:minWidth="110dp"
@@ -18,4 +20,6 @@
     android:previewLayout="@layout/ivw_note"
     android:previewImage="@drawable/ivw_preview_note"
     android:description="@string/ivw_note_widget_desc"
+    android:configure="com.ivyea.note.launcher.PickNoteActivity"
+    android:widgetFeatures="reconfigurable|configuration_optional"
     android:widgetCategory="home_screen" />

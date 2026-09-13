@@ -57,6 +57,12 @@ object TodoWriter {
 
   // ---------------------------------------------------------------- 读写
 
+  /** 读一篇的全文（配置页刚绑好时原生画预览用）；OPFS 或不存在返回 null */
+  fun readText(context: Context, root: String, path: String): String? {
+    if (root.isEmpty() || root.startsWith("opfs://")) return null
+    return read(context, root, path)?.let { String(it, Charsets.UTF_8) }
+  }
+
   private fun read(context: Context, root: String, path: String): ByteArray? {
     if (root.startsWith("content://")) {
       val uri = resolve(context, root, path) ?: return null

@@ -122,6 +122,34 @@ export function setRecentNotes(items: RecentNote[]): Promise<void> {
   return call('set_recent_notes', { items });
 }
 
+export interface NoteList {
+  vaultId: number;
+  /** 库在磁盘上的位置（vault.localPath）：配置页刚绑好一篇时原生据此自己读一遍画预览 */
+  root: string;
+  items: RecentNote[];
+}
+
+/** 当前库的全部笔记（v0.11.32）：笔记卡片的配置页从这里列给用户选 */
+export function setNoteList(list: NoteList): Promise<void> {
+  return call('set_note_list', { list });
+}
+
+/** 配置页要列的全部 Markdown 笔记（不含回收站 / 元数据目录），带修改时间 */
+export function buildNoteList(
+  vaultId: number,
+  files: readonly string[],
+  titleOf: (path: string) => string,
+  mtimeOf: (path: string) => number
+): RecentNote[] {
+  const out: RecentNote[] = [];
+  for (const p of files) {
+    if (!/\.(md|markdown)$/i.test(p)) continue;
+    if (p.startsWith('.trash/') || p.startsWith('.ivyea/')) continue;
+    out.push({ vaultId, path: p, title: titleOf(p), mtime: mtimeOf(p) });
+  }
+  return out;
+}
+
 /** 与 lib/todoTasks 的 TodoTask 同形（原生 / Rust 侧 TodoItem） */
 export interface TodoItem {
   /** 只有原生交回来的（事件 / 队列）才带：当时是哪个库的列表 */
