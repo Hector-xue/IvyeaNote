@@ -17,6 +17,8 @@ import org.json.JSONObject
  *   库在磁盘上的位置（`content://` 树或绝对路径；OPFS 时是 `opfs://…`，原生写不了）
  * - `todo.pending`          = JSON[item] —— 在桌面上勾掉了、但还没落到文件里的（等 App 起来处理）
  * - `todo.done`             = JSON{key:ts} —— 刚勾掉的（先画成已完成，等 JS 推来新列表再说）
+ * - `notes.items` / `notes.vaultId` / `notes.root` —— 当前库的全部笔记（路径 / 标题 / 修改时间），
+ *   笔记卡片的配置页（PickNoteActivity）从这里列给用户选；root 同 todo.root
  *
  * 为什么是快照而不是现读文件：见 Rust 侧 lib.rs 开头。
  * 为什么是 SharedPreferences：小部件在 App 进程没起来时也会被系统要求重画
@@ -224,6 +226,41 @@ class WidgetStore(context: Context) {
     }
   }
 
+  // ---------------------------------------------------------------- 全部笔记（配置页选用）
+
+  fun putNoteList(vaultId: Long, root: String, items: List<RecentItem>) {
+    val arr = JSONArray()
+    for (it in items) {
+      val o = JSONObject()
+      o.put("path", it.path)
+      o.put("title", it.title)
+      o.put("mtime", it.mtime)
+      arr.put(o)
+    }
+    prefs.edit()
+      .putLong(KEY_NOTES_VAULT, vaultId)
+      .putString(KEY_NOTES_ROOT, root)
+      .putString(KEY_NOTES_ITEMS, arr.toString())
+      .apply()
+  }
+
+  fun noteList(): List<RecentItem> {
+    val raw = prefs.getString(KEY_NOTES_ITEMS, null) ?: return emptyList()
+    val vaultId = notesVaultId()
+    return try {
+      val arr = JSONArray(raw)
+      (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        RecentItem(vaultId, o.optString("path", ""), o.optString("title", ""), o.optLong("mtime", 0L))
+      }.filter { it.path.isNotEmpty() }
+    } catch (ex: Exception) {
+      emptyList()
+    }
+  }
+
+  fun notesVaultId(): Long = prefs.getLong(KEY_NOTES_VAULT, 0L)
+  fun notesRoot(): String = prefs.getString(KEY_NOTES_ROOT, "") ?: ""
+
   // ---------------------------------------------------------------- 待办
 
   /**
@@ -357,6 +394,9 @@ class WidgetStore(context: Context) {
     private const val KEY_TODO_ROOT = "todo.root"
     private const val KEY_TODO_PENDING = "todo.pending"
     private const val KEY_TODO_DONE = "todo.done"
+    private const val KEY_NOTES_ITEMS = "notes.items"
+    private const val KEY_NOTES_VAULT = "notes.vaultId"
+    private const val KEY_NOTES_ROOT = "notes.root"
     /** 勾掉之后多久没被新列表确认就恢复成未完成 */
     const val DONE_TTL_MS = 90 * 1000L
     private const val BIND_PREFIX = "bind."

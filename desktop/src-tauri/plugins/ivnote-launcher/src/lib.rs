@@ -1,4 +1,4 @@
-//! 安卓桌面入口：长按图标快捷方式 + 桌面小部件（v0.11.30；v0.11.31 加最近笔记 / 待办 / 快速记录）。
+//! 安卓桌面入口：长按图标快捷方式 + 桌面小部件（v0.11.30；v0.11.31 加最近笔记 / 待办；v0.11.32 笔记卡片加配置页）。
 //!
 //! # 为什么是一个独立插件
 //!
@@ -166,6 +166,15 @@ pub struct TodoSnapshot {
     pub items: Vec<TodoItem>,
 }
 
+/// 当前库的全部笔记（笔记卡片配置页选用）。`root` 同 TodoSnapshot。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteList {
+    pub vault_id: i64,
+    pub root: String,
+    pub items: Vec<RecentNote>,
+}
+
 #[derive(Deserialize)]
 struct PendingResult {
     items: Vec<TodoItem>,
@@ -286,6 +295,16 @@ fn set_recent_notes<R: Runtime>(app: tauri::AppHandle<R>, items: Vec<RecentNote>
     Ok(())
 }
 
+/// 当前库的全部笔记（路径 / 标题 / 修改时间），笔记卡片的配置页从这里列给用户选。
+#[tauri::command]
+fn set_note_list<R: Runtime>(app: tauri::AppHandle<R>, list: NoteList) -> Result<()> {
+    let _: serde_json::Value = app
+        .state::<Launcher<R>>()
+        .inner()
+        .call("setNoteList", list)?;
+    Ok(())
+}
+
 /// 「待办」小部件的整份列表；原生侧存下并立刻重画。
 #[tauri::command]
 fn set_todo_snapshot<R: Runtime>(app: tauri::AppHandle<R>, snapshot: TodoSnapshot) -> Result<()> {
@@ -326,6 +345,7 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             rebind_notes,
             pin_note_widget,
             set_recent_notes,
+            set_note_list,
             set_todo_snapshot,
             take_pending_toggles,
             set_todo_live

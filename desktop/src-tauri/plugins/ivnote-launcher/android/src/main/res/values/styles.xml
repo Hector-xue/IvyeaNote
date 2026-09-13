@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 配置页的主题：浅色系统默认；Android 10+ 在 values-v29 换成跟系统深浅色走 -->
+    <style name="IvwPick" parent="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+        <item name="android:windowBackground">@color/ivw_bg</item>
+    </style>
+</resources>

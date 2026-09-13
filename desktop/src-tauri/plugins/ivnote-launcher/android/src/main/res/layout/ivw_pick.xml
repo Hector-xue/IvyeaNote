@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 笔记卡片的配置页：标题 / 搜索框 / 列表 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/ivw_bg"
+    android:paddingStart="20dp"
+    android:paddingEnd="20dp"
+    android:paddingTop="28dp"
+    android:paddingBottom="12dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/ivw_pick_title"
+        android:textColor="@color/ivw_text"
+        android:textSize="22sp"
+        android:fontFamily="sans-serif-medium" />
+
+    <EditText
+        android:id="@+id/ivw_pick_search"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:layout_marginTop="16dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:background="@drawable/ivw_pick_field"
+        android:hint="@string/ivw_pick_search"
+        android:textColor="@color/ivw_text"
+        android:textColorHint="@color/ivw_muted"
+        android:textSize="15sp"
+        android:inputType="text"
+        android:imeOptions="actionSearch"
+        android:maxLines="1"
+        android:importantForAutofill="no" />
+
+    <ListView
+        android:id="@+id/ivw_pick_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp"
+        android:divider="@drawable/ivw_hairline"
+        android:dividerHeight="1dp"
+        android:listSelector="@android:color/transparent"
+        android:scrollbars="none" />
+
+    <TextView
+        android:id="@+id/ivw_pick_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="@string/ivw_pick_empty"
+        android:textColor="@color/ivw_muted"
+        android:textSize="14sp"
+        android:lineSpacingExtra="4dp"
+        android:visibility="gone" />
+</LinearLayout>

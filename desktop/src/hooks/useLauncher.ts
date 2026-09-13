@@ -13,6 +13,8 @@
  *    只要文件指纹（mtime/size）变了——同步拉下来的、别的应用改的——就重读再推。
  * 4. **添加到桌面**：把当前这篇钉成一张小部件（走系统一键添加；不支持的启动器有两条退路）。
  * 5. **最近笔记列表**（v0.11.31）：和快捷方式一起、最近列表一变就推。
+ *    **全部笔记列表**（v0.11.32）：笔记卡片的配置页（添加时选一篇）从原生那边的这份里选，
+ *    文件列表 / 指纹一变就推（内容没变不重推）。
  * 6. **待办**（v0.11.31）：从全文索引里捞出所有未完成的 `- [ ]` 推给小部件；桌面上勾掉一条时
  *    原生发 `todo` 事件过来，这里走 App 的写盘路径改那一行（和手动勾选同一段代码）；
  *    App 没在跑时勾掉的会排在原生的队列里，起来后领走补做。
@@ -36,12 +38,14 @@ import {
   rebindNotes,
   pinNoteWidget,
   setRecentNotes,
+  setNoteList,
   setTodoSnapshot,
   takePendingToggles,
   setTodoLive,
   onTodoToggle,
   buildShortcuts,
   buildRecentNotes,
+  buildNoteList,
   isActionFresh,
   type LaunchAction,
   type TodoItem,
@@ -195,6 +199,25 @@ export function useLauncher(deps: LauncherDeps): Launcher {
     // mdStamps 变了修改时间才会变；metaOf 走 ref
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, vaultId, filesLoaded, recent, files, mdStamps]);
+
+  /** 上次推给配置页的全部笔记（序列化后），一样就不再推——大库几千条，别每次指纹一动就整份重发 */
+  const lastNoteList = useRef<string>('');
+  useEffect(() => {
+    if (!enabled || vaultId === null || !filesLoaded) return;
+    const t = window.setTimeout(() => {
+      const cur = depsRef.current;
+      const v = cur.vault;
+      if (!v) return;
+      const mtimeOf = (p: string) => cur.metaOf(p)?.mtime ?? 0;
+      const list = { vaultId: v.id, root: v.localPath ?? '', items: buildNoteList(v.id, files, titleOfPath, mtimeOf) };
+      const key = JSON.stringify(list);
+      if (key === lastNoteList.current) return;
+      lastNoteList.current = key;
+      setNoteList(list).catch((e) => console.warn('更新笔记列表失败', e));
+    }, SHORTCUT_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, vaultId, filesLoaded, files, mdStamps]);
 
   // ---------------------------------------------------------------- 3. 快照
 

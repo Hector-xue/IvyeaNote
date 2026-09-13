@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import type { BoundNote, LaunchAction, NoteSnapshot, PinResult, RebindOp, RecentNote, ShortcutSpec, TodoItem, TodoSnapshot } from '../lib/launcher';
+import type { BoundNote, LaunchAction, NoteList, NoteSnapshot, PinResult, RebindOp, RecentNote, ShortcutSpec, TodoItem, TodoSnapshot } from '../lib/launcher';
 
 // mock 的签名要和真函数一致：vi.fn(async () => {}) 会把参数推成 []，
 // 下面 mock.calls[0][0] 在 tsc 下就是"空元组取下标"的类型错。
@@ -24,6 +24,7 @@ const native = vi.hoisted(() => ({
   rebindNotes: vi.fn<(ops: RebindOp[]) => Promise<void>>(async () => {}),
   pinNoteWidget: vi.fn<(snapshot: NoteSnapshot) => Promise<PinResult>>(async () => ({ mode: 'requested', count: 0 })),
   setRecentNotes: vi.fn<(items: RecentNote[]) => Promise<void>>(async () => {}),
+  setNoteList: vi.fn<(list: NoteList) => Promise<void>>(async () => {}),
   setTodoSnapshot: vi.fn<(snapshot: TodoSnapshot) => Promise<void>>(async () => {}),
   takePendingToggles: vi.fn<() => Promise<TodoItem[]>>(async () => []),
   setTodoLive: vi.fn<(live: boolean) => Promise<void>>(async () => {}),
@@ -46,6 +47,7 @@ vi.mock('../lib/launcher', async () => {
     rebindNotes: native.rebindNotes,
     pinNoteWidget: native.pinNoteWidget,
     setRecentNotes: native.setRecentNotes,
+    setNoteList: native.setNoteList,
     setTodoSnapshot: native.setTodoSnapshot,
     takePendingToggles: native.takePendingToggles,
     setTodoLive: native.setTodoLive,
@@ -291,6 +293,28 @@ describe('useLauncher：最近笔记 / 待办', () => {
       { vaultId: -1, path: 'b.md', title: 'b', mtime: 0 },
       { vaultId: -1, path: 'a.md', title: 'a', mtime: 123 },
     ]);
+  });
+
+  it('列表就绪后把全部 Markdown 笔记（跳过回收站）推给配置页；没变不重推', async () => {
+    const deps = makeDeps({
+      files: ['b.md', '.trash/x.md', 'img.png', 'dir/a.md'],
+      metaOf: (p) => (p === 'dir/a.md' ? { path: p, mtime: 5, size: 1 } : undefined),
+    });
+    const { rerender } = renderHook((d: LauncherDeps) => useLauncher(d), { initialProps: deps });
+    await waitFor(() => expect(native.setNoteList).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(native.setNoteList.mock.calls[0][0]).toEqual({
+      vaultId: -1,
+      root: 'opfs://-1',
+      items: [
+        { vaultId: -1, path: 'b.md', title: 'b', mtime: 0 },
+        { vaultId: -1, path: 'dir/a.md', title: 'a', mtime: 5 },
+      ],
+    });
+    rerender({ ...deps, mdStamps: [{ path: 'b.md', mtime: 0, size: 1 }] });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 1000));
+    });
+    expect(native.setNoteList).toHaveBeenCalledTimes(1);
   });
 
   it('索引就绪后从全文里捞未完成的任务推给待办小部件；内容没变不重推', async () => {
