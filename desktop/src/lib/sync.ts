@@ -1,7 +1,7 @@
 // 同步引擎：扫描本地 → 推送增量 → 拉取应用（含 3-way 合并/删改复活/冲突副本）。
 // 冲突处理统一在拉取阶段完成：服务端版本单调，pull 能拿到全部需要的信息。
 
-import { ApiError, SyncClient, sha256Hex, uuid, type PushChange, type ServerChange } from './api';
+import { ApiError, SyncClient, sha256Hex, uuid, type PushChange, type PushResult, type ServerChange } from './api';
 import { merge3, conflictCopy } from './merge';
 import type { VaultMeta } from './store';
 import { trashPathFor } from './trashPath';
@@ -439,10 +439,19 @@ export async function pushOnly(
         }
         else if (r.status === 'rejected') {
           // 以前这里和 conflict 一样被静默吞掉，结果是「推不上去」永远看不见。
-          // conflict 确实该留给拉取阶段用服务端内容统一解决；rejected 不是——
-          // 它意味着这条请求本身有问题（路径非法 / blob 没传），必须让人看到。
+          // rejected 意味着这条请求本身有问题（路径非法 / blob 没传），必须让人看到。
           const change = batch.find((c) => c.client_change_id === r.client_change_id);
           report.errors.push(`${change?.path ?? '?'} 被服务端拒绝：${r.reason ?? '未说明原因'}`);
+        } else if (r.status === 'conflict') {
+          const change = batch.find((c) => c.client_change_id === r.client_change_id);
+          if (!change) continue;
+          try {
+            await resolvePushConflict(client, meta, io, vaultPath, change.path, r, report);
+          } catch (e) {
+            markAuthExpired(e, report);
+            markOffline(e, report);
+            report.errors.push(`${change.path} 冲突处理失败：${msg(e)}`);
+          }
         }
       }
     } catch (e) {
@@ -508,7 +517,20 @@ export async function pullOnly(
       break;
     }
     for (const ch of page.changes) {
-      if (ch.device_id === deviceId) continue; // 自己的写已在本地
+      /*
+       * v0.11.33：自己这台设备推上去的变更，**只有账本已经记下了才能跳过**。
+       *
+       * 原来是无条件 `continue`（"自己的写已在本地"）。可账本会被清零：换库位置
+       * 的全量回放（relocateIfMoved）、v0.11.28 之前游标/版本被克隆丢掉、推送成功
+       * 但落盘前应用被杀。清零之后回放，别人推的版本能重建，自己推的却被跳过——
+       * 一篇手机上推到 v7 的笔记，回放完账本停在桌面端的 v3，从此每轮推送都是
+       * conflict、拉取又没有新东西，永远"待推送（已修改）"。2026-09-14 手机上的
+       * IvyeaNote.md 就卡在这里三天。
+       *
+       * 账本已经知道 ≥ 这个版本 → 才是"已在本地"；否则和别人的变更一视同仁去应用
+       * （本地内容和服务端一样时 applyRemote 只记账不落盘）。
+       */
+      if (ch.device_id === deviceId && (meta.versions[ch.path] ?? -1) >= ch.version) continue;
       if (replay) replay.set(ch.path, ch);
       else await apply(ch);
     }
@@ -523,6 +545,79 @@ export async function pullOnly(
   }
 
   return report;
+}
+
+/**
+ * v0.11.33：**推送撞上 conflict 要当场解决，不能只等拉取。**
+ *
+ * conflict = 服务端当前版本 ≠ 我们的 base_version。此前这里什么都不做，理由是
+ * "拉取阶段会拿服务端内容统一解决"——前提是游标还没走过那条变更。可游标走过
+ * 而账本没记上（换位置回放时跳过了自己的变更、账本被克隆丢了版本号、服务端
+ * 被回滚）之后，拉取永远拉不到新东西，推送永远 conflict，一篇笔记就此停在
+ * "待推送（已修改）"，报告里还一个字都不提。
+ *
+ * 服务端在 conflict 里把当前头（server_version + server_blob_hash，删除头没有
+ * hash）一并给了；把它当成一条远端变更走 applyRemote 那套规矩（3-way 合并 /
+ * 删改复活 / 冲突副本），账本就追平了。追平之后本地要是还和 base 不一样
+ * （冲突副本那条支路会把本地原样留着），同一轮里直接推回去——不必再等下一轮。
+ */
+async function resolvePushConflict(
+  client: SyncClient,
+  meta: VaultMeta,
+  io: FileIO,
+  vaultPath: string,
+  path: string,
+  r: PushResult,
+  report: SyncReport
+): Promise<void> {
+  const serverVersion = r.server_version ?? 0;
+  const known = meta.versions[path];
+  if (known !== undefined && known >= serverVersion) {
+    /*
+     * 账本比服务端还"新"：服务端被回滚 / 库被删了重建。applyRemote 会把这条头当
+     * 过期变更跳过，所以先把这条账整个作废——之后它要么按"账本没见过的路径"接受
+     * 服务端版本，要么（服务端已经没有它）在下面按新文件推上去。
+     */
+    delete meta.versions[path];
+    delete meta.bases[path];
+    if (meta.assets) delete meta.assets[path];
+    delete meta.tombstones?.[path];
+  }
+  if (serverVersion > 0) {
+    const head: ServerChange = {
+      seq: 0,
+      path,
+      version: serverVersion,
+      device_id: '',
+      op: r.server_blob_hash ? 'upsert' : 'delete',
+      blob_hash: r.server_blob_hash || undefined,
+    };
+    await applyRemote(client, meta, io, vaultPath, head, report);
+  }
+  await repushIfStillModified(client, meta, io, vaultPath, path, report);
+}
+
+/** 账本追平服务端之后，本地若仍与 base 不同（改过 / 冲突副本留下的原件），立刻推回去 */
+async function repushIfStillModified(
+  client: SyncClient,
+  meta: VaultMeta,
+  io: FileIO,
+  vaultPath: string,
+  path: string,
+  report: SyncReport
+): Promise<void> {
+  if (isLocalOnly(path) || !(await io.exists(vaultPath, path))) return;
+  const base = meta.versions[path] ?? 0;
+  if (isAsset(path)) {
+    const bytes = await io.readBinary(vaultPath, path);
+    const hash = await sha256HexOf(bytes);
+    if (meta.versions[path] !== undefined && meta.assets?.[path] === hash) return;
+    await pushUpsertBytes(client, meta, path, bytes, hash, base, report);
+    return;
+  }
+  const local = await io.read(vaultPath, path);
+  if (meta.versions[path] !== undefined && local === (meta.bases[path] ?? '')) return;
+  await pushUpsert(client, meta, path, local, base, report);
 }
 
 /** 应用一条远端变更（含合并/复活/冲突副本决策） */

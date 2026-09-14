@@ -2875,9 +2875,12 @@ export default function App() {
           // 读不出来的单篇跳过，不让整次统计失败
         }
       }
-      // 附件（PDF / 图片 / .base）比对的是哈希，不是全文
+      // 附件（PDF / 图片 / .base）比对的是哈希，不是全文。
+      // `.keep` 也要算进来：它被 useVaultFiles 从 allFiles 里摘掉了（树里不显示占位符），
+      // 但它在账本里、也在磁盘上——不算它，面板就会把每个空文件夹的 .keep 都报成
+      // 「待推送（已删除）」，而推送那边看到文件还在、什么都不推，这条"待办"永远消不掉（v0.11.33）。
       const assetHashes = new Map<string, string>();
-      for (const p of allFiles) {
+      for (const p of [...allFiles, ...emptyDirs.map((d) => `${d}/.keep`)]) {
         if (/\.(md|markdown)$/i.test(p)) continue;
         try {
           assetHashes.set(p, await sha256Hex(await io.readBinary(root, p)));
@@ -2889,7 +2892,7 @@ export default function App() {
     } finally {
       setSyncStatusBusy(false);
     }
-  }, [vault, io, files, allFiles]);
+  }, [vault, io, files, allFiles, emptyDirs]);
 
   const openSyncStatus = useCallback(() => {
     setShowSyncStatus(true);
