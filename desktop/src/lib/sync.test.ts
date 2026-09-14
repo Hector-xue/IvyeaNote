@@ -47,18 +47,26 @@ interface ServerChangeRow extends ServerChange {
 function mockServer(opts: { changes: ServerChangeRow[] }) {
   let seq = opts.changes.length;
   const versions = new Map<string, number>();
-  for (const c of opts.changes) versions.set(c.path, c.version);
+  /** 每条路径当前头的 blob（删除头没有）——真服务端在 conflict 里会把它一并给回来 */
+  const heads = new Map<string, string | undefined>();
+  for (const c of opts.changes) {
+    versions.set(c.path, c.version);
+    heads.set(c.path, c.op === 'delete' ? undefined : c.blob_hash);
+  }
 
   const client = {
     push: async (_vaultId: number, changes: PushChange[]) => {
       const results: PushResult[] = [];
       for (const ch of changes) {
         const cur = versions.get(ch.path) ?? 0;
-        if (ch.base_version < cur) {
+        // 真服务端是 `base_version != 当前版本` 就 conflict（账本比服务端"新"也算），
+        // 并附上当前头：server_version + server_blob_hash（删除头没有 hash）
+        if (ch.base_version !== cur) {
           results.push({
             client_change_id: ch.client_change_id,
             status: 'conflict',
             server_version: cur,
+            server_blob_hash: heads.get(ch.path),
           });
           continue;
         }
@@ -79,6 +87,7 @@ function mockServer(opts: { changes: ServerChangeRow[] }) {
         }
         const next = cur + 1;
         versions.set(ch.path, next);
+        heads.set(ch.path, ch.op === 'delete' ? undefined : ch.blob_hash);
         opts.changes.push({
           seq: ++seq,
           path: ch.path,
@@ -414,8 +423,15 @@ function mockBytesServer(changes: ServerChangeRow[], blobs: Map<string, Uint8Arr
       const results: PushResult[] = [];
       for (const ch of batch) {
         const cur = versions.get(ch.path) ?? 0;
-        if (ch.base_version < cur) {
-          results.push({ client_change_id: ch.client_change_id, status: 'conflict', server_version: cur });
+        if (ch.base_version !== cur) {
+          // 和真服务端一样附上当前头的 blob（删除头没有）——少了它客户端会把头当成"已删除"
+          const cur_head = [...changes].reverse().find((c) => c.path === ch.path);
+          results.push({
+            client_change_id: ch.client_change_id,
+            status: 'conflict',
+            server_version: cur,
+            server_blob_hash: cur_head?.op === 'delete' ? undefined : cur_head?.blob_hash,
+          });
           continue;
         }
         if (ch.op === 'upsert' && (!ch.blob_hash || !blobs.has(ch.blob_hash))) {
@@ -867,5 +883,152 @@ describe('账本写入不怕 VaultMeta 被克隆', () => {
     });
     await run(used, memIO(local), server);
     expect(clone.tombstones?.['a.md']).toBe(2);
+  });
+});
+
+/**
+ * v0.11.33：2026-09-14 手机上 `Ivyea/IvyeaNote.md` 三天停在「待推送（已修改）v3」的复盘。
+ *
+ * 服务端里这篇是 v7，v4–v7 全是手机自己推的；手机随后换过库位置做了全量回放，
+ * 回放把"自己设备的变更"一律跳过 → 账本只记到桌面端推的 v3；此后每轮推送
+ * base_version=3 → 服务端 conflict → 客户端静默 → 拉取又没有新东西。
+ */
+describe('推送 conflict 当场解决 + 自己的变更不再无条件跳过（v0.11.33）', () => {
+  /** 账本停在 v3、游标已经走过 v7、本地改过：正是手机卡住的那个状态 */
+  function stuckState() {
+    // 本地改了第 1 行，服务端 v7 在末尾加了一行：不同区域，三方能自动合
+    const local = new Map([['Ivyea/IvyeaNote.md', 'line-1-edited\nline-2\n']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 3, path: 'Ivyea/IvyeaNote.md', op: 'upsert', version: 3, device_id: 'desktop', blob_hash: 'h-v3' },
+      { seq: 7, path: 'Ivyea/IvyeaNote.md', op: 'upsert', version: 7, device_id: SELF, blob_hash: 'h-v7' },
+    ];
+    blobStore.set('h-v3', 'line-1\nline-2\n');
+    blobStore.set('h-v7', 'line-1\nline-2\nline-3\n');
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 7; // 游标早就过了 v7
+    meta.versions['Ivyea/IvyeaNote.md'] = 3;
+    meta.bases['Ivyea/IvyeaNote.md'] = 'line-1\nline-2\n';
+    return { local, serverChanges, meta };
+  }
+
+  it('K1 推送撞 conflict：按服务端头三方合并、账本追平、同一轮推回去，不再永远"待推送"', async () => {
+    const { local, serverChanges, meta } = stuckState();
+    const server = mockServer({ changes: serverChanges });
+    const r = await run(meta, memIO(local), server);
+
+    expect(r.errors).toEqual([]);
+    expect(r.pushed).toBe(1);
+    expect(r.merged).toBe(1);
+    expect(meta.versions['Ivyea/IvyeaNote.md']).toBe(8);
+    // 合并结果：服务端加的 line-3 和本地改的第 1 行都在
+    expect(local.get('Ivyea/IvyeaNote.md')).toBe('line-1-edited\nline-2\nline-3\n');
+    expect(meta.bases['Ivyea/IvyeaNote.md']).toBe(local.get('Ivyea/IvyeaNote.md'));
+    // 服务端也拿到了这一版
+    expect(serverChanges[serverChanges.length - 1]).toMatchObject({ path: 'Ivyea/IvyeaNote.md', version: 8 });
+
+    // 第二轮：干净，什么都不推
+    const r2 = await run(meta, memIO(local), server);
+    expect(r2.pushed).toBe(0);
+    expect(r2.errors).toEqual([]);
+  });
+
+  it('K2 合并不了：留冲突副本、本地原件同一轮推上去，账本同样追平', async () => {
+    const local = new Map([['n.md', 'mine']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 5, path: 'n.md', op: 'upsert', version: 5, device_id: SELF, blob_hash: 'h-n5' },
+    ];
+    blobStore.set('h-n5', 'theirs');
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 5;
+    meta.versions['n.md'] = 2;
+    meta.bases['n.md'] = 'base';
+    const r = await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+
+    expect(r.conflicts.length).toBe(1);
+    expect(local.get('n.md')).toBe('mine'); // 本地原件不动
+    expect(r.pushed).toBe(1); // 原件作为新版本推上去了
+    expect(meta.versions['n.md']).toBe(6);
+    expect(meta.bases['n.md']).toBe('mine');
+  });
+
+  it('K3 推 delete 撞上服务端更新的版本：修改胜出，服务端内容复活到本地（协议说的"由客户端复活"终于有人做）', async () => {
+    const local = new Map<string, string>(); // 本地已删
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 4, path: 'd.md', op: 'upsert', version: 4, device_id: SELF, blob_hash: 'h-d4' },
+    ];
+    blobStore.set('h-d4', 'newer-on-server');
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 4;
+    meta.versions['d.md'] = 2;
+    meta.bases['d.md'] = 'old';
+    const r = await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+
+    expect(r.errors).toEqual([]);
+    expect(local.get('d.md')).toBe('newer-on-server');
+    expect(meta.tombstones?.['d.md']).toBeUndefined();
+    expect(meta.versions['d.md']).toBeGreaterThanOrEqual(4);
+  });
+
+  it('K4 服务端头是删除（没有 server_blob_hash）、本地改过：删改冲突修改胜出，本地这份推上去', async () => {
+    const local = new Map([['g.md', 'same+edit']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 9, path: 'g.md', op: 'delete', version: 9, device_id: 'other' },
+    ];
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 9; // 游标已过那条 delete，账本却还停在 v3
+    meta.versions['g.md'] = 3;
+    meta.bases['g.md'] = 'same';
+    const r = await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+
+    expect(r.errors).toEqual([]);
+    expect(local.get('g.md')).toBe('same+edit');
+    expect(meta.versions['g.md']).toBe(10);
+    expect(meta.tombstones?.['g.md']).toBeUndefined();
+  });
+
+  it('K5 账本比服务端还新（服务端被回滚 / 库重建）：不再卡死，按新文件推上去', async () => {
+    const local = new Map([['r.md', 'content']]);
+    const serverChanges: ServerChangeRow[] = []; // 服务端一无所有
+    const meta = newVaultMeta(1, 'v');
+    meta.cursor = 0;
+    meta.versions['r.md'] = 5;
+    meta.bases['r.md'] = 'old';
+    const r = await run(meta, memIO(local), mockServer({ changes: serverChanges }));
+    expect(r.errors).toEqual([]);
+    expect(meta.versions['r.md']).toBe(1);
+    expect(serverChanges.some((c) => c.path === 'r.md' && c.version === 1)).toBe(true);
+  });
+
+  it('K6 拉取：自己设备的变更在账本不知道时照样应用（换位置回放不再把自己推的版本弄丢）', async () => {
+    const local = new Map([['p.md', 'v2-text']]);
+    const serverChanges: ServerChangeRow[] = [
+      { seq: 1, path: 'p.md', op: 'upsert', version: 1, device_id: 'desktop', blob_hash: 'h-p1' },
+      { seq: 2, path: 'p.md', op: 'upsert', version: 2, device_id: SELF, blob_hash: 'h-p2' },
+    ];
+    blobStore.set('h-p1', 'v1-text');
+    blobStore.set('h-p2', 'v2-text');
+    const meta = newVaultMeta(1, 'v');
+    meta.syncedAt = '/old-place'; // 触发换位置全量回放
+    const r = await syncVault(mockServer({ changes: serverChanges }), meta, memIO(local), SELF, '/vault');
+
+    expect(r.relocated).toBeTruthy();
+    expect(r.errors).toEqual([]);
+    expect(r.conflicts).toEqual([]);
+    // 回放收敛到 v2（自己推的那版），而不是停在桌面端的 v1
+    expect(meta.versions['p.md']).toBe(2);
+    expect(local.get('p.md')).toBe('v2-text');
+    expect(r.pushed).toBe(0); // 内容一致，没有东西要推
+  });
+
+  it('K7 拉取：账本已经记下的自己的变更仍然跳过（推送成功后同一轮拉取不会再合并一次）', async () => {
+    const local = new Map([['q.md', 'mine']]);
+    const serverChanges: ServerChangeRow[] = [];
+    const meta = newVaultMeta(1, 'v');
+    const io = memIO(local);
+    const r = await run(meta, io, mockServer({ changes: serverChanges }));
+    expect(r.pushed).toBe(1);
+    expect(r.pulled).toBe(0);
+    expect(r.merged).toBe(0);
+    expect(meta.versions['q.md']).toBe(1);
   });
 });
