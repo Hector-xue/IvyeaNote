@@ -29,6 +29,11 @@ export interface EditorMenuCtx {
   canInsertImage: boolean;
   /** 只读视图（分栏右栏）：所有会改文档的项都不该出现 */
   readOnly?: boolean;
+  /**
+   * v0.11.34：右键落在编辑态表格的某一格上。有值就在菜单最前面放一组表格操作
+   * （行 / 列 / 对齐 / 删表）。`row` 0 是表头，正文从 1 起；`rows` 是正文行数。
+   */
+  tableCell?: { row: number; col: number; rows: number; cols: number } | null;
 }
 
 export interface EditorMenuActions {
@@ -57,6 +62,86 @@ export interface EditorMenuActions {
   selectAll(): void;
   openLink(href: string): void;
   copyToClipboard(text: string): void;
+  /** v0.11.34：表格结构操作（只有 ctx.tableCell 有值时才会被调用） */
+  tableOp?(op: TableMenuOp): void;
+}
+
+export type TableMenuOp =
+  | 'row-above'
+  | 'row-below'
+  | 'row-delete'
+  | 'row-up'
+  | 'row-down'
+  | 'col-left'
+  | 'col-right'
+  | 'col-delete'
+  | 'col-moveleft'
+  | 'col-moveright'
+  | 'align-left'
+  | 'align-center'
+  | 'align-right'
+  | 'align-none'
+  | 'table-delete';
+
+/** 表格那一组菜单（右键落在格子上时排在最前面） */
+export function tableMenu(cell: NonNullable<EditorMenuCtx['tableCell']>, run: (op: TableMenuOp) => void): MenuItem[] {
+  const isHeader = cell.row === 0;
+  const body = cell.row - 1;
+  return [
+    {
+      id: 'tbl-row',
+      label: '行',
+      icon: 'table',
+      submenu: [
+        { id: 'row-above', label: '在上方插入行', icon: 'plus', run: () => run('row-above') },
+        { id: 'row-below', label: '在下方插入行', icon: 'plus', run: () => run('row-below') },
+        { type: 'sep', id: 's-row' },
+        { id: 'row-up', label: '上移一行', icon: 'chevron-left', disabled: isHeader || body <= 0, run: () => run('row-up') },
+        {
+          id: 'row-down',
+          label: '下移一行',
+          icon: 'chevron-right',
+          disabled: isHeader || body >= cell.rows - 1,
+          run: () => run('row-down'),
+        },
+        { type: 'sep', id: 's-row2' },
+        { id: 'row-delete', label: '删除行', icon: 'trash', danger: true, disabled: isHeader, run: () => run('row-delete') },
+      ],
+    },
+    {
+      id: 'tbl-col',
+      label: '列',
+      icon: 'table',
+      submenu: [
+        { id: 'col-left', label: '在左侧插入列', icon: 'plus', run: () => run('col-left') },
+        { id: 'col-right', label: '在右侧插入列', icon: 'plus', run: () => run('col-right') },
+        { type: 'sep', id: 's-col' },
+        { id: 'col-moveleft', label: '左移一列', icon: 'chevron-left', disabled: cell.col <= 0, run: () => run('col-moveleft') },
+        {
+          id: 'col-moveright',
+          label: '右移一列',
+          icon: 'chevron-right',
+          disabled: cell.col >= cell.cols - 1,
+          run: () => run('col-moveright'),
+        },
+        { type: 'sep', id: 's-col2' },
+        { id: 'align-left', label: '左对齐', icon: 'paragraph', run: () => run('align-left') },
+        { id: 'align-center', label: '居中', icon: 'paragraph', run: () => run('align-center') },
+        { id: 'align-right', label: '右对齐', icon: 'paragraph', run: () => run('align-right') },
+        { id: 'align-none', label: '默认对齐', icon: 'paragraph', run: () => run('align-none') },
+        { type: 'sep', id: 's-col3' },
+        {
+          id: 'col-delete',
+          label: cell.cols <= 1 ? '删除列（整张表）' : '删除列',
+          icon: 'trash',
+          danger: true,
+          run: () => run('col-delete'),
+        },
+      ],
+    },
+    { id: 'table-delete', label: '删除表格', icon: 'trash', danger: true, run: () => run('table-delete') },
+    { type: 'sep', id: 's-tbl' },
+  ];
 }
 
 /**
@@ -102,6 +187,31 @@ export function aiSubmenu(
 /** Obsidian 那张菜单的结构：链接 → 三个子菜单 → 剪贴板 */
 export function buildEditorMenu(ctx: EditorMenuCtx, act: EditorMenuActions): MenuItem[] {
   const items: MenuItem[] = [];
+
+  /*
+   * v0.11.34：右键在表格的格子里——菜单**只**留和格子有关的：行 / 列 / 删表、
+   * 链接、剪贴板、全选。「文本格式 / 段落设置 / 插入」这些作用在 CodeMirror 的
+   * 选区上，而此刻 CodeMirror 的选区停在表格那几行被隐藏的源码里，点「加粗」会把
+   * 星号写进 `| --- |`，表就散了。剪切 / 粘贴 / 全选由 MarkdownEditor 按格子实现。
+   */
+  if (!ctx.readOnly && ctx.tableCell && act.tableOp) {
+    const op = act.tableOp;
+    items.push(...tableMenu(ctx.tableCell, (o) => op(o)));
+    if (ctx.linkHref) {
+      items.push(
+        { id: 'open-link', label: '打开链接', icon: 'external-link', run: () => act.openLink(ctx.linkHref!) },
+        { id: 'copy-link', label: '复制链接地址', icon: 'copy', run: () => act.copyToClipboard(ctx.linkHref!) },
+        { type: 'sep', id: 's-link' }
+      );
+    }
+    items.push(
+      { id: 'cut', label: '剪切', icon: 'cut', shortcut: 'Ctrl+X', disabled: !ctx.hasSelection, run: act.cut },
+      { id: 'copy', label: '复制', icon: 'copy', shortcut: 'Ctrl+C', disabled: !ctx.hasSelection, run: act.copy },
+      { id: 'paste', label: '粘贴', icon: 'paste', shortcut: 'Ctrl+V', run: act.paste },
+      { id: 'select-all', label: '全选本格', icon: 'select-all', shortcut: 'Ctrl+A', run: act.selectAll }
+    );
+    return items;
+  }
 
   // 点在链接/图片上时，把和它有关的动作放最前面——这是右键最直接的意图
   if (ctx.linkHref) {
@@ -149,7 +259,8 @@ export function buildEditorMenu(ctx: EditorMenuCtx, act: EditorMenuActions): Men
 
   if (!ctx.readOnly) {
     items.push(
-      { id: 'link', label: '新增链接', icon: 'link-plus', shortcut: 'Ctrl+K', run: act.link },
+      // Ctrl+K 在本产品是「全库搜索」（设置里的快捷键表），这里不能再标同一个键
+      { id: 'link', label: '新增链接', icon: 'link-plus', run: act.link },
       { id: 'ext-link', label: '新增外部链接', icon: 'external-link', run: act.externalLink },
       { type: 'sep', id: 's1' },
       {

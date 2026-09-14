@@ -88,6 +88,82 @@ export function scanFences(lines: Iterable<string>): Map<number, 'open' | 'body'
   return out;
 }
 
+/**
+ * 列表行的结构（v0.11.34）。
+ *
+ * 用户原话：「无序列表、有序列表等没有像任务列表那样缩进对齐首行首字」。
+ * 此前只有任务行有一条写死 1.7em 的悬挂缩进；无序列表只把 `-` 盖成圆点，
+ * 有序列表什么都没做，嵌套层级更是从没算过——二级列表折行后的文字顶到最左边。
+ *
+ * 层级按 CommonMark 的规则从**整篇**推：一个列表项的缩进 ≥ 上一个开着的项的
+ * 内容起点，它就是那一项的子项。只看单行是判不出层级的（`  - x` 可能是二级，
+ * 也可能是顶层项用了两个空格），所以和 scanFences 一样整篇扫、按行号查。
+ * 一个 tab 按 4 列算，与编辑器的 indentUnit 一致。
+ */
+export interface ListLine {
+  /** 嵌套层级，0 = 顶层 */
+  level: number;
+  kind: 'ul' | 'ol' | 'task';
+  /** 前导空白的长度（字符数，不是列数） */
+  indent: number;
+  /** 标记连同其后那一个空格的结束位置（相对行首）：`- ` → 2、`10. ` → 4、`- [ ] ` → 6 */
+  markEnd: number;
+  /** 标记文本本身：`-` / `1.` / `10)`，有序列表按它的长度给宽度 */
+  marker: string;
+}
+
+const LIST_RE = /^(\s*)([-*+]|\d{1,9}[.)])(\s+)(\[[ xX]\](?:\s+|$))?/;
+
+function columnWidth(ws: string): number {
+  let w = 0;
+  for (const ch of ws) w += ch === '\t' ? 4 - (w % 4) : 1;
+  return w;
+}
+
+export function scanLists(
+  lines: Iterable<string>,
+  fences: ReadonlyMap<number, unknown> = new Map()
+): Map<number, ListLine> {
+  const out = new Map<number, ListLine>();
+  /** 每个开着的列表项的内容起点（列） */
+  const stack: number[] = [];
+  let n = 0;
+  for (const text of lines) {
+    n++;
+    if (fences.has(n)) continue; // 代码块里的东西不是列表
+    if (text.trim() === '') continue; // 空行不结束列表（松散列表）
+    const m = LIST_RE.exec(text);
+    const w = columnWidth(m ? m[1] : /^\s*/.exec(text)![0]);
+    while (stack.length > 0 && w < stack[stack.length - 1]) stack.pop();
+    if (!m) continue; // 普通行：缩进够就是列表项的续行，不够就已经把栈清空了
+    // `- - -` 这种是分隔线；`1.` 后面必须有正文才算列表（`1.` 单独一行是编号在打字中）
+    if (isHorizontalRule(text)) continue;
+    const marker = m[2];
+    // 任务只认 `- [ ]` 这一族（与 parseTaskLine 一致）；`1. [ ]` 就是普通有序项
+    const isTask = !!m[4] && /^[-*+]$/.test(marker);
+    const kind: ListLine['kind'] = isTask ? 'task' : /^\d/.test(marker) ? 'ol' : 'ul';
+    // 标记后面跟了 5 个以上空格时，CommonMark 认为内容从标记后 1 格开始（其余是缩进代码）
+    const gap = m[3].length >= 5 ? 1 : m[3].length;
+    const markEnd = isTask ? m[0].length : m[1].length + marker.length + gap;
+    out.set(n, { level: stack.length, kind, indent: m[1].length, markEnd, marker });
+    stack.push(w + marker.length + gap);
+  }
+  return out;
+}
+
+/**
+ * 列表每一级的宽度。标记（圆点 / 编号 / 复选框）占一格，每深一层再让出一格，
+ * 折行后的文字对齐第一行的文字（悬挂缩进）。与阅读态 `ul/ol { padding-left: 1.6em }` 同宽。
+ */
+export const LIST_UNIT_EM = 1.6;
+
+/** 有序列表标记占的宽度：两位以内一格，再长每多一位加 0.6em（数字约 0.55em 宽） */
+export function listMarkerEm(line: ListLine): number {
+  if (line.kind !== 'ol') return LIST_UNIT_EM;
+  const extra = Math.max(0, line.marker.length - 2);
+  return LIST_UNIT_EM + extra * 0.6;
+}
+
 export const livePreviewTheme = {
   '.cm-line': { lineHeight: '1.7' },
   /*
@@ -155,8 +231,26 @@ export const livePreviewTheme = {
    * 底色铺在整行（Decoration.line）而不是包一层元素：CodeMirror 的行是虚拟滚动的，
    * 包元素会在滚动时被反复拆建。首行/末行单独给圆角，中间行不给，视觉上才是一块。
    */
-  /* 任务行：整行悬挂缩进，折行后的文字对齐第一行的文本而不是顶到复选框下面 */
-  '.cm-live-task': { paddingLeft: '1.7em', textIndent: '-1.7em' },
+  /*
+   * 列表行（v0.11.34）：整行悬挂缩进，折行后的文字对齐第一行的文字而不是顶到
+   * 标记下面。padding / text-indent 的具体值按层级算，写在行元素的 style 上。
+   * 缩进的空白与标记被换成定宽盒子（下面几条），宽度才是可预测的——
+   * 正文是比例字体，四个空格到底多宽没人说得准。
+   */
+  // ⚠️ text-indent 是**可继承**的：行上那个负值会传进这些 inline-block 里，把圆点 /
+  // 复选框 / 编号再往左拽一格（实测拽出了正文左边界）。每个盒子都要显式归零。
+  '.cm-live-list-indent': { display: 'inline-block', textIndent: '0' },
+  // 有序列表的编号：仍是可编辑的文本，只是占一格定宽、靠右对齐（阅读态的 ::marker 也是靠右的）
+  '.cm-live-olmark': {
+    display: 'inline-block',
+    textIndent: '0',
+    boxSizing: 'border-box',
+    textAlign: 'right',
+    paddingRight: '0.4em',
+    whiteSpace: 'pre',
+    color: 'var(--muted, #888)',
+    fontVariantNumeric: 'tabular-nums',
+  },
   '.cm-live-fence': {
     fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Consolas, monospace)',
     fontSize: '0.9em',
@@ -205,7 +299,52 @@ export const livePreviewTheme = {
     // 同上：这里原来是 margin，分隔线一多，下面所有行的坐标就一起往下漂
     padding: '0.5em 0',
   },
-  // 表格：等宽才对得齐；表头加重，|---| 分隔行淡出（它是语法不是内容）
+  /*
+   * 真表格（v0.11.34，lib/tableLive.ts）。竖线横线都画：用户要的是"正常的表格"，
+   * 单元格边界看不见就不知道该往哪里点。线用 --border，表头微微打底，聚焦的格
+   * 用品牌绿描一圈。表格宽度随内容，最宽到编辑区那么宽，再宽就横向滚。
+   */
+  '.cm-live-tbl': {
+    margin: '0.5em 0',
+    overflowX: 'auto',
+    maxWidth: '100%',
+  },
+  '.cm-live-tbl table': {
+    borderCollapse: 'collapse',
+    minWidth: '40%',
+    fontSize: '0.95em',
+    lineHeight: '1.55',
+  },
+  '.cm-live-tbl th, .cm-live-tbl td': {
+    border: '1px solid var(--border, rgba(127,127,127,0.35))',
+    padding: '5px 10px',
+    minWidth: '4em',
+    verticalAlign: 'top',
+    outline: 'none',
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    caretColor: 'var(--accent, #3f6b45)',
+  },
+  '.cm-live-tbl th': {
+    fontWeight: '650',
+    background: 'color-mix(in srgb, var(--text, #2b2a26) 4%, transparent)',
+  },
+  '.cm-live-tbl td:empty::after, .cm-live-tbl th:empty::after': { content: '"\\200b"' },
+  '.cm-live-tbl th:focus, .cm-live-tbl td:focus': {
+    boxShadow: 'inset 0 0 0 2px var(--accent, #3f6b45)',
+    background: 'color-mix(in srgb, var(--accent, #3f6b45) 6%, transparent)',
+  },
+  '.cm-live-tbl .editing': { fontFamily: 'inherit' },
+  '.cm-live-tbl code': {
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
+    fontSize: '0.9em',
+    color: 'color-mix(in srgb, var(--accent, #3f6b45) 88%, var(--text, #2b2a26))',
+    background: 'color-mix(in srgb, var(--accent, #3f6b45) 10%, transparent)',
+    borderRadius: '4px',
+    padding: '1px 4px',
+  },
+  '.cm-live-tbl mark': { background: 'color-mix(in srgb, var(--accent, #3f6b45) 22%, transparent)', color: 'inherit' },
+  // 不成表的孤儿行（没有分隔行）仍按老样子：等宽、表头加重、|---| 淡出
   '.cm-live-table': {
     fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace',
     fontSize: '0.92em',
@@ -247,8 +386,18 @@ export const livePreviewTheme = {
    */
   '.cm-live-bullet': {
     display: 'inline-block',
-    width: '1ch',
+    textIndent: '0',
+    boxSizing: 'border-box',
+    textAlign: 'center',
     color: 'var(--muted, #888)',
+    userSelect: 'none',
+  },
+  // 任务行的复选框外面套一层定宽盒子，和圆点 / 编号同一套悬挂缩进
+  '.cm-live-taskbox': {
+    display: 'inline-block',
+    textIndent: '0',
+    boxSizing: 'border-box',
+    userSelect: 'none',
   },
   /*
    * 链接：颜色 + **一条淡下划线**。
@@ -272,7 +421,6 @@ export const livePreviewTheme = {
     width: '14px',
     height: '14px',
     display: 'inline-block',
-    marginRight: '6px',
     cursor: 'pointer',
     verticalAlign: 'middle',
     fontSize: '11px',
@@ -506,32 +654,64 @@ class ImageWidget extends WidgetType {
   }
 }
 
-/** 无序列表的圆点。替换的是列表符号那**一个字符**，宽度也按一个字符给 */
+/**
+ * 无序列表的圆点（v0.11.34 起连同前导缩进一起换）。盒子宽 = (层级 + 1) 格，
+ * 圆点画在最后一格里；前面几格是空的，正好就是嵌套缩进。
+ */
 class BulletWidget extends WidgetType {
-  override eq() {
-    return true;
+  constructor(readonly level: number) {
+    super();
+  }
+  override eq(other: BulletWidget) {
+    return other.level === this.level;
   }
   override toDOM() {
     const span = document.createElement('span');
     span.className = 'cm-live-bullet';
+    span.style.width = `${(this.level + 1) * LIST_UNIT_EM}em`;
+    span.style.paddingLeft = `${this.level * LIST_UNIT_EM}em`;
     span.textContent = '•';
     return span;
   }
 }
 
+/** 有序列表 / 续行前面的缩进空白：换成定宽的空盒子（层级 × 一格） */
+class IndentWidget extends WidgetType {
+  constructor(readonly level: number) {
+    super();
+  }
+  override eq(other: IndentWidget) {
+    return other.level === this.level;
+  }
+  override toDOM() {
+    const span = document.createElement('span');
+    span.className = 'cm-live-list-indent';
+    span.style.width = `${this.level * LIST_UNIT_EM}em`;
+    return span;
+  }
+}
+
 class TaskWidget extends WidgetType {
-  constructor(readonly checked: boolean) {
+  constructor(
+    readonly checked: boolean,
+    readonly level = 0
+  ) {
     super();
   }
   override eq(other: TaskWidget) {
-    return other.checked === this.checked;
+    return other.checked === this.checked && other.level === this.level;
   }
   override toDOM() {
+    const wrap = document.createElement('span');
+    wrap.className = 'cm-live-taskbox';
+    wrap.style.width = `${(this.level + 1) * LIST_UNIT_EM}em`;
+    wrap.style.paddingLeft = `${this.level * LIST_UNIT_EM}em`;
     const span = document.createElement('span');
     span.className = `cm-task-checkbox${this.checked ? ' cm-task-checked' : ''}`;
     span.textContent = this.checked ? '✓' : '';
     span.setAttribute('aria-label', this.checked ? '已完成任务' : '未完成任务');
-    return span;
+    wrap.appendChild(span);
+    return wrap;
   }
   override ignoreEvent() {
     return false;
@@ -595,6 +775,7 @@ export const livePreview = ViewPlugin.fromClass(
       const focused = view.hasFocus;
       const imgApi = view.state.facet(imageResolver);
       const fences = scanFences(view.state.doc.iterLines());
+      const lists = scanLists(view.state.doc.iterLines(), fences);
       for (const { from, to } of view.visibleRanges) {
         let pos = from;
         while (pos <= to) {
@@ -801,38 +982,51 @@ export const livePreview = ViewPlugin.fromClass(
            *    复选框下面（`.cm-live-task` 那条 CSS）。
            */
           /*
-           * ---- 无序列表的圆点（v0.11.15）----
-           * 放在任务行之前判定：`- [ ] …` 由下面那段连符号一起换成复选框，
-           * 两个都画就会既有圆点又有复选框。分隔线 `---` 在上面已经 continue 掉了。
+           * ---- 列表（v0.11.34 重做：无序 / 有序 / 任务三种同一套）----
+           *
+           * 三件事：
+           * 1. 整行悬挂缩进，值按层级算（`(层级+1) × 一格`，有序列表的编号长了再加宽）；
+           * 2. 前导空白与标记换成**定宽盒子**：正文是比例字体，"四个空格"有多宽
+           *    说不准，折行对齐只能建立在定宽之上（Obsidian 的做法相同）；
+           * 3. 复选框 / 圆点一律渲染，不看光标在哪——它们是控件不是语法标记。
+           *    v0.11.11 就是为此吃过亏：点复选框时 CodeMirror 会把光标落在被替换
+           *    区间的边界上，`cursorNear` 的 ±1 容差当场命中，"点一下就变成中括号"。
+           *    要改回源码有的是路——切源码模式，或在文字处退格把它删掉。
            */
-          const bullet = parseTaskLine(t, line.from) ? null : parseBullet(t);
-          if (bullet) {
+          const li = lists.get(line.number);
+          if (li) {
+            const padEm = li.level * LIST_UNIT_EM + listMarkerEm(li);
+            // 6px 是 CodeMirror 给每一行的默认左内边距：保留它，标记盒子才和正文段落的
+            // 第一个字对齐（否则整个列表比段落靠左 6px）
             decos.push(
-              Decoration.replace({ widget: new BulletWidget() }).range(
-                line.from + bullet.from,
-                line.from + bullet.to
-              )
+              Decoration.line({
+                class: `cm-live-list cm-live-list-${li.kind}${li.kind === 'task' ? ' cm-live-task' : ''}`,
+                attributes: { style: `padding-left:calc(${padEm}em + 6px);text-indent:-${padEm}em` },
+              }).range(line.from)
             );
-          }
-
-          const task = parseTaskLine(t, line.from);
-          if (task) {
-            /*
-             * **复选框一律渲染，不看光标在哪。**
-             *
-             * 先试过"光标落进方括号才显形"，实测仍然不行：点复选框时 CodeMirror
-             * 会把光标落在被替换区间的边界上，`cursorNear` 的 ±1 容差当场命中，
-             * 于是"点一下就变成中括号"照旧（这条是拿真实产物点出来的，不是看代码想的）。
-             *
-             * 复选框是控件不是语法标记：Obsidian 的 Live Preview 里它也从不退回
-             * `- [ ]`。要改回源码有的是路——切源码模式，或者在文字处退格把它删掉。
-             */
-            decos.push(Decoration.line({ class: 'cm-live-task' }).range(line.from));
-            decos.push(
-              Decoration.replace({ widget: new TaskWidget(task.checked) }).range(task.markFrom, task.boxTo)
-            );
-            if (task.checked && task.textFrom < line.to) {
-              decos.push(Decoration.mark({ class: 'cm-task-checked-text' }).range(task.textFrom, line.to));
+            const markEnd = line.from + li.markEnd;
+            if (li.kind === 'task') {
+              const task = parseTaskLine(t, line.from)!;
+              decos.push(
+                Decoration.replace({ widget: new TaskWidget(task.checked, li.level) }).range(line.from, markEnd)
+              );
+              if (task.checked && task.textFrom < line.to) {
+                decos.push(Decoration.mark({ class: 'cm-task-checked-text' }).range(task.textFrom, line.to));
+              }
+            } else if (li.kind === 'ul') {
+              decos.push(Decoration.replace({ widget: new BulletWidget(li.level) }).range(line.from, markEnd));
+            } else {
+              // 有序：编号保持可编辑的文本，只是占一格定宽；前面的缩进换成空盒子
+              const indentTo = line.from + li.indent;
+              if (li.indent > 0) {
+                decos.push(Decoration.replace({ widget: new IndentWidget(li.level) }).range(line.from, indentTo));
+              }
+              decos.push(
+                Decoration.mark({
+                  class: 'cm-live-olmark',
+                  attributes: { style: `width:${listMarkerEm(li)}em` },
+                }).range(indentTo, markEnd)
+              );
             }
           }
           pos = line.to + 1;

@@ -11,6 +11,9 @@ import {
   parseFootnoteDef,
   parseTaskLine,
   scanFences,
+  scanLists,
+  listMarkerEm,
+  LIST_UNIT_EM,
 } from './livePreview';
 
 describe('parseTaskLine', () => {
@@ -254,5 +257,68 @@ describe('scanFences', () => {
   it('行内代码不会被当成围栏', () => {
     const m = scanFences(['这是 `code` 行内', '``双反引号``'].values());
     expect(m.size).toBe(0);
+  });
+});
+
+/*
+ * v0.11.34：列表层级扫描。用户原话「无序列表、有序列表等没有像任务列表那样缩进对齐首行首字」。
+ * 悬挂缩进的值全靠这里给出的层级与标记宽度。
+ */
+describe('scanLists', () => {
+  const scan = (md: string) => scanLists(md.split('\n'));
+
+  it('三种列表都认，顶层 level=0，标记结束位置算到其后那个空格', () => {
+    const r = scan('- a\n1. b\n- [ ] c\n10) d');
+    expect(r.get(1)).toMatchObject({ kind: 'ul', level: 0, markEnd: 2, marker: '-' });
+    expect(r.get(2)).toMatchObject({ kind: 'ol', level: 0, markEnd: 3, marker: '1.' });
+    expect(r.get(3)).toMatchObject({ kind: 'task', level: 0, markEnd: 6 });
+    expect(r.get(4)).toMatchObject({ kind: 'ol', level: 0, markEnd: 4, marker: '10)' });
+  });
+
+  it('缩进 ≥ 父项内容起点就是子项：2 空格、4 空格、tab 都是下一级', () => {
+    expect(scan('- a\n  - b\n    - c').get(3)!.level).toBe(2);
+    expect(scan('- a\n    - b').get(2)!.level).toBe(1);
+    expect(scan('- a\n\t- b\n\t\t- c').get(3)!.level).toBe(2);
+    expect(scan('1. a\n   1. b').get(2)!.level).toBe(1); // 编号项内容起点是 3
+  });
+
+  it('回到更浅的缩进就回到那一级', () => {
+    const r = scan('- a\n  - b\n    - c\n  - d\n- e');
+    expect([1, 2, 3, 4, 5].map((n) => r.get(n)!.level)).toEqual([0, 1, 2, 1, 0]);
+  });
+
+  it('空行不结束列表；缩进不够的普通行结束列表', () => {
+    const r = scan('- a\n\n  - b\n正文\n  - c');
+    expect(r.get(3)!.level).toBe(1);
+    expect(r.get(5)!.level).toBe(0); // 「正文」把栈清空，之后的缩进项重新从顶层算
+  });
+
+  it('续行（缩进够的普通行）不打断层级', () => {
+    const r = scan('- a\n  继续写\n  - b');
+    expect(r.has(2)).toBe(false);
+    expect(r.get(3)!.level).toBe(1);
+  });
+
+  it('分隔线 `- - -` 与代码块里的 `- x` 都不是列表', () => {
+    expect(scan('- - -').size).toBe(0);
+    const md = '```\n- x\n```\n- y';
+    const r = scanLists(md.split('\n'), scanFences(md.split('\n')));
+    expect(r.has(2)).toBe(false);
+    expect(r.get(4)!.level).toBe(0);
+  });
+
+  it('前导空白长度按字符数给（替换缩进要用），层级按列数算', () => {
+    const r = scan('- a\n\t- b');
+    expect(r.get(2)).toMatchObject({ indent: 1, level: 1, markEnd: 3 });
+  });
+
+  it('`1. [ ] x` 是有序项不是任务（复选框只认 - * +）', () => {
+    expect(scan('1. [ ] x').get(1)!.kind).toBe('ol');
+  });
+
+  it('标记宽度：编号两位以内一格，三位起加宽', () => {
+    expect(listMarkerEm({ level: 0, kind: 'ul', indent: 0, markEnd: 2, marker: '-' })).toBe(LIST_UNIT_EM);
+    expect(listMarkerEm({ level: 0, kind: 'ol', indent: 0, markEnd: 4, marker: '10.' })).toBe(LIST_UNIT_EM + 0.6);
+    expect(listMarkerEm({ level: 0, kind: 'ol', indent: 0, markEnd: 3, marker: '9.' })).toBe(LIST_UNIT_EM);
   });
 });

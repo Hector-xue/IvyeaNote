@@ -54,7 +54,7 @@ import type { FileIO } from './lib/sync';
 import { tauriIO, opfsIO, migrateFiles, removeOpfsVault } from './lib/fs-adapters';
 import { vaultDisplayName, vaultLocationLabel, folderName } from './lib/vaultName';
 import { extractH1, replaceFirstH1, titleToPath, uniqueName, sanitizeTitle } from './lib/titleSync';
-import { loadCollapsed, saveCollapsed } from './ui/FileTree';
+import { loadCollapsed, loadPinned, remapPinned, saveCollapsed, savePinned } from './ui/FileTree';
 import { Palette } from './ui/Palette';
 import { TagPanel } from './ui/TagPanel';
 import { MoveDialog } from './ui/MoveDialog';
@@ -1070,16 +1070,55 @@ export default function App() {
     setSplitPath((cur) => (cur ? (map.get(cur) ?? cur) : cur));
   }, []);
 
-  /** 改名/移动后同步 recent —— 与 remapTabs 成对出现，漏一个就留下死路径 */
-  const remapRecentPaths = useCallback((ops: readonly { from: string; to: string }[]) => {
-    setRecent((cur) => {
-      const next = remapRecent(cur, ops);
-      saveRecent(next);
-      return next;
+  /**
+   * v0.11.34：侧栏置顶（文件与文件夹）。用户原话：「右键文档或者右键文件夹没有置顶功能」。
+   * 与折叠状态同一套持久化；改名/移动在 applyMoveOps 里跟着走，删除时摘掉。
+   */
+  const [pinned, setPinned] = useState<Set<string>>(() => loadPinned());
+  const togglePin = useCallback((path: string) => {
+    setPinned((s) => {
+      const n = new Set(s);
+      if (n.has(path)) n.delete(path);
+      else n.add(path);
+      savePinned(n);
+      return n;
     });
-    // 桌面小部件钉的也是路径，改名 / 移动同样要跟（v0.11.30；非安卓 no-op）
-    launcherRef.current?.remapBindings(ops);
   }, []);
+  const remapPins = useCallback((ops: readonly { from: string; to: string }[]) => {
+    if (ops.length === 0) return;
+    setPinned((s) => {
+      const n = remapPinned(s, ops);
+      savePinned(n);
+      return n;
+    });
+  }, []);
+  /** 删掉的路径（或整个文件夹）从置顶里摘掉，别让一条死路径永远赖在最上面 */
+  const unpinGone = useCallback((path: string) => {
+    setPinned((s) => {
+      if (![...s].some((p) => p === path || p.startsWith(`${path}/`))) return s;
+      const n = new Set([...s].filter((p) => p !== path && !p.startsWith(`${path}/`)));
+      savePinned(n);
+      return n;
+    });
+  }, []);
+  /** 「按修改时间」排序要查 mtime；metaOf 读的是 ref，这里只是换个签名 */
+  const mtimeOf = useCallback((path: string) => metaOf(path)?.mtime, [metaOf]);
+
+  /** 改名/移动后同步 recent —— 与 remapTabs 成对出现，漏一个就留下死路径 */
+  const remapRecentPaths = useCallback(
+    (ops: readonly { from: string; to: string }[]) => {
+      setRecent((cur) => {
+        const next = remapRecent(cur, ops);
+        saveRecent(next);
+        return next;
+      });
+      // 桌面小部件钉的也是路径，改名 / 移动同样要跟（v0.11.30；非安卓 no-op）
+      launcherRef.current?.remapBindings(ops);
+      // 侧栏置顶同样按路径存（v0.11.34）
+      remapPins(ops);
+    },
+    [remapPins]
+  );
 
   /**
    * 顶栏标签页（v0.11.11 重新引入；v0.10.7 删掉的是"单独一整行的空栏"，不是标签本身）。
@@ -1896,7 +1935,7 @@ export default function App() {
         await io.writeBinary(root, op.to, data);
         await io.remove(root, op.from);
       }
-      // 正在打开的文件被移走了：编辑区、标签、最近打开、右栏都得跟着换路径
+      // 正在打开的文件被移走了：编辑区、标签、最近打开、右栏、置顶都得跟着换路径
       setCurrentPath((cur) => remapPath(cur, ops));
       remapTabs(ops);
       remapRecentPaths(ops);
@@ -2091,13 +2130,14 @@ export default function App() {
         }
         // 右栏开的正是这篇：关掉，否则会停在一个已经进回收站的文件上
         if (splitPath === path) closeSplit();
+        unpinGone(path);
         await refreshFiles();
         void doSync();
       } catch (e) {
         toast(`删除失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, splitPath, closeSplit, refreshFiles, doSync, confirm, toast]
+    [vault, io, currentPath, splitPath, closeSplit, unpinGone, refreshFiles, doSync, confirm, toast]
   );
 
   /**
@@ -2148,6 +2188,7 @@ export default function App() {
         // 一次，指望不上——这里按"删完还剩哪些"显式清一遍，否则标签栏留着一排
         // 点开是空白的死标签
         pruneTabs(all.filter((p) => !p.startsWith(prefix)));
+        unpinGone(dir);
         await refreshFiles();
         void doSync();
         toast(`已删除文件夹「${dir}」（${inside.length} 个文件已进回收站）`, 'ok');
@@ -2155,7 +2196,7 @@ export default function App() {
         toast(`删除文件夹失败：${errText(e)}`, 'error');
       }
     },
-    [vault, io, currentPath, splitPath, closeSplit, pruneTabs, refreshFiles, doSync, confirm, toast, errText]
+    [vault, io, currentPath, splitPath, closeSplit, pruneTabs, unpinGone, refreshFiles, doSync, confirm, toast, errText]
   );
 
   /**
@@ -3575,6 +3616,10 @@ export default function App() {
           onRequestMove={(p, isDir) => setMoving({ path: p, isDir })}
           onCreateFolder={(parent) => void onCreateFolder(parent ?? '')}
           onRenameFolder={(d) => void onRenameFolder(d)}
+          onNewFolderNote={(folder) => void onCreateNote(folder)}
+          pinned={pinned}
+          onTogglePin={togglePin}
+          mtimeOf={mtimeOf}
           pdfs={pdfs}
           allFiles={allFiles}
           onOpenAttachment={(p) => void onOpenAttachment(p)}
@@ -3786,6 +3831,9 @@ export default function App() {
         onDeleteFile={(p) => void onDeleteFile(p)}
         onDeleteFolder={(d) => void onDeleteFolder(d)}
         onRenameFolder={(d) => void onRenameFolder(d)}
+        pinned={pinned}
+        onTogglePin={togglePin}
+        mtimeOf={mtimeOf}
         onMovePath={(src, dest, isDir) => void onMovePath(src, dest, isDir)}
         onRequestRename={(p) => void requestRename(p)}
         onCopyPath={(p) => void copyPath(p)}

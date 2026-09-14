@@ -2672,6 +2672,19 @@ button {
 .ft-file:hover .ft-badge {
   display: none;
 }
+/* v0.11.34：置顶标记。与角标同一格，hover 时同样让位给操作按钮 */
+.ft-pin {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  color: var(--muted);
+  opacity: 0.85;
+}
+.ft-file:hover .ft-pin,
+.ft-dir:hover .ft-pin {
+  display: none;
+}
 
 /*
  * v0.11.22：**图片开在主区**（`ui/ImageViewer`），和 PDF / `.base` / HTML / 图谱

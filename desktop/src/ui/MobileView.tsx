@@ -60,6 +60,15 @@ interface Props {
    * 「移动端功能是空的」。
    */
   onCreateFolder?(parent?: string): void;
+  /**
+   * v0.11.34：在指定文件夹里新建笔记。此前长按文件夹的「在此新建笔记」调的是
+   * 不带参数的 `onCreateNote()`——笔记落在库根，"在此"两个字是假的。
+   */
+  onNewFolderNote?(folder: string): void;
+  /** v0.11.34：置顶 */
+  pinned?: ReadonlySet<string>;
+  onTogglePin?(path: string): void;
+  mtimeOf?(path: string): number | undefined;
   /** v0.11.22：重命名文件夹（长按文件夹 → 重命名）。弹框归 App，两棵树共用一份实现 */
   onRenameFolder?(dir: string): void;
   onDeleteFile(path: string): void;
@@ -503,7 +512,12 @@ export function MobileView(props: Props) {
     }
     if (isDir) {
       groups.push([
-        { key: 'newnote', icon: 'file-plus', label: '在此新建笔记', onClick: () => props.onCreateNote() },
+        {
+          key: 'newnote',
+          icon: 'file-plus',
+          label: '在此新建笔记',
+          onClick: () => (props.onNewFolderNote ? props.onNewFolderNote(st.path) : props.onCreateNote()),
+        },
         { key: 'newdir', icon: 'folder-plus', label: '在此新建子文件夹', onClick: () => props.onCreateFolder?.(st.path) },
         /* v0.11.22：桌面右键有了「重命名…」，手机这张单子是同一个功能的唯一入口，
            只加一边就是这个仓库的老毛病（能力有了、另一棵树没接） */
@@ -520,6 +534,13 @@ export function MobileView(props: Props) {
           label: '重命名',
           onClick: () => setRenaming({ path: st.path, value: st.name.replace(/\.(md|markdown)$/i, '') }),
         },
+      ]);
+    }
+    // v0.11.34：置顶 / 取消置顶（文件与文件夹都有；桌面右键同一条）
+    if (props.onTogglePin) {
+      const on = props.pinned?.has(st.path) ?? false;
+      groups.push([
+        { key: 'pin-top', icon: 'pin', label: on ? '取消置顶' : '置顶', onClick: () => props.onTogglePin?.(st.path) },
       ]);
     }
     if (props.onRequestMove) {
@@ -708,6 +729,9 @@ export function MobileView(props: Props) {
           setDrawerOpen(false);
         }}
         emptyDirs={props.emptyDirs ?? []}
+        sortMode={props.sortMode}
+        mtimeOf={props.mtimeOf}
+        pinned={props.pinned}
         currentPath={props.currentPath}
         collapsedDirs={collapsedDirs}
         query={query}

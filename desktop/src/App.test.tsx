@@ -119,6 +119,9 @@ vi.mock('@codemirror/state', () => ({
   // v0.11.13：区分"程序灌进来的内容"与"人敲的字"（打开笔记不该触发改名）。
   // 桩里缺了会在 import 期就炸掉整个测试文件。
   Annotation: { define: () => ({ of: () => ({}) }) },
+  // v0.11.34：编辑态真表格是 StateField（lib/tableLive.ts），键位用 Prec.high 抬优先级
+  StateField: { define: () => ({}) },
+  Prec: { high: (x: unknown) => x, highest: (x: unknown) => x, low: (x: unknown) => x },
 }));
 
 import App from './App';

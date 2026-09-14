@@ -37,8 +37,10 @@ if (!URL.createObjectURL) {
   URL.revokeObjectURL = (() => undefined) as unknown as typeof URL.revokeObjectURL;
 }
 
-const { memFiles, memIO } = vi.hoisted(() => {
+const { memFiles, memMtime, memIO } = vi.hoisted(() => {
   const memFiles = new Map<string, string>();
+  /** v0.11.34：按修改时间排序要有 mtime 可查；没登记的按 0 */
+  const memMtime = new Map<string, number>();
   const memIO: FileIO = {
     async list() {
       return [...memFiles.keys()];
@@ -46,7 +48,7 @@ const { memFiles, memIO } = vi.hoisted(() => {
     async listMeta() {
       return [...memFiles.keys()].map((p) => ({
         path: p,
-        mtime: 0,
+        mtime: memMtime.get(p) ?? 0,
         size: memFiles.get(p)!.length,
       }));
     },
@@ -79,7 +81,7 @@ const { memFiles, memIO } = vi.hoisted(() => {
       return memFiles.has(rel);
     },
   };
-  return { memFiles, memIO };
+  return { memFiles, memMtime, memIO };
 });
 
 vi.mock('./lib/fs-adapters', () => ({
@@ -183,6 +185,9 @@ vi.mock('@codemirror/state', () => ({
   // v0.11.13：区分"程序灌进来的内容"与"人敲的字"（打开笔记不该触发改名）。
   // 桩里缺了会在 import 期就炸掉整个测试文件。
   Annotation: { define: () => ({ of: () => ({}) }) },
+  // v0.11.34：编辑态真表格是 StateField（lib/tableLive.ts），键位用 Prec.high 抬优先级
+  StateField: { define: () => ({}) },
+  Prec: { high: (x: unknown) => x, highest: (x: unknown) => x, low: (x: unknown) => x },
 }));
 
 import App from './App';
@@ -441,7 +446,8 @@ describe('右键上下文菜单（E3）', () => {
     const labels = [...screen.getAllByRole('menuitem')].map((b) => b.textContent);
     // v0.8.2 E9：「在右侧打开」——分栏里「两文档并排」的主要入口
     // v0.8.3 E3：「移动到…」——方案里点名要的，此前只有拖拽一条路
-    expect(labels).toEqual(['打开', '在新标签打开', '在右侧打开', '重命名…', '移动到…', '复制路径', '删除']);
+    // v0.11.34：「置顶」（用户点名"右键文档或者右键文件夹没有置顶功能"）
+    expect(labels).toEqual(['打开', '在新标签打开', '在右侧打开', '置顶', '重命名…', '移动到…', '复制路径', '删除']);
   });
 
   it('右键文件夹 → 出现文件夹动作集（不该有「删除笔记」）', async () => {
@@ -460,11 +466,88 @@ describe('右键上下文菜单（E3）', () => {
     expect(labels).toEqual([
       '在此新建笔记',
       '在此新建子文件夹',
+      '置顶',
       '重命名…',
       '移动到…',
       '复制路径',
       '删除文件夹',
     ]);
+  });
+
+  /*
+   * v0.11.34：**置顶 + 按修改时间排序**，两条都是渲染整棵 App 才抓得到的病：
+   * - 「按修改时间」此前是假的（`buildFileTree` 无条件按名称重排），单测 useVaultFiles
+   *   看到的那份扁平列表是排好的，侧栏画的却是另一棵树；
+   * - 置顶要从右键菜单一路走到树的顺序、图钉标记，改名后还得跟着走。
+   */
+  it('置顶：右键「置顶」后排到最前、带图钉；再右键变成「取消置顶」；改名后置顶跟着走', async () => {
+    await renderApp({ 'a.md': '# A\n', 'b.md': '# B\n', 'z.md': '# Z\n' });
+    const order = () =>
+      [...document.querySelectorAll<HTMLElement>('.ft-root .ft-file-name')].map((e) => e.getAttribute('title'));
+    expect(order()).toEqual(['a.md', 'b.md', 'z.md']);
+
+    fireEvent.contextMenu(fileNode('z.md')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+    fireEvent.click(screen.getByRole('menuitem', { name: '置顶' }));
+    await waitFor(() => expect(order()).toEqual(['z.md', 'a.md', 'b.md']));
+    expect(fileNode('z.md')!.querySelector('.ft-pin')).toBeTruthy();
+    expect(fileNode('a.md')!.querySelector('.ft-pin')).toBeNull();
+    expect(JSON.parse(localStorage.getItem('ivnote.pinned') ?? '[]')).toEqual(['z.md']);
+
+    fireEvent.contextMenu(fileNode('z.md')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: '取消置顶' })).toBeTruthy());
+    // 关掉菜单，改名（标题跟随改名：正文 H1 改了文件名跟着改）
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+
+    // 改名：右键 → 重命名… → 对话框
+    fireEvent.contextMenu(fileNode('z.md')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+    fireEvent.click(screen.getByRole('menuitem', { name: '重命名…' }));
+    await waitFor(() => expect(document.querySelector('.dlg-input')).toBeTruthy());
+    fireEvent.change(document.querySelector('.dlg-input')!, { target: { value: 'zz' } });
+    fireEvent.click([...document.querySelectorAll('.dlg-actions button')].find((b) => b.textContent === '重命名')!);
+    await waitFor(() => expect(memFiles.has('zz.md')).toBe(true));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('ivnote.pinned') ?? '[]')).toEqual(['zz.md']));
+    await waitFor(() => expect(order()[0]).toBe('zz.md'));
+    expect(fileNode('zz.md')!.querySelector('.ft-pin')).toBeTruthy();
+  });
+
+  it('置顶的文件夹：改名后置顶跟着换成新目录名', async () => {
+    await renderApp({ 'a.md': '# A\n', 'sub/b.md': '# B\n' });
+    fireEvent.contextMenu(dirNode('sub')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menu')).toBeTruthy());
+    fireEvent.click(screen.getByRole('menuitem', { name: '置顶' }));
+    await waitFor(() => expect(dirNode('sub')!.querySelector('.ft-pin')).toBeTruthy());
+
+    fireEvent.contextMenu(dirNode('sub')!, { clientX: 40, clientY: 60 });
+    await waitFor(() => expect(screen.getByRole('menuitem', { name: '取消置顶' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('menuitem', { name: '重命名…' }));
+    await waitFor(() => expect(document.querySelector('.dlg-input')).toBeTruthy());
+    fireEvent.change(document.querySelector('.dlg-input')!, { target: { value: '归档' } });
+    fireEvent.click([...document.querySelectorAll('.dlg-actions button')].find((b) => b.textContent === '重命名')!);
+    await waitFor(() => expect(memFiles.has('归档/b.md')).toBe(true));
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('ivnote.pinned') ?? '[]')).toEqual(['归档']));
+    await waitFor(() => expect(dirNode('归档')!.querySelector('.ft-pin')).toBeTruthy());
+  });
+
+  it('按修改时间排序：树里文件真的按 mtime 新的在前（此前点了没反应）', async () => {
+    memMtime.set('old.md', 100);
+    memMtime.set('new.md', 300);
+    memMtime.set('mid.md', 200);
+    await renderApp({ 'old.md': '# 1\n', 'new.md': '# 2\n', 'mid.md': '# 3\n' });
+    const order = () =>
+      [...document.querySelectorAll<HTMLElement>('.ft-root .ft-file-name')].map((e) => e.getAttribute('title'));
+    expect(order()).toEqual(['mid.md', 'new.md', 'old.md']); // 默认按名称
+
+    // 顶栏「排序」按钮 → 下拉里选「按修改时间」
+    const sortBtn = [...document.querySelectorAll<HTMLElement>('button')].find((b) => b.title?.startsWith('排序'));
+    expect(sortBtn).toBeTruthy();
+    fireEvent.click(sortBtn!);
+    const byMtime = await screen.findByText('按修改时间');
+    fireEvent.click(byMtime);
+    await waitFor(() => expect(order()).toEqual(['new.md', 'mid.md', 'old.md']));
+    memMtime.clear();
   });
 
   /**

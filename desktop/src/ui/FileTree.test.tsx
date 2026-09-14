@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { useState } from 'react';
-import { buildFileTree, displayName, fileBadge, FileTree } from './FileTree';
+import { buildFileTree, displayName, fileBadge, FileTree, remapPinned } from './FileTree';
 
 afterEach(() => cleanup());
 
@@ -146,5 +146,97 @@ describe('buildFileTree 的空文件夹', () => {
   it('空文件夹排在文件前面（与既有排序一致）', () => {
     const t = buildFileTree(['z.md'], ['空']);
     expect(t.map((n) => n.type)).toEqual(['dir', 'file']);
+  });
+});
+
+/*
+ * v0.11.34：排序与置顶。
+ *
+ * 「按修改时间」此前是假的：`buildFileTree` 无条件按名称重排，`sortMode` 只作用在
+ * 一份没人看的扁平列表上——这几条在旧代码上会红。
+ */
+describe('buildFileTree 排序与置顶', () => {
+  const mtimes: Record<string, number> = { 'a.md': 100, 'b.md': 300, 'c.md': 200, 'sub/x.md': 50, 'sub/y.md': 500 };
+  const mtimeOf = (p: string) => mtimes[p];
+
+  it('按修改时间：文件新的在前，文件夹仍在最前且按名称', () => {
+    const t = buildFileTree(['a.md', 'b.md', 'c.md', 'sub/x.md', 'sub/y.md'], [], { sort: 'mtime', mtimeOf });
+    expect(t.map((n) => n.name)).toEqual(['sub', 'b.md', 'c.md', 'a.md']);
+    expect(t[0].children!.map((n) => n.name)).toEqual(['y.md', 'x.md']);
+  });
+
+  it('不传排序（或按名称）时行为与以前完全一样', () => {
+    const t = buildFileTree(['b.md', 'a.md', 'c.md'], [], { sort: 'name', mtimeOf });
+    expect(t.map((n) => n.name)).toEqual(['a.md', 'b.md', 'c.md']);
+  });
+
+  it('查不到 mtime 的文件排到最后，不抛', () => {
+    const t = buildFileTree(['a.md', 'zzz.md'], [], { sort: 'mtime', mtimeOf });
+    expect(t.map((n) => n.name)).toEqual(['a.md', 'zzz.md']);
+  });
+
+  it('置顶的文件排到同级最前（哪怕按名称它该在最后）', () => {
+    const t = buildFileTree(['a.md', 'b.md', 'z.md'], [], { pinned: new Set(['z.md']) });
+    expect(t.map((n) => n.name)).toEqual(['z.md', 'a.md', 'b.md']);
+  });
+
+  it('置顶的文件夹排在置顶文件之前，未置顶的文件夹仍在未置顶文件之前', () => {
+    const t = buildFileTree(['a.md', 'z.md', 'k/1.md', 'm/2.md'], [], { pinned: new Set(['z.md', 'm']) });
+    expect(t.map((n) => n.name)).toEqual(['m', 'z.md', 'k', 'a.md']);
+  });
+
+  it('置顶只影响所在的那一层：子目录里的置顶不会影响父层', () => {
+    const t = buildFileTree(['sub/a.md', 'sub/b.md', 'top.md'], [], { pinned: new Set(['sub/b.md']) });
+    expect(t.map((n) => n.name)).toEqual(['sub', 'top.md']);
+    expect(t[0].children!.map((n) => n.name)).toEqual(['b.md', 'a.md']);
+  });
+
+  it('置顶与按修改时间叠加：置顶最前，其余按时间', () => {
+    const t = buildFileTree(['a.md', 'b.md', 'c.md'], [], { sort: 'mtime', mtimeOf, pinned: new Set(['a.md']) });
+    expect(t.map((n) => n.name)).toEqual(['a.md', 'b.md', 'c.md']);
+  });
+});
+
+describe('remapPinned', () => {
+  it('文件改名 / 移动：置顶跟着换路径', () => {
+    const n = remapPinned(new Set(['a.md', 'keep.md']), [{ from: 'a.md', to: 'sub/b.md' }]);
+    expect([...n].sort()).toEqual(['keep.md', 'sub/b.md']);
+  });
+  it('置顶的是文件夹：从其中任意一个文件的搬运对反推出新目录', () => {
+    const n = remapPinned(new Set(['文章']), [
+      { from: '文章/a.md', to: '归档/文章/a.md' },
+      { from: '文章/deep/b.md', to: '归档/文章/deep/b.md' },
+    ]);
+    expect([...n]).toEqual(['归档/文章']);
+  });
+  it('文件夹改名', () => {
+    const n = remapPinned(new Set(['old']), [{ from: 'old/x.md', to: 'new/x.md' }]);
+    expect([...n]).toEqual(['new']);
+  });
+  it('只是把文件夹里的一篇挪走：文件夹本身没动，置顶不变', () => {
+    const n = remapPinned(new Set(['文章']), [{ from: '文章/a.md', to: 'a.md' }]);
+    expect([...n]).toEqual(['文章']);
+  });
+  it('空 ops 原样返回', () => {
+    expect([...remapPinned(new Set(['a']), [])]).toEqual(['a']);
+  });
+});
+
+describe('FileTree 置顶标记', () => {
+  it('置顶的文件与文件夹旁边有图钉，其余没有', () => {
+    render(
+      <FileTree
+        nodes={buildFileTree(['a.md', 'sub/b.md'], [], { pinned: new Set(['a.md', 'sub']) })}
+        currentPath={null}
+        collapsed={new Set()}
+        onToggleDir={() => undefined}
+        onSelectFile={() => undefined}
+        onNewNoteIn={() => undefined}
+        onNewFolderIn={() => undefined}
+        onDeleteFile={() => undefined}
+        pinned={new Set(['a.md', 'sub'])}
+      />
+    );
+    expect(screen.getAllByLabelText('已置顶')).toHaveLength(2);
   });
 });
