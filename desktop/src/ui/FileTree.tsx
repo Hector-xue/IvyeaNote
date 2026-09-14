@@ -24,7 +24,31 @@ export interface TreeNode {
  *              于是「新建文件夹」建出来的空目录（里面只有一个 .keep 占位）在侧栏
  *              完全不显示：用户点完像什么都没发生，也没法把笔记拖进去。
  */
-export function buildFileTree(paths: string[], dirs: readonly string[] = []): TreeNode[] {
+/**
+ * 树的排序选项（v0.11.34）。
+ *
+ * 此前这个函数**无条件按名称排**：`sortMode` 只作用在 `useVaultFiles` 产出的那份扁平
+ * 列表上，而侧栏画的是这棵树——树一建又按名字重排了一遍。于是顶栏「排序：按修改时间」
+ * 点了什么都不发生，用户的原话是「按修改时间排序没有反应」。这个仓库的病①：
+ * 功能清单上打着勾，链路里根本没接。
+ *
+ * - `sort`：`mtime` 时文件按修改时间新的在前（文件夹仍按名称，与 Obsidian 一致——
+ *   文件夹的"修改时间"没有一个人人认同的定义，按名称至少能找得到）；
+ * - `mtimeOf`：拿路径查修改时间（毫秒）。查不到按 0 算，排到最后；
+ * - `pinned`：置顶的路径（文件或文件夹）。置顶项排在同级最前，置顶文件夹又在置顶文件
+ *   之前；其余保持「文件夹在前」。
+ */
+export interface TreeSortOptions {
+  sort?: 'name' | 'mtime';
+  mtimeOf?(path: string): number | undefined;
+  pinned?: ReadonlySet<string>;
+}
+
+export function buildFileTree(
+  paths: string[],
+  dirs: readonly string[] = [],
+  opts: TreeSortOptions = {}
+): TreeNode[] {
   const root: TreeNode = { name: '', path: '', type: 'dir', children: [] };
   // 先把显式目录建出来，再让文件挂进去（顺序无所谓，find 会复用已有节点）
   for (const d of dirs) {
@@ -54,15 +78,75 @@ export function buildFileTree(paths: string[], dirs: readonly string[] = []): Tr
       cur = next;
     }
   }
-  // 排序：文件夹在前，名称中文序
+  // 排序：置顶在前 → 文件夹在前 → 文件按名称或修改时间
+  const pinned = opts.pinned;
+  const byMtime = opts.sort === 'mtime';
+  const mtime = (n: TreeNode) => opts.mtimeOf?.(n.path) ?? 0;
   const sortNode = (n: TreeNode) => {
-    n.children?.sort((a, b) =>
-      a.type !== b.type ? (a.type === 'dir' ? -1 : 1) : a.name.localeCompare(b.name, 'zh-Hans-CN')
-    );
+    n.children?.sort((a, b) => {
+      const pa = pinned?.has(a.path) ? 1 : 0;
+      const pb = pinned?.has(b.path) ? 1 : 0;
+      if (pa !== pb) return pb - pa;
+      if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      if (byMtime && a.type === 'file') {
+        const d = mtime(b) - mtime(a);
+        if (d !== 0) return d;
+      }
+      return a.name.localeCompare(b.name, 'zh-Hans-CN');
+    });
     n.children?.forEach(sortNode);
   };
   sortNode(root);
   return root.children ?? [];
+}
+
+/**
+ * 置顶集合持久化（与折叠状态同一套姿势：localStorage、整份存取）。
+ * 存的是库内相对路径，文件与文件夹混在一起——一个路径要么是文件要么是目录，不会撞。
+ */
+const PIN_KEY = 'ivnote.pinned';
+export function loadPinned(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(PIN_KEY) ?? '[]') as string[]);
+  } catch {
+    return new Set();
+  }
+}
+export function savePinned(s: ReadonlySet<string>): void {
+  localStorage.setItem(PIN_KEY, JSON.stringify([...s]));
+}
+
+/**
+ * 改名 / 移动后让置顶跟着走。`ops` 是逐个**文件**的搬运对（App 的 applyMoveOps 只有这一种粒度）；
+ * 置顶的**文件夹**没有自己的一条 op，要从其中任意一个文件的新旧路径把新目录反推出来：
+ * `文章/a.md → 归档/文章/a.md` 说明 `文章` 搬到了 `归档/文章`。
+ */
+export function remapPinned(
+  pinned: ReadonlySet<string>,
+  ops: readonly { from: string; to: string }[]
+): Set<string> {
+  if (ops.length === 0) return new Set(pinned);
+  const direct = new Map(ops.map((o) => [o.from, o.to]));
+  const next = new Set<string>();
+  for (const p of pinned) {
+    const hit = direct.get(p);
+    if (hit !== undefined) {
+      next.add(hit);
+      continue;
+    }
+    const prefix = `${p}/`;
+    const inside = ops.find((o) => o.from.startsWith(prefix));
+    if (inside) {
+      const rest = inside.from.slice(prefix.length);
+      // 只有整棵子树原样平移才算目录搬家；单个文件被挪出去时目录本身没动
+      if (inside.to.endsWith(`/${rest}`)) {
+        next.add(inside.to.slice(0, inside.to.length - rest.length - 1));
+        continue;
+      }
+    }
+    next.add(p);
+  }
+  return next;
 }
 
 /** 显示名：文件隐藏 .md/.markdown 后缀，其余文件连后缀一起去掉（后缀改由角标显示） */
@@ -116,6 +200,8 @@ interface Props {
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
   /** v0.7.9 E3：右键菜单。桌面右键、移动长按都走这里，共用一套菜单定义。 */
   onContextMenu?(node: TreeNode, x: number, y: number): void;
+  /** v0.11.34：置顶的路径，渲染图钉标记（排序已在 buildFileTree 里做完） */
+  pinned?: ReadonlySet<string>;
 }
 
 export function FileTree(props: Props) {
@@ -248,6 +334,11 @@ export function FileTree(props: Props) {
               <RibbonIcon name={isOpen ? 'chevron-down' : 'chevron-right'} size={14} />
             </span>
             <span className="ft-dir-name">{node.name}</span>
+            {props.pinned?.has(node.path) && (
+              <span className="ft-pin" title="已置顶" aria-label="已置顶">
+                <RibbonIcon name="pin" size={12} />
+              </span>
+            )}
             <span className="ft-actions">
               <button
                 title="在此新建笔记"
@@ -307,6 +398,11 @@ export function FileTree(props: Props) {
           {displayName(node.name, true)}
         </span>
         {fileBadge(node.name) && <span className="ft-badge">{fileBadge(node.name)}</span>}
+        {props.pinned?.has(node.path) && (
+          <span className="ft-pin" title="已置顶" aria-label="已置顶">
+            <RibbonIcon name="pin" size={12} />
+          </span>
+        )}
         <span className="ft-actions">
           <button
             title="删除"

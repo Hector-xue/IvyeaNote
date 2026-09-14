@@ -46,6 +46,7 @@ import {
 } from '../lib/livePreview';
 import { ContextMenu, type MenuAnchor } from './ContextMenu';
 import { blockSnippet, buildEditorMenu, type AiMenuAction } from '../lib/editorMenu';
+import { focusTableCell, liveTables, runTableOp, tableAt, tableLinkOpener } from '../lib/tableLive';
 import { raiseToast } from './Toast';
 import { autocompletion } from '@codemirror/autocomplete';
 import { wikiCompletion } from '../lib/wikiComplete';
@@ -61,6 +62,8 @@ import { encodeHref, noteRelative } from '../lib/attachPath';
  * 于是插两张图——用这个集合去重。WeakSet 不会拖住事件对象。
  */
 const handledPastes = new WeakSet<Event>();
+/** 最近一次 Ctrl+Shift+V 按下的时刻；紧随其后的 paste 事件按"纯文本"处理 */
+let shiftPasteAt = 0;
 
 export interface MarkdownEditorProps {
   doc: string;
@@ -157,7 +160,8 @@ function cmExtensions(
     EditorView.theme({ '.cm-gutters': { display: 'none' } }),
     EditorView.theme(livePreviewTheme),
     // 关掉实时预览＝退回纯 Markdown 源码（主题留着无妨，没有装饰就不会命中）
-    ...(livePreviewOn ? [livePreview] : []),
+    // v0.11.34：表格是真表格（块级 widget，可编辑单元格），见 lib/tableLive.ts
+    ...(livePreviewOn ? [livePreview, liveTables, tableLinkOpener.of((href) => onFollowLink?.(href))] : []),
     highlightActiveLine(),
     drawSelection(),
     history(),
@@ -192,6 +196,7 @@ function cmExtensions(
       go: '跳转',
       'on line': '行号',
     }),
+    formatKeymap,
     keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]),
     ...(getTitles ? [autocompletion({ override: [wikiCompletion(getTitles)] })] : []),
     EditorView.updateListener.of((u) => {
@@ -214,14 +219,32 @@ function cmExtensions(
        * 落地的元素，在这里接是最短、最不依赖中间环节的一条路。
        * 外层那个监听保留作为兜底，靠 `handledPastes` 去重，不会插两次。
        */
-      paste(e) {
-        if (!onPasteImageFile || handledPastes.has(e)) return false;
-        const handled = onPasteImageFile(e.clipboardData);
-        if (handled) {
+      /*
+       * v0.11.34：Ctrl+Shift+V＝以纯文本形式粘贴（右键菜单上早就标着，此前没绑）。
+       * 不走 navigator.clipboard.readText（WebView 里常被拒），而是在 paste 事件里
+       * 看最近一次按键有没有带 Shift：事件本身就带着剪贴板内容。
+       */
+      keydown(e) {
+        shiftPasteAt = (e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v' ? Date.now() : 0;
+        return false;
+      },
+      paste(e, view) {
+        if (handledPastes.has(e)) return false;
+        if (onPasteImageFile && onPasteImageFile(e.clipboardData)) {
           handledPastes.add(e);
           e.preventDefault();
+          return true;
         }
-        return handled;
+        if (Date.now() - shiftPasteAt < 800) {
+          shiftPasteAt = 0;
+          const text = e.clipboardData?.getData('text/plain') ?? '';
+          if (!text) return false;
+          handledPastes.add(e);
+          e.preventDefault();
+          view.dispatch(view.state.replaceSelection(stripMd(text)), { scrollIntoView: true });
+          return true;
+        }
+        return false;
       },
       mousedown(e) {
         if (!onFollowLink) return false;
@@ -485,6 +508,45 @@ const TOOLS: ToolBtn[] = [
   { key: 'strike', icon: 'strikethrough', title: '删除线', run: (t, f, to) => toggleInline(t, { from: f, to }, '~~') },
   { key: 'mark', icon: 'highlight', title: '高亮', run: (t, f, to) => toggleInline(t, { from: f, to }, '==') },
 ];
+
+/** 剥掉行内 Markdown 标记——「以纯文本形式粘贴」用 */
+const stripMd = (s: string) =>
+  s
+    .replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+    .replace(/\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/~~([^~\n]+)~~/g, '$1')
+    .replace(/==([^=\n]+)==/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/^\s*(#{1,6}\s+|>\s+|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+\.\s+)/gm, '');
+
+/** 把一次纯函数编辑结果写回视图（右键菜单与快捷键共用，两处各写一份会长歪） */
+function applyEditResult(view: EditorView, r: EditResult) {
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: r.text },
+    selection: { anchor: r.sel.from, head: r.sel.to },
+    scrollIntoView: true,
+  });
+}
+
+function runTool(view: EditorView, key: string): boolean {
+  const btn = TOOLS.find((b) => b.key === key);
+  if (!btn) return false;
+  const { from, to } = view.state.selection.main;
+  applyEditResult(view, btn.run(view.state.doc.toString(), from, to));
+  return true;
+}
+
+/**
+ * v0.11.34：右键菜单上标着 Ctrl+B / Ctrl+I / Ctrl+Shift+V 的快捷键**此前一个都没绑**——
+ * 菜单里写着，按下去什么都不发生（这个仓库的病①：看起来存在）。
+ * Ctrl+Shift+V 不在这里：它得拿到剪贴板内容，走下面 paste 处理器里的 shift 判定。
+ */
+const formatKeymap = keymap.of([
+  { key: 'Mod-b', run: (v) => runTool(v, 'b') },
+  { key: 'Mod-i', run: (v) => runTool(v, 'i') },
+]);
 
 export function MarkdownEditor(props: MarkdownEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -1186,26 +1248,9 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (!view) return;
     const { from, to } = view.state.selection.main;
     const text = view.state.doc.toString();
-    const r = fn(text, from, to);
-    view.dispatch({
-      changes: { from: 0, to: text.length, insert: r.text },
-      selection: { anchor: r.sel.from, head: r.sel.to },
-      scrollIntoView: true,
-    });
+    applyEditResult(view, fn(text, from, to));
     view.focus();
   };
-
-  /** 剥掉行内 Markdown 标记——「以纯文本形式粘贴」用 */
-  const stripMd = (s: string) =>
-    s
-      .replace(/!\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
-      .replace(/\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
-      .replace(/\*\*([^*]+)\*\*/g, '$1')
-      .replace(/~~([^~\n]+)~~/g, '$1')
-      .replace(/==([^=\n]+)==/g, '$1')
-      .replace(/`([^`]+)`/g, '$1')
-      .replace(/\*([^*\n]+)\*/g, '$1')
-      .replace(/^\s*(#{1,6}\s+|>\s+|[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+\.\s+)/gm, '');
 
   const writeClipboard = async (text: string) => {
     try {
@@ -1239,20 +1284,67 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     const view = viewRef.current;
     e.preventDefault();
 
-    // 右键落在没有选区的位置时，先把光标挪过去——不然「加粗」会作用在别处
-    if (view && mode === 'edit' && view.state.selection.main.empty) {
+    // 右键落在没有选区的位置时，先把光标挪过去——不然「加粗」会作用在别处。
+    // 表格格子除外：那儿的选区是浏览器的，CodeMirror 的光标别动（动了会掉进隐藏行）
+    const inCell = !!target?.closest?.('.cm-live-tbl');
+    if (view && mode === 'edit' && !inCell && view.state.selection.main.empty) {
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
       if (pos != null) view.dispatch({ selection: { anchor: pos } });
     }
 
     const linkEl = target?.closest?.('.cm-live-link, a') as HTMLElement | null;
     const linkHref = linkEl?.getAttribute('data-href') ?? linkEl?.getAttribute('href') ?? null;
+    /*
+     * v0.11.34：右键落在编辑态表格的某一格上。格子本身是 widget 里的 DOM，
+     * 它在文档里的位置只能靠 posAtDOM 反查（widget 实例可能已经是旧的）。
+     */
+    const cellEl = target?.closest?.('.cm-live-tbl td, .cm-live-tbl th') as HTMLTableCellElement | null;
+    let tableCell: { from: number; row: number; col: number; rows: number; cols: number } | null = null;
+    /*
+     * 格子里的选区要在**这一刻**抓下来：菜单项是按钮，点它的瞬间格子就失焦、
+     * 浏览器的选区跟着没了。剪切 / 粘贴时再把格子聚焦回来、把这段选区放回去。
+     */
+    const cellSel = (() => {
+      if (!cellEl) return null;
+      const s = window.getSelection();
+      const range = s && s.rangeCount > 0 && cellEl.contains(s.anchorNode) ? s.getRangeAt(0).cloneRange() : null;
+      return { cell: cellEl, range, text: range ? range.toString() : '' };
+    })();
+    const restoreCell = () => {
+      if (!cellSel) return;
+      cellSel.cell.focus();
+      const s = window.getSelection();
+      if (!s) return;
+      s.removeAllRanges();
+      if (cellSel.range) s.addRange(cellSel.range);
+      else {
+        const r = document.createRange();
+        r.selectNodeContents(cellSel.cell);
+        r.collapse(false);
+        s.addRange(r);
+      }
+    };
+    if (cellEl && view && mode === 'edit') {
+      const tblEl = cellEl.closest('.cm-live-tbl') as HTMLElement;
+      const from = view.posAtDOM(tblEl);
+      const t = tableAt(view.state, from);
+      if (t) {
+        tableCell = {
+          from,
+          row: Number(cellEl.dataset.r),
+          col: Number(cellEl.dataset.c),
+          rows: t.model.rows.length,
+          cols: t.model.header.length,
+        };
+      }
+    }
     const imgEl = target?.closest?.('img') as HTMLImageElement | null;
     const imageSrc = imgEl?.dataset.src ?? null;
 
     const sel = view?.state.selection.main;
-    const hasSelection =
-      mode === 'read'
+    const hasSelection = cellSel
+      ? cellSel.text !== ''
+      : mode === 'read'
         ? !(window.getSelection()?.isCollapsed ?? true)
         : !!sel && !sel.empty;
 
@@ -1266,8 +1358,14 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         canInsertImage: !!props.onInsertImage && !!props.currentPath,
         readOnly,
         aiActions: props.aiActions,
+        tableCell,
       },
       {
+        tableOp: (op) => {
+          const v = viewRef.current;
+          if (!v || !tableCell) return;
+          runTableOp(v, tableCell, op);
+        },
         ai: props.onAi,
         tidy: props.onTidy,
         format: (key) => {
@@ -1282,6 +1380,13 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           } else {
             applyEdit((t, f, to) => insertBlock(t, { from: f, to }, snip.text, snip.caret));
           }
+          if (kind === 'table') {
+            // 插完直接落在第一个表头格里打字（表格是 widget，CodeMirror 的光标进不去）
+            const v = viewRef.current;
+            if (!v) return;
+            const from = v.state.doc.lineAt(v.state.selection.main.head).from;
+            if (tableAt(v.state, from)) focusTableCell(v, { from, row: 0, col: 0, caret: 'all' });
+          }
         },
         insertImage: () => void doInsertImage(),
         insertClipboardImage: () => void insertClipboardImage(),
@@ -1289,6 +1394,14 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         externalLink: () => applyEdit((t, f, to) => insertLink(t, { from: f, to })),
         clearFormat: () => applyEdit((t, f, to) => clearFormatting(t, { from: f, to })),
         cut: () => {
+          if (cellSel) {
+            void writeClipboard(cellSel.text).then((ok) => {
+              if (!ok) return;
+              restoreCell();
+              document.execCommand('delete');
+            });
+            return;
+          }
           const v = viewRef.current;
           if (!v) return;
           const { from, to } = v.state.selection.main;
@@ -1300,6 +1413,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
           });
         },
         copy: () => {
+          if (cellSel) {
+            void writeClipboard(cellSel.text);
+            return;
+          }
           if (mode === 'read') {
             void writeClipboard(window.getSelection()?.toString() ?? '');
             return;
@@ -1312,6 +1429,12 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         paste: () => {
           void readClipboard().then((text) => {
             if (text == null) return;
+            if (cellSel) {
+              // 格子里只能是一行：换行压成空格（表格源码里一行就是一行）
+              restoreCell();
+              document.execCommand('insertText', false, text.replace(/\r?\n/g, ' '));
+              return;
+            }
             applyEdit((t, f, to) => insertText(t, { from: f, to }, text));
           });
         },
@@ -1323,6 +1446,15 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         },
         selectAll: () => {
           const v = viewRef.current;
+          if (cellSel) {
+            cellSel.cell.focus();
+            const range = document.createRange();
+            range.selectNodeContents(cellSel.cell);
+            const s = window.getSelection();
+            s?.removeAllRanges();
+            s?.addRange(range);
+            return;
+          }
           if (mode === 'read') {
             const host = previewRef.current;
             if (!host) return;

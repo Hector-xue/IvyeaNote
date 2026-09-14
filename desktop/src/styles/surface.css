@@ -1681,6 +1681,8 @@ button.st-item:hover {
   font-size: 10px; color: var(--muted);
   border: 1px solid var(--border); border-radius: 4px; padding: 0 4px;
 }
+/* v0.11.34：置顶图钉，与角标同一格 */
+.m-tree-pin { flex: 0 0 auto; display: inline-flex; margin-right: 10px; color: var(--muted); }
 
 /* toast 不该压在底部栏上——底部栏是常驻操作区，被挡住就点不到。
    格式条展开时底部又高出一截，所以分两档。 */

@@ -270,3 +270,80 @@ describe('blockSnippet', () => {
     expect(blockSnippet('time', d).text).toBe('09:05');
   });
 });
+
+/*
+ * v0.11.34：右键落在编辑态表格的格子里。
+ * 菜单只留和格子有关的：行 / 列 / 删表、剪贴板、全选——「文本格式 / 段落 / 插入」
+ * 作用在 CodeMirror 的选区上，而那会儿它停在被隐藏的表格源码里，点「加粗」会把星号
+ * 写进 `| --- |`。
+ */
+describe('表格格子上的菜单', () => {
+  const cellCtx = (over: Partial<NonNullable<EditorMenuCtx['tableCell']>> = {}): EditorMenuCtx => ({
+    hasSelection: false,
+    linkHref: null,
+    imageSrc: null,
+    canInsertImage: true,
+    tableCell: { row: 1, col: 0, rows: 2, cols: 3, ...over },
+  });
+  const withOp = () => ({ ...actions(), tableOp: vi.fn() });
+
+  it('最前面是 行 / 列 / 删除表格，且没有文本格式、段落、插入', () => {
+    const items = buildEditorMenu(cellCtx(), withOp());
+    const labels = items.filter((i): i is MenuAction => !isSeparator(i)).map((i) => i.label);
+    expect(labels.slice(0, 3)).toEqual(['行', '列', '删除表格']);
+    expect(labels).not.toContain('文本格式');
+    expect(labels).not.toContain('段落设置');
+    expect(labels).not.toContain('插入');
+    expect(labels).toContain('粘贴');
+    expect(labels).toContain('全选本格');
+  });
+
+  it('表头行不能删也不能上下移；正文首行不能上移、末行不能下移', () => {
+    const rowSub = (ctx: EditorMenuCtx) =>
+      (buildEditorMenu(ctx, withOp()).find((i) => !isSeparator(i) && i.id === 'tbl-row') as MenuAction).submenu!;
+    const dis = (items: MenuItem[], id: string) => (items.find((i) => !isSeparator(i) && i.id === id) as MenuAction).disabled;
+    const head = rowSub(cellCtx({ row: 0 }));
+    expect(dis(head, 'row-delete')).toBe(true);
+    expect(dis(head, 'row-up')).toBe(true);
+    expect(dis(head, 'row-down')).toBe(true);
+    const first = rowSub(cellCtx({ row: 1 }));
+    expect(dis(first, 'row-up')).toBe(true);
+    expect(dis(first, 'row-down')).toBe(false);
+    expect(dis(first, 'row-delete')).toBe(false);
+    const last = rowSub(cellCtx({ row: 2 }));
+    expect(dis(last, 'row-down')).toBe(true);
+  });
+
+  it('只剩一列时「删除列」写明会删整张表；最左列不能左移', () => {
+    const colSub = (ctx: EditorMenuCtx) =>
+      (buildEditorMenu(ctx, withOp()).find((i) => !isSeparator(i) && i.id === 'tbl-col') as MenuAction).submenu!;
+    const one = colSub(cellCtx({ cols: 1, col: 0 }));
+    expect((one.find((i) => !isSeparator(i) && i.id === 'col-delete') as MenuAction).label).toBe('删除列（整张表）');
+    expect((one.find((i) => !isSeparator(i) && i.id === 'col-moveleft') as MenuAction).disabled).toBe(true);
+  });
+
+  it('点一项就把操作名交给外层', () => {
+    const act = withOp();
+    const items = buildEditorMenu(cellCtx(), act);
+    const row = items.find((i) => !isSeparator(i) && i.id === 'tbl-row') as MenuAction;
+    (row.submenu!.find((i) => !isSeparator(i) && i.id === 'row-below') as MenuAction).run!();
+    expect(act.tableOp).toHaveBeenCalledWith('row-below');
+    (items.find((i) => !isSeparator(i) && i.id === 'table-delete') as MenuAction).run!();
+    expect(act.tableOp).toHaveBeenCalledWith('table-delete');
+  });
+
+  it('外层没接 tableOp、或只读时，不出现表格组', () => {
+    const labels = buildEditorMenu(cellCtx(), actions()).filter((i): i is MenuAction => !isSeparator(i)).map((i) => i.label);
+    expect(labels).not.toContain('行');
+    const ro = buildEditorMenu({ ...cellCtx(), readOnly: true }, withOp())
+      .filter((i): i is MenuAction => !isSeparator(i))
+      .map((i) => i.label);
+    expect(ro).not.toContain('删除表格');
+  });
+
+  it('「新增链接」不再标 Ctrl+K——那个键在本产品是全库搜索', () => {
+    const items = buildEditorMenu({ hasSelection: false, linkHref: null, imageSrc: null, canInsertImage: true }, actions());
+    const link = items.find((i) => !isSeparator(i) && i.id === 'link') as MenuAction;
+    expect(link.shortcut).toBeUndefined();
+  });
+});

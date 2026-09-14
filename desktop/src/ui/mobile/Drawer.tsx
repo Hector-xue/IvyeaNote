@@ -28,6 +28,11 @@ interface Props {
   /** v0.11.1：点开既不是笔记也不是 PDF 的文件 */
   onOpenAttachment?(path: string): void;
   emptyDirs: string[];
+  /** v0.11.34：排序方式与 mtime 查询——树在这里构建，排序必须在这里生效（桌面同理） */
+  sortMode?: 'name' | 'mtime';
+  mtimeOf?(path: string): number | undefined;
+  /** v0.11.34：置顶路径 */
+  pinned?: ReadonlySet<string>;
   currentPath: string | null;
   collapsedDirs: Set<string>;
   query: string;
@@ -53,8 +58,13 @@ export function Drawer(props: Props) {
     [searching, props.searchDocs, props.query]
   );
   const tree = useMemo(
-    () => buildFileTree(props.allFiles ?? props.files, props.emptyDirs),
-    [props.allFiles, props.files, props.emptyDirs]
+    () =>
+      buildFileTree(props.allFiles ?? props.files, props.emptyDirs, {
+        sort: props.sortMode,
+        mtimeOf: props.mtimeOf,
+        pinned: props.pinned,
+      }),
+    [props.allFiles, props.files, props.emptyDirs, props.sortMode, props.mtimeOf, props.pinned]
   );
   const dirCount = useMemo(() => {
     const set = new Set(props.emptyDirs);
@@ -150,6 +160,11 @@ export function Drawer(props: Props) {
               <RibbonIcon name={open ? 'chevron-down' : 'chevron-right'} size={15} />
             </span>
             <span className="m-tree-name">{node.name}</span>
+            {props.pinned?.has(node.path) && (
+              <span className="m-tree-pin" aria-label="已置顶">
+                <RibbonIcon name="pin" size={13} />
+              </span>
+            )}
           </div>
           {open && node.children?.map((c) => renderNode(c, depth + 1))}
         </div>
@@ -165,6 +180,11 @@ export function Drawer(props: Props) {
       >
         <span className="m-tree-name">{displayName(node.name, true)}</span>
         {fileBadge(node.name) && <span className="m-tree-badge">{fileBadge(node.name)}</span>}
+        {props.pinned?.has(node.path) && (
+          <span className="m-tree-pin" aria-label="已置顶">
+            <RibbonIcon name="pin" size={13} />
+          </span>
+        )}
       </div>
     );
   };

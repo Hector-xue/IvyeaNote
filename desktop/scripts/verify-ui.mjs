@@ -3340,6 +3340,281 @@ check('深色主题下正文与背景仍有对比', await evaluate(`(() => {
   return bg !== fg;
 })()`));
 
+
+// ---------- 9. v0.11.34：列表悬挂缩进 / 编辑态真表格 / 侧栏排序与置顶 ----------
+// 先切回浅色（上面那段把主题切成深色了），再另起一篇干净的笔记
+await evaluate(`(() => {
+  const b = [...document.querySelectorAll('button')].find(x => x.getAttribute('aria-label') === '切换主题');
+  b?.click(); return !!b })()`);
+await new Promise((r) => setTimeout(r, 400));
+{
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const key = async (k, code, vk, text, mods = 0) => {
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, text, modifiers: mods });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, modifiers: mods });
+};
+const enter = () => key('Enter', 'Enter', 13, '\r');
+const tab = (shift = false) => key('Tab', 'Tab', 9, undefined, shift ? 8 : 0);
+
+// 建一篇笔记
+await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(x => x.title === '新建笔记'); b && b.click(); return !!b })()`);
+await sleep(1200);
+
+// 点进编辑器
+const cb = await evaluate(`(() => { const r = document.querySelector('.cm-content').getBoundingClientRect(); return { x: Math.round(r.left + 40), y: Math.round(r.top + 12) } })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: cb.x, y: cb.y, button: 'left', clickCount: 1, buttons: 1 });
+
+// 灌一段有列表和表格的正文（直接 dispatch，免得逐字敲）
+await evaluate(`(() => {
+  const cm = document.querySelector('.cm-content').cmTile.root.view;
+  const doc = ['- 第一项，这一项写得很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长会折行',
+    '  - 二级项，也写得很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长会折行',
+    '1. 有序一，这一项写得很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长会折行',
+    '10. 有序十',
+    '- [ ] 任务，这一项写得很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长会折行',
+    '  - [x] 二级任务',
+    '',
+    '前一行',
+    '| 名称 | 数量 | 备注 |',
+    '| :--- | ---: | --- |',
+    '| 苹果 | 3 | **甜** |',
+    '| 香蕉 | 12 | 有 \\\\| 竖线 |',
+    '后一行'].join('\\n');
+  cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: doc }, selection: { anchor: 0 } });
+  return cm.state.doc.lines;
+})()`);
+await sleep(600);
+
+// ---- 列表悬挂缩进 ----
+const lists = await evaluate(`(() => {
+  const lines = [...document.querySelectorAll('.cm-line.cm-live-list')];
+  return lines.map(l => {
+    const cs = getComputedStyle(l);
+    const r = l.getBoundingClientRect();
+    // 第一行文字的 x：找到第一个文本节点的 range
+    const walker = document.createTreeWalker(l, NodeFilter.SHOW_TEXT);
+    let first = null; let n;
+    while ((n = walker.nextNode())) { if (n.textContent.trim() && !n.parentElement.closest('.cm-live-bullet,.cm-live-olmark,.cm-live-taskbox')) { first = n; break; } }
+    let textX = null, lastLineX = null, lineCount = 0;
+    if (first) {
+      const rg = document.createRange(); rg.selectNodeContents(first);
+      const rects = [...rg.getClientRects()];
+      textX = +rects[0].left.toFixed(1);
+      // 按 top 分组数行
+      const tops = [...new Set(rects.map(x => Math.round(x.top)))];
+      lineCount = tops.length;
+      const last = rects.find(x => Math.round(x.top) === tops[tops.length - 1]);
+      lastLineX = +last.left.toFixed(1);
+    }
+    return { cls: l.className.replace('cm-line ', ''), pad: cs.paddingLeft, indent: cs.textIndent, left: +r.left.toFixed(1), textX, lastLineX, lineCount, h: +r.height.toFixed(0) };
+  });
+})()`);
+console.log(JSON.stringify(lists, null, 1));
+check('六行列表都拿到了行级装饰', lists.length === 6, lists.length);
+for (const l of lists) {
+  if (l.lineCount > 1) check(`折行对齐首行首字：${l.cls}`, Math.abs(l.lastLineX - l.textX) < 1.5, { textX: l.textX, lastLineX: l.lastLineX });
+}
+check('二级项的正文比一级项靠右一格', lists[1].textX > lists[0].textX + 15, { l0: lists[0].textX, l1: lists[1].textX });
+check('无序 / 有序 / 任务 顶层的正文起点一致', Math.abs(lists[0].textX - lists[2].textX) < 1 && Math.abs(lists[0].textX - lists[4].textX) < 1, { ul: lists[0].textX, ol: lists[2].textX, task: lists[4].textX });
+check('两位编号的正文起点更靠右（编号占宽更多）', lists[3].textX > lists[2].textX + 5, { one: lists[2].textX, ten: lists[3].textX });
+check('二级任务与二级无序对齐', Math.abs(lists[5].textX - lists[1].textX) < 1, { ul2: lists[1].textX, task2: lists[5].textX });
+
+// ---- 表格 widget ----
+const tbl = await evaluate(`(() => {
+  const t = document.querySelector('.cm-live-tbl');
+  if (!t) return null;
+  const cells = [...t.querySelectorAll('th,td')].map(c => ({ r: c.dataset.r, c: c.dataset.c, text: c.textContent, html: c.innerHTML.slice(0, 40), ce: c.contentEditable, align: c.style.textAlign }));
+  const cs = getComputedStyle(t.querySelector('td'));
+  return { cells, border: cs.borderTopWidth, rows: t.dataset.rows, cols: t.dataset.cols, srcLines: document.querySelectorAll('.cm-line.cm-live-table').length };
+})()`);
+console.log(JSON.stringify(tbl, null, 1));
+check('表格渲染成了真表格（2 行正文 3 列）', tbl && tbl.rows === '2' && tbl.cols === '3', tbl && [tbl.rows, tbl.cols]);
+check('单元格可编辑（plaintext-only）', tbl && tbl.cells.every(c => c.ce === 'plaintext-only'), tbl && tbl.cells.map(c => c.ce));
+check('格内行内 Markdown 已渲染（**甜** → <strong>）', tbl && tbl.cells.some(c => c.html.includes('<strong>甜</strong>')), tbl && tbl.cells.map(c => c.html));
+check('转义竖线还原成竖线', tbl && tbl.cells.some(c => c.text === '有 | 竖线'), tbl && tbl.cells.map(c => c.text));
+check('对齐从分隔行读到了', tbl && tbl.cells[0].align === 'left' && tbl.cells[1].align === 'right', tbl && tbl.cells.slice(0,3).map(c => c.align));
+check('源码行没有再以文本形式露出来', tbl && tbl.srcLines === 0, tbl && tbl.srcLines);
+await shot('table-1.png');
+
+// 点进「苹果」那格，追加文字
+const cellPos = await evaluate(`(() => { const c = document.querySelector('.cm-live-tbl [data-r="1"][data-c="0"]'); const r = c.getBoundingClientRect(); return { x: Math.round(r.right - 6), y: Math.round(r.top + r.height / 2) } })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: cellPos.x, y: cellPos.y, button: 'left', clickCount: 1, buttons: 1 });
+await sleep(200);
+check('点格子后焦点在那一格', await evaluate(`document.activeElement?.dataset?.r === '1' && document.activeElement?.dataset?.c === '0'`), await evaluate(`document.activeElement?.tagName + ' ' + document.activeElement?.className`));
+await send('Input.insertText', { text: '红' });
+await sleep(300);
+const afterType = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { line: cm.state.doc.line(11).text, focusStill: document.activeElement?.dataset?.r === '1' && document.activeElement?.dataset?.c === '0', cellText: document.activeElement?.textContent, tables: document.querySelectorAll('.cm-live-tbl').length } })()`);
+check('格里打字即时落回源码（那一行变成 | 苹果红 | 3 | **甜** |）', afterType.line === '| 苹果红 | 3 | **甜** |', afterType.line);
+check('打字后焦点没丢、DOM 没被重建', afterType.focusStill && afterType.tables === 1, afterType);
+
+// Tab 到下一格，再 Tab，输入
+await tab();
+await sleep(100);
+check('Tab 移到右边一格', await evaluate(`document.activeElement?.dataset?.c === '1' && document.activeElement?.dataset?.r === '1'`), await evaluate(`[document.activeElement?.dataset?.r, document.activeElement?.dataset?.c]`));
+await tab(); await tab();
+await sleep(100);
+check('行末 Tab 换到下一行第一格', await evaluate(`document.activeElement?.dataset?.c === '0' && document.activeElement?.dataset?.r === '2'`), await evaluate(`[document.activeElement?.dataset?.r, document.activeElement?.dataset?.c]`));
+// 最后一格 Tab 加一行
+await tab(); await tab(); await tab();
+await sleep(300);
+const added = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { lines: cm.state.doc.lines, l13: cm.state.doc.line(13).text, focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c], rows: document.querySelector('.cm-live-tbl')?.dataset.rows } })()`);
+check('最后一格再 Tab：源码多了一行空行、焦点在新行第一格', added.l13 === '|  |  |  |' && added.focus[0] === '3' && added.focus[1] === '0' && added.rows === '3', added);
+await send('Input.insertText', { text: '新行' });
+await sleep(200);
+// Enter 在最后一行：再加一行
+await enter();
+await sleep(300);
+const afterEnter = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { l13: cm.state.doc.line(13).text, lines: cm.state.doc.lines, focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c] } })()`);
+check('Enter：新行内容落盘，光标到再下一行', afterEnter.l13 === '| 新行 |  |  |' && afterEnter.focus[0] === '4', afterEnter);
+// 上箭头两次回到第 2 行
+await key('ArrowUp', 'ArrowUp', 38); await key('ArrowUp', 'ArrowUp', 38);
+await sleep(100);
+check('↑ 在格子间上移', await evaluate(`document.activeElement?.dataset?.r === '2'`), await evaluate(`document.activeElement?.dataset?.r`));
+// 表头 ↑ 出表（2 → 1 → 0 → 出）
+await key('ArrowUp', 'ArrowUp', 38); await key('ArrowUp', 'ArrowUp', 38); await key('ArrowUp', 'ArrowUp', 38);
+await sleep(200);
+const left = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { active: document.activeElement?.className, head: cm.state.doc.lineAt(cm.state.selection.main.head).text } })()`);
+check('表头再 ↑ 离开表格，CodeMirror 光标落在「前一行」', left.active.startsWith('cm-content') && left.head === '前一行', left);
+// ↓ 再进表
+await key('ArrowDown', 'ArrowDown', 40);
+await sleep(200);
+check('正文里 ↓ 进入表头第一格', await evaluate(`document.activeElement?.dataset?.r === '0' && document.activeElement?.dataset?.c === '0'`), await evaluate(`document.activeElement?.className`));
+// Esc 出表到后一行
+await key('Escape', 'Escape', 27);
+await sleep(200);
+const esc = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return cm.state.doc.lineAt(cm.state.selection.main.head).text })()`);
+check('Esc 离开表格到「后一行」', esc === '后一行', esc);
+// 后一行首 Backspace：不该把「后一行」接到表格上，而是进最后一格
+await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; const l = cm.state.doc.line(cm.state.doc.lines); cm.dispatch({ selection: { anchor: l.from } }); cm.focus(); return true })()`);
+await key('Backspace', 'Backspace', 8);
+await sleep(200);
+const bs = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { last: cm.state.doc.line(cm.state.doc.lines).text, focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c] } })()`);
+check('表后一行首退格：表格不散，焦点进最后一格', bs.last === '后一行' && bs.focus[0] === '4' && bs.focus[1] === '2', bs);
+
+// 右键那一格：菜单前面是「行 / 列 / 删除表格」
+const c2 = await evaluate(`(() => { const c = document.querySelector('.cm-live-tbl [data-r="1"][data-c="1"]'); const r = c.getBoundingClientRect(); return { x: Math.round(r.left + 10), y: Math.round(r.top + 10) } })()`);
+await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: c2.x, y: c2.y, button: 'right', clickCount: 1, buttons: 2 });
+await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: c2.x, y: c2.y, button: 'right', clickCount: 1, buttons: 2 });
+await sleep(400);
+const menu = await evaluate(`(() => { const m = document.querySelector('.ctx-menu, [role="menu"]'); if (!m) return null; return [...m.querySelectorAll('[role="menuitem"], .ctx-item, button')].map(x => x.textContent.trim()).filter(Boolean).slice(0, 6) })()`);
+check('右键格子：菜单最前是 行 / 列 / 删除表格', menu && menu[0] === '行' && menu[1] === '列' && menu[2] === '删除表格', menu);
+await shot('table-menu.png');
+// 点「行」→「在下方插入行」
+const hover = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"], .ctx-item')].find(x => x.textContent.trim() === '行'); const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height/2) } })()`);
+await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: hover.x, y: hover.y });
+await sleep(400);
+const sub = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"], .ctx-item')].find(x => x.textContent.trim().startsWith('在下方插入行')); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height/2) } })()`);
+check('「行」子菜单展开并有「在下方插入行」', !!sub, sub);
+if (sub) {
+  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: sub.x, y: sub.y, button: 'left', clickCount: 1, buttons: 1 });
+  await sleep(300);
+  const ins = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { l12: cm.state.doc.line(12).text, l11: cm.state.doc.line(11).text, focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c] } })()`);
+  check('在「苹果」行下方插入了空行，焦点在新行同一列', ins.l12 === '|  |  |  |' && ins.l11 === '| 苹果红 | 3 | **甜** |' && ins.focus[0] === '2' && ins.focus[1] === '1', ins);
+}
+await shot('table-2.png');
+
+// 通过右键菜单「插入 → 表格」：插完焦点在第一个表头格
+await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: '开头\\n' }, selection: { anchor: 3 } }); cm.focus(); return true })()`);
+await sleep(200);
+const ep = await evaluate(`(() => { const r = document.querySelector('.cm-line').getBoundingClientRect(); return { x: Math.round(r.right - 5), y: Math.round(r.top + 8) } })()`);
+await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: ep.x, y: ep.y, button: 'right', clickCount: 1, buttons: 2 });
+await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: ep.x, y: ep.y, button: 'right', clickCount: 1, buttons: 2 });
+await sleep(400);
+const insHover = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"], .ctx-item')].find(x => x.textContent.trim() === '插入'); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height/2) } })()`);
+await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: insHover.x, y: insHover.y });
+await sleep(400);
+const tblItem = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"], .ctx-item')].find(x => x.textContent.trim() === '表格'); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height/2) } })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: tblItem.x, y: tblItem.y, button: 'left', clickCount: 1, buttons: 1 });
+await sleep(400);
+const inserted = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { doc: cm.state.doc.toString(), focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c], tbl: !!document.querySelector('.cm-live-tbl') } })()`);
+check('插入表格：立刻是真表格且焦点在第一个表头格', inserted.tbl && inserted.focus[0] === '0' && inserted.focus[1] === '0', inserted);
+await send('Input.insertText', { text: '姓名' });
+await sleep(200);
+const typed = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return cm.state.doc.line(2).text })()`);
+check('插完直接打字改的是表头', typed === '| 姓名 | 列 2 |', typed);
+await shot('table-3.png');
+
+// 手写表格：敲完分隔行的那一刻变成真表格，焦点接到格子里而不是光标消失
+await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; const ins = '手写：\\n| 甲 | 乙 |\\n'; cm.dispatch({ changes: { from: 0, to: cm.state.doc.length, insert: ins }, selection: { anchor: ins.length } }); cm.focus(); return true })()`);
+await sleep(200);
+await send('Input.insertText', { text: '| - | - |' });
+await sleep(400);
+const hand = await evaluate(`(() => ({ tbl: !!document.querySelector('.cm-live-tbl'), focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c], tag: document.activeElement?.tagName }))()`);
+check('手写完分隔行：变成真表格，焦点在表头最后一格', hand.tbl && hand.tag === 'TH' && hand.focus[0] === '0' && hand.focus[1] === '1', hand);
+await tab();
+await sleep(300);
+const handRow = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { doc: cm.state.doc.toString(), focus: [document.activeElement?.dataset?.r, document.activeElement?.dataset?.c] } })()`);
+check('再按 Tab 生成第一行正文', handRow.doc === '手写：\n| 甲 | 乙 |\n| --- | --- |\n|  |  |' && handRow.focus[0] === '1', handRow);
+
+// 删除表格
+const c3 = await evaluate(`(() => { const c = document.querySelector('.cm-live-tbl [data-r="0"][data-c="0"]'); const r = c.getBoundingClientRect(); return { x: Math.round(r.left + 10), y: Math.round(r.top + 10) } })()`);
+await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: c3.x, y: c3.y, button: 'right', clickCount: 1, buttons: 2 });
+await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: c3.x, y: c3.y, button: 'right', clickCount: 1, buttons: 2 });
+await sleep(400);
+const del = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"], .ctx-item')].find(x => x.textContent.trim() === '删除表格'); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height/2) } })()`);
+for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: del.x, y: del.y, button: 'left', clickCount: 1, buttons: 1 });
+await sleep(300);
+const afterDel = await evaluate(`(() => { const cm = document.querySelector('.cm-content').cmTile.root.view; return { doc: cm.state.doc.toString(), tbl: !!document.querySelector('.cm-live-tbl'), active: document.activeElement?.className } })()`);
+check('删除表格：源码里整张表没了、只剩前文，焦点回到编辑器', afterDel.doc === '手写：\n' && !afterDel.tbl && afterDel.active.startsWith('cm-content'), afterDel);
+
+
+  await shot('lists-tables.png');
+
+  // ---- 侧栏：按修改时间排序 + 置顶 ----
+  // 现在库里有好几篇 untitled*.md；改一篇让它 mtime 最新，切「按修改时间」它就该排到最前
+  // 只比库根那一层的 .md（文件夹永远排在文件前面、树是按层排的，跨层比没有意义）
+  const rootMd = (list) => list.filter((n) => !n.includes('/') && /\.md$/i.test(n));
+  const names = rootMd(await evaluate(`[...document.querySelectorAll('.ft-root .ft-file-name')].map(e => e.getAttribute('title'))`));
+  check('侧栏根目录里至少有两篇笔记可以比顺序', Array.isArray(names) && names.length >= 2, names);
+  if (names.length >= 2) {
+    // 打开按名称排在最后的那篇并改动它
+    const lastByName = [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))[names.length - 1];
+    await evaluate(`(() => { const el = document.querySelector('.ft-root .ft-file-name[title="' + ${JSON.stringify(lastByName)} + '"]'); el?.scrollIntoView(); el?.closest('.ft-file')?.click(); return !!el })()`);
+    await sleep(600);
+    const cb2 = await evaluate(`(() => { const r = document.querySelector('.cm-content').getBoundingClientRect(); return { x: Math.round(r.left + 40), y: Math.round(r.top + 12) } })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: cb2.x, y: cb2.y, button: 'left', clickCount: 1, buttons: 1 });
+    await send('Input.insertText', { text: '改一下' });
+    await sleep(1500); // 等防抖落盘
+    const sortBtn = await evaluate(`(() => { const b = [...document.querySelectorAll('button')].find(x => (x.title || '').startsWith('排序')); if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } })()`);
+    check('顶栏有「排序」按钮', !!sortBtn, sortBtn);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: sortBtn.x, y: sortBtn.y, button: 'left', clickCount: 1, buttons: 1 });
+    await sleep(300);
+    const mt = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"], .ctx-item, button')].find(x => x.textContent.trim() === '按修改时间'); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) } })()`);
+    check('排序下拉里有「按修改时间」', !!mt, mt);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: mt.x, y: mt.y, button: 'left', clickCount: 1, buttons: 1 });
+    await sleep(500);
+    const after = rootMd(await evaluate(`[...document.querySelectorAll('.ft-root .ft-file-name')].map(e => e.getAttribute('title'))`));
+    check('切到「按修改时间」后，刚改过的那篇排到同层最前（此前这个开关点了没反应）', after[0] === lastByName, { before: names, after, edited: lastByName });
+
+    // 置顶：右键按名称排第一的那篇 → 置顶 → 它排到最前并带图钉
+    const firstByName = [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))[0];
+    const node = await evaluate(`(() => { const el = document.querySelector('.ft-root .ft-file-name[title="' + ${JSON.stringify(firstByName)} + '"]')?.closest('.ft-file'); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) } })()`);
+    check('找得到要置顶的那一行', !!node, firstByName);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: node.x, y: node.y, button: 'right', clickCount: 1, buttons: 2 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: node.x, y: node.y, button: 'right', clickCount: 1, buttons: 2 });
+    await sleep(400);
+    const pinItem = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"]')].find(x => x.textContent.trim() === '置顶'); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) } })()`);
+    check('右键文件有「置顶」', !!pinItem, pinItem);
+    for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: pinItem.x, y: pinItem.y, button: 'left', clickCount: 1, buttons: 1 });
+    await sleep(500);
+    const pinned = await evaluate(`(() => ({ order: [...document.querySelectorAll('.ft-root .ft-file-name')].map(e => e.getAttribute('title')), pins: [...document.querySelectorAll('.ft-root .ft-pin')].length, stored: localStorage.getItem('ivnote.pinned') }))()`);
+    // 置顶的是根层文件：它该排在所有根层**文件**之前（根层文件夹仍在它前面，置顶不跨类型抢位）
+    const rootFiles = pinned.order.filter((n) => !n.includes('/'));
+    check('置顶后它排到同层最前、带图钉、已持久化', rootFiles[0] === firstByName && pinned.pins === 1 && (pinned.stored || '').includes(firstByName), { rootFiles: rootFiles.slice(0, 4), pins: pinned.pins, stored: pinned.stored });
+    await shot('sidebar-pinned.png');
+    // 复原：取消置顶、排序改回按名称，别影响后面的人（置顶后那一行换了位置，要重新定位）
+    const node2 = await evaluate(`(() => { const el = document.querySelector('.ft-root .ft-file-name[title="' + ${JSON.stringify(firstByName)} + '"]')?.closest('.ft-file'); if (!el) return null; el.scrollIntoView({ block: 'center' }); const r = el.getBoundingClientRect(); return { x: Math.round(r.left + 30), y: Math.round(r.top + r.height / 2) } })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: node2.x, y: node2.y, button: 'right', clickCount: 1, buttons: 2 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: node2.x, y: node2.y, button: 'right', clickCount: 1, buttons: 2 });
+    await sleep(300);
+    const unpin = await evaluate(`(() => { const it = [...document.querySelectorAll('[role="menuitem"]')].find(x => x.textContent.trim() === '取消置顶'); if (!it) return null; const r = it.getBoundingClientRect(); return { x: Math.round(r.left + 20), y: Math.round(r.top + r.height / 2) } })()`);
+    check('再右键变成「取消置顶」', !!unpin, unpin);
+    if (unpin) for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: unpin.x, y: unpin.y, button: 'left', clickCount: 1, buttons: 1 });
+    await sleep(300);
+    await evaluate(`localStorage.setItem('ivnote.sort', 'name'); true`);
+  }
+}
+
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} 通过`);
 ws.close();

@@ -107,6 +107,13 @@ interface Props {
   onDeleteFolder?(dir: string): void;
   /** v0.11.22：重命名文件夹——由 App 弹输入框后整棵子树换前缀 */
   onRenameFolder?(dir: string): void;
+  /**
+   * v0.11.34：置顶。`pinned` 是置顶路径集合（文件与文件夹都在里面），
+   * `onTogglePin` 切换一个路径。排序按修改时间要查 mtime，`mtimeOf` 由 App 给。
+   */
+  pinned?: ReadonlySet<string>;
+  onTogglePin?(path: string): void;
+  mtimeOf?(path: string): number | undefined;
   /** v0.7.5 E1：侧栏拖拽移动文件/文件夹到目标文件夹（destDir='' 为库根） */
   onMovePath?(src: string, destDir: string, isDir: boolean): void;
   /** v0.10.2：普通 Markdown 链接指向库内文件时打开它（路径已解析成库内相对路径） */
@@ -203,13 +210,10 @@ interface Props {
   importProgress?: { done: number; total: number } | null;
   /** v0.4.0 T5：回收站 */
   trashCount?: number;
-  onOpenTrash?(): void;
   /** v0.5.0 U3：文件树折叠与新建文件夹 */
   collapsedDirs: Set<string>;
   onToggleDir(dir: string): void;
   onCreateFolder(parent?: string): void;
-  /** v0.5.0 U5：ribbon 动作（预留扩展；当前仅 files） */
-  onRibbonAction?(action: 'files'): void;
   /** v0.11.16：左栏当前面板 + 切换回调（状态在 App） */
   sidebarTab?: SidebarTab;
   onSidebarTab?(tab: SidebarTab): void;
@@ -254,8 +258,6 @@ interface Props {
   onPasteImage?(file: File, notePath: string | null): Promise<string | null>;
   /** v0.7.1 F8: graph view */
   onOpenGraph?(): void;
-  /** v0.7.0 F4: tags panel */
-  onOpenTags?(): void;
   onOpenSettings?(): void;
   /** v0.7.11 E7：侧栏搜索用的全库正文（与命令面板同一份索引） */
   searchDocs?: SearchDoc[];
@@ -271,8 +273,13 @@ interface Props {
 export function MainView(props: Props) {
   /** v0.5.0 U3：递归树由扁平路径构建 */
   const fileTree = useMemo(
-    () => buildFileTree(props.allFiles ?? props.files, props.emptyDirs ?? []),
-    [props.allFiles, props.files, props.emptyDirs]
+    () =>
+      buildFileTree(props.allFiles ?? props.files, props.emptyDirs ?? [], {
+        sort: props.sortMode,
+        mtimeOf: props.mtimeOf,
+        pinned: props.pinned,
+      }),
+    [props.allFiles, props.files, props.emptyDirs, props.sortMode, props.mtimeOf, props.pinned]
   );
 
   /**
@@ -398,6 +405,17 @@ export function MainView(props: Props) {
 
   /** 右键菜单条目：文件与文件夹给不同的动作集 */
   const openMenu = (node: TreeNode, x: number, y: number) => {
+    /* v0.11.34：置顶 / 取消置顶。文件与文件夹同一条，落在「重命名」那一组之前 */
+    const pinItem: MenuAnchor['items'] = props.onTogglePin
+      ? [
+          {
+            id: 'pin',
+            label: props.pinned?.has(node.path) ? '取消置顶' : '置顶',
+            icon: 'pin',
+            run: () => props.onTogglePin?.(node.path),
+          },
+        ]
+      : [];
     const items: MenuAnchor['items'] =
       node.type === 'dir'
         ? [
@@ -409,6 +427,7 @@ export function MainView(props: Props) {
               run: () => props.onCreateFolder?.(node.path),
             },
             { type: 'sep', id: 's-dir' },
+            ...pinItem,
             /*
              * v0.11.22：**文件夹也要能改名**（用户点名）。此前只有文件那一支有
              * 「重命名…」，文件夹想换个名字只能新建一个再把东西一件件拖过去。
@@ -452,6 +471,7 @@ export function MainView(props: Props) {
               ? ([{ id: 'split', label: '在右侧打开', icon: 'sidebar', run: () => props.onOpenSplit?.(node.path) }] as MenuAnchor['items'])
               : []),
             { type: 'sep', id: 's-open' },
+            ...pinItem,
             { id: 'rename', label: '重命名…', icon: 'edit', run: () => props.onRequestRename?.(node.path) },
             ...(props.onRequestMove
               ? ([{ id: 'move', label: '移动到…', icon: 'move', run: () => props.onRequestMove?.(node.path, false) }] as MenuAnchor['items'])
@@ -514,10 +534,7 @@ export function MainView(props: Props) {
             title={p.title}
             aria-label={p.title}
             aria-pressed={sidebarTab === p.id}
-            onClick={() => {
-              props.onSidebarTab?.(p.id);
-              if (p.id === 'files') props.onRibbonAction?.('files');
-            }}
+            onClick={() => props.onSidebarTab?.(p.id)}
           >
             <RibbonIcon name={p.icon} />
           </button>
@@ -654,6 +671,7 @@ export function MainView(props: Props) {
             onDeleteFile={props.onDeleteFile}
             onMovePath={props.onMovePath}
             onContextMenu={openMenu}
+            pinned={props.pinned}
           />
           {/*
             v0.11.1：**删掉侧栏底部那个扁平的「PDF」分组**。
