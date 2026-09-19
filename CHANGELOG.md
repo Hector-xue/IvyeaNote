@@ -5,6 +5,30 @@
 
 ---
 
+## v0.11.37 — 2026-09-19
+
+**安卓：软键盘弹起时把 WebView 顶上去——光标、底部栏、系统「粘贴」条不再被键盘压住。**
+
+用户在 v0.11.36 上长按想粘贴：光标的把手画在键盘底下、系统的「粘贴 / 全选 / 自动填充」条被顶到
+屏幕最上沿，底部格式条也不见了。机制：Tauri 的 MainActivity 模板调了 `enableEdgeToEdge()`，
+窗口不再随键盘缩放；WebView（M139+）只缩"视觉视口"、布局视口不动，于是 `position: fixed`
+的底部栏、光标所在行都留在键盘下面，系统复制条找不到能落脚的位置就贴到了屏幕顶上。
+
+- 新增 `src-tauri/android/MainActivity.kt`，CI 在 `tauri android init` 之后整文件覆盖模板
+  （gen/android 不入库）：把 IME 的高度作为内边距加在内容视图上，WebView 实际变矮，布局视口
+  跟着变，底部栏 / 光标行 / 系统复制条回到键盘上方（Obsidian 同款）。只处理 IME；状态栏、
+  导航栏、刘海仍由网页的 `env(safe-area-inset-*)` 负责，返回时按 Android 文档把 IME 那份置零
+  而不是 CONSUMED（否则键盘收起后会残留内边距）。同时显式 `SOFT_INPUT_ADJUST_RESIZE`，
+  不让系统在 pan / resize 之间猜。
+- 网页侧 viewport meta 加 `interactive-widget=resizes-content`：原生那层若在某个 WebView 上
+  没生效，让 Blink 自己缩布局视口。
+
+验证：MainActivity 用 kotlinc 对着真实 `androidx.core 1.13.1` 类型检查通过（先拿故意写错的
+版本做阳性对照）；`android-debug.yml` 在 `fix/android**` 分支上真实走 gradle 编出 APK。
+真机效果待用户验证。
+
+---
+
 ## v0.11.36 — 2026-09-19
 
 **v0.11.35 真机翻车：长按仍然弹底部菜单——判"是不是手指"不能押 `pointerType`。**

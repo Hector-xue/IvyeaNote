@@ -45,6 +45,12 @@ jobs:
           cargo install tauri-cli --version "^2" --locked
           cargo tauri android init
 
+      # v0.11.37：换掉模板 MainActivity——软键盘弹起时把 WebView 顶上去（IME 内边距）。
+      # gen/android 不入库，源码放在 src-tauri/android/，init 之后整文件覆盖。
+      - name: 注入 MainActivity（软键盘顶起 WebView）
+        working-directory: desktop
+        run: cp src-tauri/android/MainActivity.kt src-tauri/gen/android/app/src/main/java/com/ivyea/note/MainActivity.kt
+
       - name: 注入 Android 品牌图标
         working-directory: desktop
         run: cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
