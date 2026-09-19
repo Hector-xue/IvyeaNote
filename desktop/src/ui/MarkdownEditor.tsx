@@ -20,7 +20,7 @@ import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/sea
 import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked } from 'marked';
-import { RibbonIcon, type IconName } from './Icons';
+import type { IconName } from './Icons';
 import DOMPurify from 'dompurify';
 import {
   clearFormatting,
@@ -44,7 +44,9 @@ import {
   livePreviewTheme,
   type ImageApi,
 } from '../lib/livePreview';
-import { ContextMenu, type MenuAnchor } from './ContextMenu';
+import { ContextMenu, type MenuAnchor, type MenuItem } from './ContextMenu';
+import { Sheet } from './mobile/Sheet';
+import { menuToSheetGroups } from '../lib/menuToSheet';
 import { blockSnippet, buildEditorMenu, type AiMenuAction } from '../lib/editorMenu';
 import { focusTableCell, liveTables, runTableOp, tableAt, tableLinkOpener } from '../lib/tableLive';
 import { raiseToast } from './Toast';
@@ -64,6 +66,30 @@ import { encodeHref, noteRelative } from '../lib/attachPath';
 const handledPastes = new WeakSet<Event>();
 /** 最近一次 Ctrl+Shift+V 按下的时刻；紧随其后的 paste 事件按"纯文本"处理 */
 let shiftPasteAt = 0;
+
+/** v0.11.35：移动端底部栏上、属于编辑器的那几个动作 */
+export interface SelectionTools {
+  /** 编辑态选区是否非空：复制 / 剪切 只在这时给 */
+  hasSelection: boolean;
+  copy(): void;
+  cut(): void;
+  /**
+   * 打开完整的编辑菜单（桌面右键那一份，换算成底部弹出菜单）。
+   * 不要求有选区：插入表格 / 段落设置 / 表格行列这些本来就不需要选中什么。
+   */
+  more(): void;
+}
+
+/**
+ * 这次 contextmenu 是不是手指长按来的。
+ * Chromium 106+ 的 contextmenu 是 PointerEvent，`pointerType` 说得清是谁触发的；
+ * 更老的 WebView 还是 MouseEvent，那就按设备的主指针类型判（手机 = coarse）。
+ */
+export function contextMenuFromTouch(ev: Event): boolean {
+  const pt = (ev as Partial<PointerEvent>).pointerType;
+  if (typeof pt === 'string') return pt === 'touch';
+  return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+}
 
 export interface MarkdownEditorProps {
   doc: string;
@@ -119,6 +145,15 @@ export interface MarkdownEditorProps {
    * 和 exposeFormat 一样，卸载时回传 null。
    */
   exposeSelection?(api: SelectionApi | null): void;
+  /**
+   * v0.11.35 移动端：**选区工具桥**。
+   *
+   * 手机上长按不再弹桌面右键菜单（见 openEditorMenu），系统的选词、拖拽把手、
+   * 复制条各归其位；我们自己的能力（复制 / 剪切 / 表格 / 段落 / AI……）改放到
+   * 底部栏——编辑态交出 {hasSelection, copy, cut, more}，离开编辑态、只读预览或
+   * 卸载时回传 null。和 exposeFormat 一样，传进来的回调必须是稳定引用。
+   */
+  exposeSelectionTools?(tools: SelectionTools | null): void;
   /**
    * v0.11.19：右键菜单里的 AI 动作。
    * 用户装完 v0.11.18 的第一句话是「为什么我没有看到任何 AI 按钮呢？只有在设置里面有」
@@ -679,8 +714,12 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
   const [imgBusy, setImgBusy] = useState(false);
   /** v0.11.0：编辑区右键菜单 */
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
-  /** v0.7.2 移动端：选区气泡（null=隐藏；pos 为文档坐标） */
-  const [bubble, setBubble] = useState<{ from: number; to: number } | null>(null);
+  /**
+   * 移动端：编辑态选区是否非空。v0.7.2 起它驱动选区上方的悬浮气泡；v0.11.35 气泡
+   * 删了（它和安卓系统复制条抢同一个位置，选区靠屏顶时还会出屏），改为驱动
+   * 交给底部栏的选区工具（exposeSelectionTools）。
+   */
+  const [hasSel, setHasSel] = useState(false);
   /** v0.7.3 P4：图片全屏预览 */
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   /** v0.7.3 P4 lightbox 打开器（阅读模式图片点击时调用） */
@@ -834,7 +873,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         ),
       })
     );
-    setBubble(null);
+    setHasSel(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.currentPath, props.theme, props.livePreviewOn]);
 
@@ -1067,43 +1106,36 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     }
   };
 
-  /** v0.7.2 移动端：非空选区时显示气泡（在选区上方浮出），折叠选区时隐藏 */
-  const [bubblePos, setBubblePos] = useState<{ left: number; top: number } | null>(null);
+  /**
+   * 移动端：跟踪「编辑态选区是否非空」。
+   *
+   * 听 document 的 selectionchange 而不是 CodeMirror 的 updateListener：手指拖把手
+   * 改的是 DOM 选区，CM 的 DOMObserver 也是听这个事件再同步进 state 的（它先注册，
+   * 先跑）。安卓上 CM 有几条延后同步的路径，所以读 state 推到下一帧，别抢在它前面。
+   */
   useEffect(() => {
     if (!props.mobile) return;
     const view = viewRef.current;
     if (!view) return;
-    const update = () => {
-      if (mode !== 'edit') {
-        setBubble(null);
-        setBubblePos(null);
+    let raf = 0;
+    const read = () => {
+      raf = 0;
+      if (mode !== 'edit' || view.state.readOnly) {
+        setHasSel(false);
         return;
       }
-      const { from, to } = view.state.selection.main;
-      if (from === to || view.state.readOnly) {
-        setBubble(null);
-        setBubblePos(null);
-        return;
-      }
-      setBubble({ from, to });
-      try {
-        const c1 = view.coordsAtPos(from);
-        const c2 = view.coordsAtPos(to);
-        const hostRect = view.dom.getBoundingClientRect();
-        if (c1 && c2) {
-          const x1 = Math.min(c1.left, c2.left) - hostRect.left;
-          const x2 = Math.max(c1.right, c2.right) - hostRect.left;
-          const yTop = Math.min(c1.top, c2.top) - hostRect.top;
-          setBubblePos({ left: (x1 + x2) / 2, top: yTop });
-        }
-      } catch {
-        /* 视口外坐标暂不可得，仅隐藏定位 */
-        setBubblePos(null);
-      }
+      setHasSel(!view.state.selection.main.empty);
     };
-    update();
+    const update = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(read);
+    };
+    read();
     document.addEventListener('selectionchange', update);
-    return () => document.removeEventListener('selectionchange', update);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      document.removeEventListener('selectionchange', update);
+    };
   }, [props.mobile, props.currentPath, mode]);
 
   /**
@@ -1115,36 +1147,6 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     if (props.readOnlyPreview) return;
     setMode(props.defaultView ?? 'edit');
   }, [props.currentPath, props.defaultView, props.readOnlyPreview]);
-
-  /** 气泡按钮应用格式后刷新自身状态（选区被重设为选中文本） */
-  const bubbleFormat = (btn: ToolBtn) => {
-    applyFormat(btn);
-    // dispatch 后下一帧重新读取选区/坐标
-    requestAnimationFrame(() => {
-      const view = viewRef.current;
-      if (!view) return;
-      const { from, to } = view.state.selection.main;
-      if (from === to) {
-        setBubble(null);
-        setBubblePos(null);
-        return;
-      }
-      setBubble({ from, to });
-      try {
-        const c1 = view.coordsAtPos(from);
-        const c2 = view.coordsAtPos(to);
-        const hostRect = view.dom.getBoundingClientRect();
-        if (c1 && c2) {
-          const x1 = Math.min(c1.left, c2.left) - hostRect.left;
-          const x2 = Math.max(c1.right, c2.right) - hostRect.left;
-          const yTop = Math.min(c1.top, c2.top) - hostRect.top;
-          setBubblePos({ left: (x1 + x2) / 2, top: yTop });
-        }
-      } catch {
-        setBubblePos(null);
-      }
-    });
-  };
 
   /** 对编辑器当前选区应用格式命令 */
   const applyFormat = (btn: ToolBtn) => {
@@ -1278,17 +1280,19 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     }
   };
 
-  const openEditorMenu = (e: React.MouseEvent) => {
-    // 阅读态、以及只读预览栏也该有菜单（至少能复制、能打开链接）
-    const target = e.target as HTMLElement | null;
+  /**
+   * 算出「此刻、落在 target 上」该有的菜单条目。
+   * 桌面右键与手机底部栏的「⋯」共用这一份；`at` 是右键的坐标（手机的「⋯」没有坐标，
+   * 传 null，光标就留在原处）。阅读态、以及只读预览栏也该有菜单（至少能复制、能打开链接）。
+   */
+  const menuItemsAt = (target: HTMLElement | null, at: { x: number; y: number } | null): MenuItem[] => {
     const view = viewRef.current;
-    e.preventDefault();
 
     // 右键落在没有选区的位置时，先把光标挪过去——不然「加粗」会作用在别处。
     // 表格格子除外：那儿的选区是浏览器的，CodeMirror 的光标别动（动了会掉进隐藏行）
     const inCell = !!target?.closest?.('.cm-live-tbl');
-    if (view && mode === 'edit' && !inCell && view.state.selection.main.empty) {
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+    if (view && at && mode === 'edit' && !inCell && view.state.selection.main.empty) {
+      const pos = view.posAtCoords(at);
       if (pos != null) view.dispatch({ selection: { anchor: pos } });
     }
 
@@ -1473,11 +1477,93 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         copyToClipboard: (text) => void writeClipboard(text),
       }
     );
-    setMenu({ x: e.clientX, y: e.clientY, items });
+    return items;
   };
 
+  const openEditorMenu = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement | null;
+    /*
+     * v0.11.35：**手指长按不接管。**
+     *
+     * 安卓 WebView 的长按 = 先选中那个词，再派发 contextmenu；contextmenu 一旦被
+     * preventDefault，Chromium 把长按的整套默认动作（选词、两个拖拽把手、系统复制条）
+     * 一并取消。此前这里无条件 preventDefault，用户体感就是「长按只能弹一张菜单，
+     * 滑不动、选不了，菜单里复制还是灰的（没选区），只剩全选能点」。
+     * 只有落在链接 / 图片上才由我们接管（它们没有文字可选），其余一律放行。
+     */
+    if (contextMenuFromTouch(e.nativeEvent)) {
+      const onLinkOrImage = !!target?.closest?.('.cm-live-link, a, img');
+      if (!onLinkOrImage) return;
+    }
+    e.preventDefault();
+    const at = { x: e.clientX, y: e.clientY };
+    setMenu({ ...at, items: menuItemsAt(target, at) });
+  };
+
+  /*
+   * v0.11.35 移动端：把「复制 / 剪切 / 更多」交给底部栏。
+   * 只在 hasSel 翻转时重新交出（不是每次选区变动），否则底部栏会跟着每次拖把手重渲染。
+   * 三个动作都在调用时才读 viewRef，不会捕获到过期的选区。
+   */
+  const { exposeSelectionTools, readOnlyPreview } = props;
+  const menuItemsAtRef = useRef(menuItemsAt);
+  menuItemsAtRef.current = menuItemsAt;
+  useEffect(() => {
+    if (!exposeSelectionTools) return;
+    if (mode !== 'edit' || readOnlyPreview) {
+      exposeSelectionTools(null);
+      return;
+    }
+    const selText = () => {
+      const v = viewRef.current;
+      if (!v) return null;
+      const r = v.state.selection.main;
+      return r.empty ? null : { from: r.from, to: r.to, text: v.state.sliceDoc(r.from, r.to) };
+    };
+    exposeSelectionTools({
+      hasSelection: hasSel,
+      copy: () => {
+        const sel = selText();
+        if (sel) void writeClipboard(sel.text);
+      },
+      cut: () => {
+        const sel = selText();
+        const v = viewRef.current;
+        if (!sel || !v) return;
+        void writeClipboard(sel.text).then((ok) => {
+          if (!ok) return;
+          v.dispatch({ changes: { from: sel.from, to: sel.to, insert: '' }, selection: { anchor: sel.from } });
+          v.focus();
+          // 没焦点时 CM 不写 DOM 选区、selectionchange 不来，这里直接把状态收掉
+          setHasSel(false);
+        });
+      },
+      more: () => {
+        const v = viewRef.current;
+        if (!v) return;
+        /*
+         * 「⋯」没有坐标，落点得自己定：焦点在编辑器内部某个元素上（表格格子）就用它——
+         * 底部栏的按钮 pointerdown 已 preventDefault，焦点没被抢走；否则拿选区头所在的
+         * DOM，链接 / 图片才判得出来。
+         */
+        const active = document.activeElement as HTMLElement | null;
+        let target: HTMLElement | null;
+        if (active && active !== v.contentDOM && v.contentDOM.contains(active)) {
+          target = active;
+        } else {
+          const dom = v.domAtPos(v.state.selection.main.head).node;
+          target = (dom.nodeType === Node.ELEMENT_NODE ? dom : dom.parentNode) as HTMLElement | null;
+        }
+        setMenu({ x: 0, y: 0, items: menuItemsAtRef.current(target, null) });
+      },
+    });
+    return () => exposeSelectionTools(null);
+    // writeClipboard 是每次渲染新建的普通函数，动作在调用时才用到它，不必进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exposeSelectionTools, hasSel, mode, readOnlyPreview]);
+
   /* 常驻格式条已不在编辑器内部：桌面端不要（Obsidian 也没有），
-     移动端由 MobileView 的底部栏统一拥有。选区气泡仍保留。 */
+     移动端由 MobileView 的底部栏统一拥有（v0.11.35 起选区工具也在那儿）。 */
 
   return (
     <div
@@ -1526,29 +1612,19 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         <div className="editor-host" ref={hostRef} style={{ display: mode === 'edit' ? undefined : 'none' }} />
         {mode === 'read' && <div className="md-preview" ref={previewRef} />}
       </div>
-      {/* v0.7.2 移动端：选区浮动气泡（替代常驻横条） */}
-      {props.mobile && bubble && bubblePos && mode === 'edit' && (
-        <div
-          className="md-bubble"
-          role="toolbar"
-          aria-label="格式工具"
-          style={{ left: bubblePos.left, top: bubblePos.top }}
-        >
-          {TOOLS.filter((b) => ['b', 'i', 'h', 'ul', 'task', 'q', 'code', 'link'].includes(b.key)).map((b) => (
-            <button
-              key={b.key}
-              className={`md-tool ${b.key === 'b' ? 't-bold' : b.key === 'i' ? 't-italic' : ''}`}
-              title={b.title}
-              aria-label={b.title}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => bubbleFormat(b)}
-            >
-              <RibbonIcon name={b.icon} size={17} />
-            </button>
-          ))}
-        </div>
+      {/*
+        v0.11.35：同一份菜单数据，桌面画成右键菜单，手机画成底部弹出的一张纸。
+        手机上它由长按链接/图片、或底部栏的「⋯」呼出；子菜单是推进到下一层。
+      */}
+      {props.mobile ? (
+        <Sheet
+          open={!!menu}
+          groups={menu ? menuToSheetGroups(menu.items, (children) => setMenu({ x: 0, y: 0, items: children })) : []}
+          onClose={() => setMenu(null)}
+        />
+      ) : (
+        <ContextMenu anchor={menu} onClose={() => setMenu(null)} />
       )}
-      <ContextMenu anchor={menu} onClose={() => setMenu(null)} />
       {/* v0.7.3 P4：图片全屏预览 */}
       {lightbox && (
         <div className="m-img-viewer" onClick={() => setLightbox(null)}>

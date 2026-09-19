@@ -10,7 +10,7 @@ import logoUrl from '../assets/logo.png';
 import type { SearchDoc } from '../lib/searchIndex';
 import type { BaseNote } from '../lib/bases';
 import { RibbonIcon } from './Icons';
-import { MarkdownEditor, type SelectionApi } from './MarkdownEditor';
+import { MarkdownEditor, type SelectionApi, type SelectionTools } from './MarkdownEditor';
 import type { AiMenuAction } from '../lib/editorMenu';
 import { PdfViewer } from './PdfViewer';
 import { BaseView } from './BaseView';
@@ -232,6 +232,11 @@ export function MobileView(props: Props) {
    */
   const exposeFormat = useCallback((fn: ((key: string) => void) | null) => {
     setApplyFormat(() => fn);
+  }, []);
+  /** v0.11.35：编辑器交出来的选区工具（复制 / 剪切 / 更多），同样必须是稳定引用 */
+  const [selTools, setSelTools] = useState<SelectionTools | null>(null);
+  const exposeSelectionTools = useCallback((tools: SelectionTools | null) => {
+    setSelTools(tools);
   }, []);
   /** 当前打开的底部菜单：note=笔记动作 / app=应用与账号 / vault=库 / sort=排序 */
   const [menu, setMenu] = useState<'note' | 'app' | 'vault' | 'sort' | 'ai' | null>(null);
@@ -605,12 +610,19 @@ export function MobileView(props: Props) {
   // ---- v0.7.3 P3：主区右滑呼出抽屉 ----
   const onTouchStart = (e: React.TouchEvent) => {
     const t = e.touches[0];
-    touchStart.current = { x: t.clientX, y: t.clientY };
+    /*
+     * v0.11.35：正在拖文字选区的把手时不算起手。把手是系统画的、不在 DOM 里，
+     * 只能看此刻有没有非空选区——行首的把手就在左缘 56px 以内，往右一拖正好凑齐
+     * 「左缘起手右滑」，选着选着抽屉就弹出来了。
+     */
+    const selecting = !(document.getSelection()?.isCollapsed ?? true);
+    touchStart.current = selecting ? null : { x: t.clientX, y: t.clientY };
   };
   const onTouchEnd = (e: React.TouchEvent) => {
     const s = touchStart.current;
     touchStart.current = null;
     if (!s || drawerOpen) return;
+    if (!(document.getSelection()?.isCollapsed ?? true)) return;
     const t = e.changedTouches[0];
     const dx = t.clientX - s.x;
     const dy = t.clientY - s.y;
@@ -884,6 +896,7 @@ export function MobileView(props: Props) {
               mode={mode}
               onModeChange={setMode}
               exposeFormat={exposeFormat}
+              exposeSelectionTools={exposeSelectionTools}
               onInsertImage={props.onInsertImage}
               resolveImage={props.resolveImage}
               onOpenPath={props.onOpenPath}
@@ -911,6 +924,7 @@ export function MobileView(props: Props) {
         formatOpen={formatOpen}
         formatAvailable={props.currentPath != null && mode === 'edit' && !!applyFormat}
         formats={FORMATS.map((f) => ({ ...f, run: () => applyFormat?.(f.key) }))}
+        selection={selTools}
         onSearch={() => {
           setDrawerOpen(true);
           // 抽屉一开就把焦点放进搜索框，少一次点击

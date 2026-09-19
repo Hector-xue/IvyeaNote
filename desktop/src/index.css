@@ -1668,45 +1668,8 @@ button {
 .md-editor-mobile {
   position: relative;
 }
-.md-bubble {
-  position: absolute;
-  transform: translate(-50%, calc(-100% - 8px));
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 6px;
-  border-radius: var(--radius-l, 20px);
-  background: var(--blur-bg, rgba(255, 255, 255, 0.72));
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
-  backdrop-filter: blur(20px) saturate(1.6);
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.18),
-    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35);
-  z-index: 12;
-  animation: bubble-in 0.16s ease-out;
-  /* 防止溢出屏幕边缘由 JS 居中定位，max-width 兜底 */
-  max-width: calc(100vw - 24px);
-}
-@keyframes bubble-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, calc(-100% - 2px)) scale(0.92);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, calc(-100% - 8px)) scale(1);
-  }
-}
-.md-bubble .md-tool {
-  color: var(--text);
-  font-size: 14.5px;
-  min-width: 38px;
-  min-height: 36px;
-  border-radius: var(--radius-s, 10px);
-}
-.md-bubble .md-tool:active {
-  background: var(--accent-weak);
-}
+/* v0.11.35：选区上方的悬浮气泡（.md-bubble）删了——它和安卓系统复制条抢同一个位置，
+   选区工具改进底部栏（ui/mobile/BottomBar 的 selection）。 */
 
 .md-insert-bar {
   display: flex;
