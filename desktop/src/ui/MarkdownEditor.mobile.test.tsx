@@ -50,13 +50,44 @@ function view(): EditorView {
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
 describe('contextMenuFromTouch', () => {
-  it('pointerType 说了算：touch 是手指，mouse / pen 不是', () => {
-    expect(contextMenuFromTouch(contextMenuEvent('touch'))).toBe(true);
-    expect(contextMenuFromTouch(contextMenuEvent('mouse'))).toBe(false);
-    expect(contextMenuFromTouch(contextMenuEvent('pen'))).toBe(false);
+  const desktop = { lastTouchAt: 0, mobileLayout: false, now: 10_000 };
+  /** 把 matchMedia('(pointer: coarse)') 临时打成给定值 */
+  const withCoarse = (coarse: boolean, fn: () => void) => {
+    const orig = window.matchMedia;
+    window.matchMedia = ((q: string) => ({ ...orig(q), matches: coarse && q.includes('coarse') })) as typeof window.matchMedia;
+    try {
+      fn();
+    } finally {
+      window.matchMedia = orig;
+    }
+  };
+
+  it('pointerType 是 touch → 手指，别的条件都不用看', () => {
+    expect(contextMenuFromTouch(contextMenuEvent('touch'), desktop)).toBe(true);
   });
-  it('老 WebView 没有 pointerType：按设备主指针判（本环境是 fine → 不是手指）', () => {
-    expect(contextMenuFromTouch(contextMenuEvent())).toBe(false);
+  it('真机复现：WebView 长按送来的 contextmenu 标着 mouse，但 600ms 前刚 touchstart → 仍是手指', () => {
+    expect(contextMenuFromTouch(contextMenuEvent('mouse'), { ...desktop, lastTouchAt: 9_400 })).toBe(true);
+    expect(contextMenuFromTouch(contextMenuEvent(), { ...desktop, lastTouchAt: 9_400 })).toBe(true);
+  });
+  it('触摸是 3s 前的事 → 不算长按', () => {
+    expect(contextMenuFromTouch(contextMenuEvent('mouse'), { ...desktop, lastTouchAt: 7_000 })).toBe(false);
+  });
+  it('桌面布局、没触摸过：mouse / pen 就是鼠标（右键菜单照常）', () => {
+    expect(contextMenuFromTouch(contextMenuEvent('mouse'), desktop)).toBe(false);
+    expect(contextMenuFromTouch(contextMenuEvent('pen'), desktop)).toBe(false);
+  });
+  it('手机布局 + 粗指针设备：不管 pointerType 写什么都当手指（手机上没有"右键"）', () => {
+    withCoarse(true, () => {
+      expect(contextMenuFromTouch(contextMenuEvent('mouse'), { ...desktop, mobileLayout: true })).toBe(true);
+    });
+    // 手机布局但设备是细指针（窄窗口的桌面）：鼠标还是鼠标
+    withCoarse(false, () => {
+      expect(contextMenuFromTouch(contextMenuEvent('mouse'), { ...desktop, mobileLayout: true })).toBe(false);
+    });
+  });
+  it('老 WebView 没有 pointerType、也没触摸记录：按设备主指针判', () => {
+    withCoarse(false, () => expect(contextMenuFromTouch(contextMenuEvent(), desktop)).toBe(false));
+    withCoarse(true, () => expect(contextMenuFromTouch(contextMenuEvent(), desktop)).toBe(true));
   });
 });
 
@@ -85,7 +116,19 @@ describe('MarkdownEditor 手机端长按', () => {
     expect(document.querySelector('.m-sheet2')).toBeNull();
   });
 
-  it('鼠标右键（阳性对照）：照旧接管并弹菜单——手机上是底部一张纸而不是桌面菜单', async () => {
+  it('真机复现：先 touchstart 再来一个标着 mouse 的 contextmenu → 仍按手指放行，不弹菜单', async () => {
+    renderEditor();
+    await waitFor(() => expect(document.querySelector('.cm-content')).toBeTruthy());
+    const content = document.querySelector('.cm-content')!;
+    fireEvent.touchStart(content, { touches: [{ clientX: 10, clientY: 10 }] });
+    const ev = contextMenuEvent('mouse');
+    content.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(document.querySelector('.m-sheet2')).toBeNull();
+    expect(document.querySelector('.ctx-menu')).toBeNull();
+  });
+
+  it('鼠标右键（阳性对照，没有触摸在前）：照旧接管并弹菜单——手机上是底部一张纸而不是桌面菜单', async () => {
     renderEditor();
     await waitFor(() => expect(document.querySelector('.cm-content')).toBeTruthy());
     const ev = contextMenuEvent('mouse');

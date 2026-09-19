@@ -5,6 +5,26 @@
 
 ---
 
+## v0.11.36 — 2026-09-19
+
+**v0.11.35 真机翻车：长按仍然弹底部菜单——判"是不是手指"不能押 `pointerType`。**
+
+用户装上 v0.11.35 后贴了两张图：Obsidian 长按是选词 + 把手 + 系统复制条；我们这边把手出来了，
+可紧跟着弹出底部一张纸，系统复制条没有。这两点合起来只有一种解释：contextmenu 走了鼠标那条路、
+被 preventDefault 了——Chromium 里系统复制条（Android 的选区 ActionMode）正是 contextmenu 的
+**默认动作**，事件一取消它就不出来，而选词与把手在事件派发之前就已经做完，所以把手还在。
+也就是说这台 WebView 长按送来的 contextmenu 没有标 `pointerType === 'touch'`。
+
+- 判据改成三条，任一成立就当手指：`pointerType === 'touch'`；**2 秒内编辑区发生过 touchstart**
+  （长按必然以一次触摸开始，鼠标右键不会——CodeMirror 自己也是这么分的）；**手机布局 + 粗指针
+  设备**（手机上没有"右键"这回事）。只有 pointerType 明确是 mouse / pen 且三条都不成立才当鼠标。
+- 测试：纯函数 6 条（含"标着 mouse 但 600ms 前刚 touchstart"这个真机形状）、组件 1 条（先
+  touchstart 再来 mouse contextmenu → 放行，去掉触摸记录后这条会挂）；`verify-ui.mjs` 7.7 段重排为
+  ①无触摸在前的 mouse（细指针弹纸 / 粗指针放行）②真触摸长按后紧跟 mouse contextmenu → 放行
+  ③pointerType=touch → 放行，198/198。
+
+---
+
 ## v0.11.35 — 2026-09-19
 
 **手机端长按选字修真：长按交给系统选词与拖拽把手，自家工具搬到底部栏。**
