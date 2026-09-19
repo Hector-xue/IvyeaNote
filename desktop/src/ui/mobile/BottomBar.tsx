@@ -25,6 +25,7 @@
  * 那就该只留一个。留在顶栏是因为它俩都跟着当前笔记走（面包屑就在旁边）。
  */
 import { RibbonIcon, type IconName } from '../Icons';
+import type { SelectionTools } from '../MarkdownEditor';
 
 export interface FormatAction {
   key: string;
@@ -38,6 +39,15 @@ interface Props {
   /** 只读预览 / 阅读态下不给格式条 */
   formatAvailable: boolean;
   formats: FormatAction[];
+  /**
+   * v0.11.35：编辑器交出来的「复制 / 剪切 / ⋯」。null = 不在编辑态，一个都不显示；
+   * 复制 / 剪切 只在 hasSelection 时给，「⋯」（完整编辑菜单）常在。
+   *
+   * 为什么在这儿而不是选区上方浮个气泡：安卓系统自己的复制条就浮在选区正上方，
+   * 两条会叠在一起；选区靠屏顶时气泡还会出屏。底部栏不跟把手抖、不被遮，
+   * Obsidian 移动端也是把自家工具钉在键盘上方那条栏里。
+   */
+  selection?: SelectionTools | null;
   onSearch(): void;
   onCreate(): void;
   /** v0.11.13：大纲。长文在手机上没有它就只能一路划 */
@@ -63,6 +73,33 @@ export function BottomBar(props: Props) {
     <div className="m-bottom-wrap">
       {props.formatOpen && props.formatAvailable && (
         <div className="m-format" role="toolbar" aria-label="格式">
+          {props.selection && (
+            <>
+              {(
+                [
+                  ...(props.selection.hasSelection
+                    ? [
+                        { key: 'sel-copy', icon: 'copy', title: '复制', run: props.selection.copy },
+                        { key: 'sel-cut', icon: 'cut', title: '剪切', run: props.selection.cut },
+                      ]
+                    : []),
+                  { key: 'sel-more', icon: 'more-vertical', title: '更多', run: props.selection.more },
+                ] as FormatAction[]
+              ).map((f) => (
+                <button
+                  key={f.key}
+                  className="m-format-btn m-format-sel"
+                  title={f.title}
+                  aria-label={f.title}
+                  onPointerDown={(e) => e.preventDefault()}
+                  onClick={f.run}
+                >
+                  <RibbonIcon name={f.icon} size={19} />
+                </button>
+              ))}
+              <span className="m-format-gap" aria-hidden="true" />
+            </>
+          )}
           {props.formats.map((f) => (
             <button
               key={f.key}

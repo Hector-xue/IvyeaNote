@@ -3323,6 +3323,176 @@ await new Promise((r) => setTimeout(r, 2600));
   await evaluate(`(() => { document.querySelector('.html-bar [aria-label="关闭"]')?.click(); return true })()`);
   await new Promise((r) => setTimeout(r, 400));
 
+  // ---------- 7.7 手机端：长按 = 系统选词，自家工具在底部栏（v0.11.35）----------
+  /*
+   * 用户原话：「长按复制无法滑动选中文字，会一下子选中所有文字，要么选中长按弹窗的文字」。
+   * 根因：编辑区 contextmenu 无条件 preventDefault，安卓的长按选词 / 把手 / 系统复制条
+   * 全被取消，只剩桌面右键菜单。这里验证：手指来的 contextmenu 不再被取消、不弹菜单；
+   * 选区一出现底部栏就有 复制 / 剪切 / 更多；「更多」弹的是底部一张纸；弹层文字不可选。
+   */
+  {
+    // 保证编辑器里开着一篇有字的笔记（上面几段可能把它切走了）
+    let hasEditor = await evaluate(`!!document.querySelector('.cm-content .cm-line')`);
+    if (!hasEditor) {
+      await evaluate(`(() => {
+        const b = [...document.querySelectorAll('button')].find(x => (x.getAttribute('aria-label') ?? '').includes('文件列表'));
+        b?.click(); return !!b })()`);
+      await new Promise((r) => setTimeout(r, 600));
+      await evaluate(`(() => {
+        const names = [...document.querySelectorAll('.m-tree-name')];
+        const el = names.find(x => /\\.md$/.test(x.textContent)) ?? names[0];
+        (el?.closest('.m-tree-row') ?? el)?.click(); return !!el })()`);
+      await new Promise((r) => setTimeout(r, 1200));
+      hasEditor = await evaluate(`!!document.querySelector('.cm-content .cm-line')`);
+    }
+    check('手机端有一篇笔记开在编辑器里（后面几条的前提）', hasEditor);
+
+    // 找一行至少 6 个字的正文，量出第 2~4 个字的位置当长按点
+    const word = await evaluate(`(() => {
+      const main = document.querySelector('.m-main');
+      if (main) main.scrollTop = 0;
+      const lines = [...document.querySelectorAll('.cm-content .cm-line')];
+      for (const ln of lines) {
+        const walker = document.createTreeWalker(ln, NodeFilter.SHOW_TEXT);
+        let n;
+        while ((n = walker.nextNode())) {
+          if ((n.textContent ?? '').trim().length < 6) continue;
+          const rg = document.createRange();
+          rg.setStart(n, 1); rg.setEnd(n, 4);
+          const r = rg.getBoundingClientRect();
+          if (r.width === 0) continue;
+          n.parentElement.scrollIntoView({ block: 'center' });
+          const r2 = rg.getBoundingClientRect();
+          return { x: Math.round(r2.left + r2.width / 2), y: Math.round(r2.top + r2.height / 2), text: n.textContent.slice(0, 12) };
+        }
+      }
+      return null;
+    })()`);
+    check('找得到一行可长按的正文', !!word, word);
+
+    // 先关掉可能还开着的弹层，再挂一个 window 级 bubble 监听：它在 React 根之后跑，看得到 defaultPrevented 的最终值
+    await evaluate(`(() => {
+      window.__cmSeen = null;
+      window.addEventListener('contextmenu', (e) => { window.__cmSeen = { pointerType: e.pointerType ?? null, prevented: e.defaultPrevented, inEditor: !!e.target.closest?.('.cm-content') }; });
+      return true })()`);
+    if (word) {
+      const touch = [{ x: word.x, y: word.y, radiusX: 6, radiusY: 6, force: 1, id: 1 }];
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: touch });
+      await new Promise((r) => setTimeout(r, 900));
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    /*
+     * headless 桌面 Chrome 的触摸长按**不会**派发 contextmenu（那是安卓 WebView 的手势→事件映射），
+     * 所以上面那次真触摸只能证明"长按不弹东西"；contextmenu 本身按安卓的形状（PointerEvent、
+     * pointerType=touch）直接派发到正文上，看应用怎么对待它。鼠标那份是阳性对照。
+     */
+    const fire = (pointerType) => evaluate(`(() => {
+      window.__cmSeen = null;
+      const el = document.elementFromPoint(${word?.x ?? 0}, ${word?.y ?? 0});
+      const ev = new PointerEvent('contextmenu', { bubbles: true, cancelable: true, clientX: ${word?.x ?? 0}, clientY: ${word?.y ?? 0}, pointerType: '${pointerType}' });
+      el.dispatchEvent(ev);
+      return { seen: window.__cmSeen, sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') };
+    })()`);
+    const afterPress = await evaluate(`(() => ({
+      seen: window.__cmSeen,
+      sheet: !!document.querySelector('.m-sheet2'),
+      ctx: !!document.querySelector('.ctx-menu'),
+    }))()`);
+    check('真触摸长按正文：不弹桌面右键菜单，也不弹底部菜单', !afterPress.sheet && !afterPress.ctx, afterPress);
+    const touchCm = word ? await fire('touch') : null;
+    await new Promise((r) => setTimeout(r, 300));
+    const afterTouchCm = await evaluate(`({ sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') })`);
+    check('手指来的 contextmenu：没被 preventDefault、不弹任何菜单（选词 / 把手 / 系统复制条归系统）',
+      !!touchCm && touchCm.seen && touchCm.seen.inEditor && touchCm.seen.pointerType === 'touch' && touchCm.seen.prevented === false && !afterTouchCm.sheet && !afterTouchCm.ctx, { touchCm, afterTouchCm });
+    const mouseCm = word ? await fire('mouse') : null;
+    await new Promise((r) => setTimeout(r, 400));
+    const afterMouseCm = await evaluate(`({ sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') })`);
+    check('鼠标来的 contextmenu（阳性对照）：被接管，手机布局下弹的是底部一张纸',
+      !!mouseCm && mouseCm.seen && mouseCm.seen.prevented === true && afterMouseCm.sheet && !afterMouseCm.ctx, { mouseCm, afterMouseCm });
+    // 关掉这张纸（遮罩点击有 350ms 防误触，等一下再点）
+    await new Promise((r) => setTimeout(r, 400));
+    await evaluate(`(() => { document.querySelector('.m-sheet-mask')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    check('纸能被遮罩点掉', await evaluate(`!document.querySelector('.m-sheet2')`));
+    await shot('mobile-longpress.png');
+
+    // 把手拖出来的选区就是 DOM 选区：这里直接造一个（headless 没有安卓那套把手）
+    const selMade = await evaluate(`(() => {
+      const content = document.querySelector('.cm-content');
+      if (!content) return null;
+      content.focus();
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = walker.nextNode())) { if ((n.textContent ?? '').trim().length >= 6) break; }
+      if (!n) return null;
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      const rg = document.createRange(); rg.setStart(n, 1); rg.setEnd(n, 5); sel.addRange(rg);
+      return { text: n.textContent.slice(1, 5) };
+    })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const selBar = await evaluate(`(() => {
+      const btns = [...document.querySelectorAll('.m-format .m-format-sel')];
+      const wrap = document.querySelector('.m-bottom-wrap');
+      const noBubble = !document.querySelector('.md-bubble');
+      return {
+        labels: btns.map(b => b.getAttribute('aria-label')),
+        visible: btns.every(b => b.getBoundingClientRect().height > 0),
+        gap: !!document.querySelector('.m-format .m-format-gap'),
+        wrapSelect: wrap ? getComputedStyle(wrap).userSelect : null,
+        noBubble,
+        formatCount: document.querySelectorAll('.m-format .m-format-btn:not(.m-format-sel)').length,
+      };
+    })()`);
+    check('选区一出现，底部格式条前面是 复制 / 剪切 / 更多，原有格式键还在，选区上方不再浮气泡',
+      !!selMade && selBar.labels.join(',') === '复制,剪切,更多' && selBar.visible && selBar.gap && selBar.noBubble && selBar.formatCount >= 8, { selMade, selBar });
+    check('底部栏文字不可选（长按落在栏上不会选中按钮的字）', selBar.wrapSelect === 'none', selBar.wrapSelect);
+    await shot('mobile-selection-bar.png');
+
+    // 点「复制」：走 navigator.clipboard，把它桩掉看写了什么
+    await evaluate(`(() => { window.__clip = null; navigator.clipboard.writeText = async (t) => { window.__clip = t; }; return true })()`);
+    await evaluate(`(() => { document.querySelector('.m-format .m-format-sel[aria-label="复制"]')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const clip = await evaluate(`window.__clip`);
+    check('底部栏「复制」复制的正是选中的那几个字', !!selMade && clip === selMade.text, { clip, want: selMade?.text });
+
+    // 「更多」：底部一张纸，带着桌面右键菜单的同一批能力；子菜单是进下一层
+    await evaluate(`(() => { document.querySelector('.m-format .m-format-sel[aria-label="更多"]')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 500));
+    const more = await evaluate(`(() => {
+      const sheetEl = document.querySelector('.m-sheet2');
+      if (!sheetEl) return null;
+      const items = [...sheetEl.querySelectorAll('.m-sheet2-item')].map(b => ({ label: b.querySelector('.m-sheet2-label')?.firstChild?.textContent?.trim(), disabled: b.disabled }));
+      const cs = getComputedStyle(sheetEl);
+      return { items, ctx: !!document.querySelector('.ctx-menu'), select: cs.userSelect, display: cs.display, maxH: cs.maxHeight, groups: sheetEl.querySelectorAll('.m-sheet2-group').length };
+    })()`);
+    const has = (l) => !!more && more.items.some(i => i.label === l && !i.disabled);
+    check('「更多」弹的是底部一张纸（不是桌面菜单），复制 / 剪切 / 粘贴 / 文本格式 / 段落设置都在、分了组',
+      !!more && !more.ctx && has('复制') && has('剪切') && has('粘贴') && has('文本格式') && has('段落设置') && more.groups >= 3, more);
+    check('这张纸上的文字不可选，且纸本身的形状没被这条规则拆散（仍是 flex 列、限高）',
+      !!more && more.select === 'none' && more.display === 'flex' && more.maxH !== 'none', more && { select: more.select, display: more.display, maxH: more.maxH });
+    await shot('mobile-selection-more.png');
+    await evaluate(`(() => { [...document.querySelectorAll('.m-sheet2-item')].find(b => b.textContent.trim() === '文本格式')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const sub = await evaluate(`(() => [...document.querySelectorAll('.m-sheet2-item')].map(b => b.querySelector('.m-sheet2-label')?.firstChild?.textContent?.trim()))()`);
+    check('点「文本格式」进下一层：加粗 / 斜体 / 删除线在，上一层的项不在', sub.includes('加粗') && sub.includes('斜体') && !sub.includes('文本格式') && !sub.includes('粘贴'), sub);
+    await evaluate(`(() => { [...document.querySelectorAll('.m-sheet2-item')].find(b => b.textContent.trim() === '加粗')?.click(); return true })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const bolded = await evaluate(`(() => ({
+      closed: !document.querySelector('.m-sheet2'),
+      text: document.querySelector('.cm-content')?.textContent ?? '',
+    }))()`);
+    check('点「加粗」：纸收起、选中的字被 ** 包起来', !!selMade && bolded.closed && bolded.text.includes('**' + selMade.text + '**'), { closed: bolded.closed, want: selMade?.text });
+    // 撤销加粗，别影响后面的检查
+    await evaluate(`(() => { document.querySelector('.cm-content')?.focus(); document.execCommand('undo'); return true })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    await evaluate(`(() => { window.getSelection()?.removeAllRanges(); return true })()`);
+    await new Promise((r) => setTimeout(r, 400));
+    const collapsed = await evaluate(`[...document.querySelectorAll('.m-format .m-format-sel')].map(b => b.getAttribute('aria-label'))`);
+    check('选区折叠后 复制 / 剪切 收走，「更多」留着（插表格 / 段落设置不需要选区）', collapsed.join(',') === '更多', collapsed);
+  }
+
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');
   await new Promise((r) => setTimeout(r, 2400));

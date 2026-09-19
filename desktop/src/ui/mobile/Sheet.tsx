@@ -13,7 +13,8 @@ import { BottomSheet } from './BottomSheet';
 
 export interface SheetItem {
   key: string;
-  icon: IconName;
+  /** 左侧图标。v0.11.35 起可省：右键菜单换算过来的项不是每条都有图标，留空位对齐 */
+  icon?: IconName;
   label: string;
   /**
    * 标签下面一行小字：这一项会做什么、或者它需要什么条件。
@@ -25,6 +26,8 @@ export interface SheetItem {
   checked?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  /** v0.11.35：点了会进下一层（右侧画个 ›），而不是执行动作 */
+  more?: boolean;
   onClick(): void;
 }
 
@@ -54,9 +57,7 @@ export function Sheet({ open, title, groups, onClose }: Props) {
                   it.onClick();
                 }}
               >
-                <span className="m-sheet2-ico">
-                  <RibbonIcon name={it.icon} size={20} />
-                </span>
+                <span className="m-sheet2-ico">{it.icon && <RibbonIcon name={it.icon} size={20} />}</span>
                 <span className="m-sheet2-label">
                   {it.label}
                   {it.sub && <span className="m-sheet2-sub">{it.sub}</span>}
@@ -64,6 +65,11 @@ export function Sheet({ open, title, groups, onClose }: Props) {
                 {it.checked && (
                   <span className="m-sheet2-check">
                     <RibbonIcon name="check" size={18} />
+                  </span>
+                )}
+                {it.more && !it.checked && (
+                  <span className="m-sheet2-more">
+                    <RibbonIcon name="chevron-right" size={18} />
                   </span>
                 )}
               </button>
