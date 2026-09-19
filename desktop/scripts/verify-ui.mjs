@@ -3370,22 +3370,20 @@ await new Promise((r) => setTimeout(r, 2600));
     })()`);
     check('找得到一行可长按的正文', !!word, word);
 
-    // 先关掉可能还开着的弹层，再挂一个 window 级 bubble 监听：它在 React 根之后跑，看得到 defaultPrevented 的最终值
+    // 挂一个 window 级 bubble 监听：它在 React 根之后跑，看得到 defaultPrevented 的最终值
     await evaluate(`(() => {
       window.__cmSeen = null;
       window.addEventListener('contextmenu', (e) => { window.__cmSeen = { pointerType: e.pointerType ?? null, prevented: e.defaultPrevented, inEditor: !!e.target.closest?.('.cm-content') }; });
       return true })()`);
-    if (word) {
-      const touch = [{ x: word.x, y: word.y, radiusX: 6, radiusY: 6, force: 1, id: 1 }];
-      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: touch });
-      await new Promise((r) => setTimeout(r, 900));
-      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-      await new Promise((r) => setTimeout(r, 700));
-    }
     /*
      * headless 桌面 Chrome 的触摸长按**不会**派发 contextmenu（那是安卓 WebView 的手势→事件映射），
-     * 所以上面那次真触摸只能证明"长按不弹东西"；contextmenu 本身按安卓的形状（PointerEvent、
-     * pointerType=touch）直接派发到正文上，看应用怎么对待它。鼠标那份是阳性对照。
+     * 所以 contextmenu 得自己按安卓的形状（PointerEvent）派发到正文上，看应用怎么对待它。
+     * v0.11.35 真机翻车：用户的 WebView 长按送来的 contextmenu **不带 pointerType='touch'**，
+     * 于是走了鼠标那条路弹了底部菜单。v0.11.36 的判据不再押这个字段：刚有过 touchstart、
+     * 或手机布局 + 粗指针设备，都算手指。下面按这个顺序验：
+     *   ① 没触摸在前的 mouse contextmenu —— 粗指针设备（手机）放行，细指针（窄窗桌面）弹纸；
+     *   ② 真触摸长按之后紧跟一个标着 mouse 的 contextmenu（真机的形状）—— 必须放行；
+     *   ③ pointerType='touch' —— 必须放行。
      */
     const fire = (pointerType) => evaluate(`(() => {
       window.__cmSeen = null;
@@ -3394,27 +3392,49 @@ await new Promise((r) => setTimeout(r, 2600));
       el.dispatchEvent(ev);
       return { seen: window.__cmSeen, sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') };
     })()`);
-    const afterPress = await evaluate(`(() => ({
-      seen: window.__cmSeen,
-      sheet: !!document.querySelector('.m-sheet2'),
-      ctx: !!document.querySelector('.ctx-menu'),
-    }))()`);
-    check('真触摸长按正文：不弹桌面右键菜单，也不弹底部菜单', !afterPress.sheet && !afterPress.ctx, afterPress);
-    const touchCm = word ? await fire('touch') : null;
-    await new Promise((r) => setTimeout(r, 300));
-    const afterTouchCm = await evaluate(`({ sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') })`);
-    check('手指来的 contextmenu：没被 preventDefault、不弹任何菜单（选词 / 把手 / 系统复制条归系统）',
-      !!touchCm && touchCm.seen && touchCm.seen.inEditor && touchCm.seen.pointerType === 'touch' && touchCm.seen.prevented === false && !afterTouchCm.sheet && !afterTouchCm.ctx, { touchCm, afterTouchCm });
+    const overlays = () => evaluate(`({ sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') })`);
+    const closeSheet = async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      await evaluate(`(() => { document.querySelector('.m-sheet-mask')?.click(); return true })()`);
+      await new Promise((r) => setTimeout(r, 400));
+    };
+    const coarse = await evaluate(`matchMedia('(pointer: coarse)').matches`);
+
+    // ① 没触摸在前的 mouse contextmenu
     const mouseCm = word ? await fire('mouse') : null;
     await new Promise((r) => setTimeout(r, 400));
-    const afterMouseCm = await evaluate(`({ sheet: !!document.querySelector('.m-sheet2'), ctx: !!document.querySelector('.ctx-menu') })`);
-    check('鼠标来的 contextmenu（阳性对照）：被接管，手机布局下弹的是底部一张纸',
-      !!mouseCm && mouseCm.seen && mouseCm.seen.prevented === true && afterMouseCm.sheet && !afterMouseCm.ctx, { mouseCm, afterMouseCm });
-    // 关掉这张纸（遮罩点击有 350ms 防误触，等一下再点）
-    await new Promise((r) => setTimeout(r, 400));
-    await evaluate(`(() => { document.querySelector('.m-sheet-mask')?.click(); return true })()`);
-    await new Promise((r) => setTimeout(r, 400));
-    check('纸能被遮罩点掉', await evaluate(`!document.querySelector('.m-sheet2')`));
+    const afterMouseCm = await overlays();
+    if (coarse) {
+      check('① 手机布局 + 粗指针：就算 contextmenu 标着 mouse 也放行、不弹菜单（手机上没有"右键"）',
+        !!mouseCm && mouseCm.seen && mouseCm.seen.prevented === false && !afterMouseCm.sheet && !afterMouseCm.ctx, { coarse, mouseCm, afterMouseCm });
+    } else {
+      check('① 细指针设备上的鼠标右键（阳性对照）：被接管，手机布局下弹的是底部一张纸',
+        !!mouseCm && mouseCm.seen && mouseCm.seen.prevented === true && afterMouseCm.sheet && !afterMouseCm.ctx, { coarse, mouseCm, afterMouseCm });
+      await closeSheet();
+      check('纸能被遮罩点掉', await evaluate(`!document.querySelector('.m-sheet2')`));
+    }
+
+    // ② 真机的形状：真触摸长按，紧跟一个标着 mouse 的 contextmenu
+    if (word) {
+      const touch = [{ x: word.x, y: word.y, radiusX: 6, radiusY: 6, force: 1, id: 1 }];
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: touch });
+      await new Promise((r) => setTimeout(r, 600));
+      const afterPress = await overlays();
+      check('真触摸长按正文：不弹桌面右键菜单，也不弹底部菜单', !afterPress.sheet && !afterPress.ctx, afterPress);
+      const phoneCm = await fire('mouse');
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await new Promise((r) => setTimeout(r, 400));
+      const afterPhoneCm = await overlays();
+      check('② 真机形状（touchstart 之后来的 contextmenu 标着 mouse）：放行、不弹菜单——v0.11.35 就是栽在这儿',
+        !!phoneCm.seen && phoneCm.seen.inEditor && phoneCm.seen.prevented === false && !afterPhoneCm.sheet && !afterPhoneCm.ctx, { phoneCm, afterPhoneCm });
+    }
+
+    // ③ pointerType='touch'
+    const touchCm = word ? await fire('touch') : null;
+    await new Promise((r) => setTimeout(r, 300));
+    const afterTouchCm = await overlays();
+    check('③ 手指来的 contextmenu：没被 preventDefault、不弹任何菜单（选词 / 把手 / 系统复制条归系统）',
+      !!touchCm && touchCm.seen && touchCm.seen.inEditor && touchCm.seen.pointerType === 'touch' && touchCm.seen.prevented === false && !afterTouchCm.sheet && !afterTouchCm.ctx, { touchCm, afterTouchCm });
     await shot('mobile-longpress.png');
 
     // 把手拖出来的选区就是 DOM 选区：这里直接造一个（headless 没有安卓那套把手）

@@ -80,15 +80,34 @@ export interface SelectionTools {
   more(): void;
 }
 
+/** 一次 touchstart 之后多久以内来的 contextmenu 算长按（安卓长按阈值约 400–500ms；CodeMirror 自己用的也是 2s） */
+export const TOUCH_CONTEXTMENU_WINDOW_MS = 2000;
+
 /**
  * 这次 contextmenu 是不是手指长按来的。
- * Chromium 106+ 的 contextmenu 是 PointerEvent，`pointerType` 说得清是谁触发的；
- * 更老的 WebView 还是 MouseEvent，那就按设备的主指针类型判（手机 = coarse）。
+ *
+ * v0.11.35 只看 `pointerType === 'touch'`，真机上失效：用户的 WebView 长按送来的 contextmenu
+ * 没带 'touch'，于是走了鼠标那条路、弹了底部菜单。**不能把宝押在这个字段上**——
+ * 它由 Chromium 从手势事件换算而来，各版本 WebView 表现不一。判据改成三条，任一成立即手指：
+ * 1. `pointerType === 'touch'`；
+ * 2. 刚刚（2s 内）在编辑区发生过 touchstart——长按必然以一次触摸开始，鼠标右键不会；
+ *    这也是 CodeMirror 区分触摸与鼠标的办法（inputState.lastTouchTime）；
+ * 3. 手机布局且设备主指针是粗指针（`pointer: coarse`）——手机上没有"右键"这回事。
+ * 只有 `pointerType` 明确是 mouse / pen 且以上都不成立时才当鼠标。
  */
-export function contextMenuFromTouch(ev: Event): boolean {
+export function contextMenuFromTouch(
+  ev: Event,
+  opts: { lastTouchAt: number; mobileLayout: boolean; now?: number }
+): boolean {
   const pt = (ev as Partial<PointerEvent>).pointerType;
-  if (typeof pt === 'string') return pt === 'touch';
-  return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  if (pt === 'touch') return true;
+  const now = opts.now ?? Date.now();
+  if (opts.lastTouchAt > 0 && now - opts.lastTouchAt < TOUCH_CONTEXTMENU_WINDOW_MS) return true;
+  const coarse = typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  if (opts.mobileLayout && coarse) return true;
+  if (pt === 'mouse' || pt === 'pen') return false;
+  // 老 WebView 的 contextmenu 还是 MouseEvent（没有 pointerType）：按设备主指针判
+  return coarse;
 }
 
 export interface MarkdownEditorProps {
@@ -1480,6 +1499,8 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
     return items;
   };
 
+  /** 编辑区最近一次 touchstart 的时刻（contextMenuFromTouch 的判据 2） */
+  const lastTouchAt = useRef(0);
   const openEditorMenu = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement | null;
     /*
@@ -1491,7 +1512,7 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
      * 滑不动、选不了，菜单里复制还是灰的（没选区），只剩全选能点」。
      * 只有落在链接 / 图片上才由我们接管（它们没有文字可选），其余一律放行。
      */
-    if (contextMenuFromTouch(e.nativeEvent)) {
+    if (contextMenuFromTouch(e.nativeEvent, { lastTouchAt: lastTouchAt.current, mobileLayout: !!props.mobile })) {
       const onLinkOrImage = !!target?.closest?.('.cm-live-link, a, img');
       if (!onLinkOrImage) return;
     }
@@ -1589,6 +1610,10 @@ export function MarkdownEditor(props: MarkdownEditorProps) {
         className="md-body"
         /* v0.11.0：编辑区右键菜单。WebView 自带的那张只有三四项，必须挡掉 */
         onContextMenu={openEditorMenu}
+        /* v0.11.36：记下触摸时刻，长按来的 contextmenu 靠它识别（capture：别被里面的 stopPropagation 挡住） */
+        onTouchStartCapture={() => {
+          lastTouchAt.current = Date.now();
+        }}
         /* 兜底：CM 的 contentDOM 那条没接住时（某些 WebView 的事件传播不一样）
            还有这一层。handledPastes 保证同一次粘贴不会插两张图 */
         onPaste={(e) => {
