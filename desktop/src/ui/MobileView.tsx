@@ -13,6 +13,7 @@ import { RibbonIcon } from './Icons';
 import { MarkdownEditor, type SelectionApi, type SelectionTools } from './MarkdownEditor';
 import type { AiMenuAction } from '../lib/editorMenu';
 import { PdfViewer } from './PdfViewer';
+import { trackKeyboardInset } from '../lib/caretInView';
 import { BaseView } from './BaseView';
 import { HtmlViewer } from './HtmlViewer';
 import { HistoryPane, type HistoryPaneProps } from './HistoryPane';
@@ -571,6 +572,9 @@ export function MobileView(props: Props) {
     }
     return groups;
   };
+
+  // v0.11.38：软键盘盖住的高度 → --kb-inset（原生把 WebView 顶起时恒为 0，见 lib/caretInView）
+  useEffect(() => trackKeyboardInset(), []);
 
   // 打开笔记后自动收起抽屉
   useEffect(() => {

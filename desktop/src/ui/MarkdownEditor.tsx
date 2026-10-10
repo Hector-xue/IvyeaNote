@@ -37,6 +37,7 @@ import {
   toggleTaskList,
   type EditResult,
 } from '../lib/format';
+import { caretAboveBars } from '../lib/caretInView';
 import {
   imageResolver,
   imagesReadyEffect,
@@ -210,6 +211,8 @@ function cmExtensions(
      * 笔记软件的正文永远该按视口宽度回绕（Obsidian 也没有「不换行」这个选项）。
      */
     EditorView.lineWrapping,
+    // v0.11.38：滚动到光标时把底部栏 / 软键盘算作看不见，键盘升起时把光标滚回来
+    ...caretAboveBars(),
     // v0.5.0 U1：Live Preview——默认隐藏行号（Obsidian 风格），装饰渲染见 livePreview.ts
     EditorView.theme({ '.cm-gutters': { display: 'none' } }),
     EditorView.theme(livePreviewTheme),

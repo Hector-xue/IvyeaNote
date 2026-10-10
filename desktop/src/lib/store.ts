@@ -47,6 +47,17 @@ export interface VaultMeta {
    * 老数据没有这个字段：第一次同步时直接记成当前位置，行为不变。
    */
   syncedAt?: string;
+  /**
+   * v0.11.38：上一次**全量对账**（从游标 0 把每个路径的最新一条和账本比一遍）完成的时间。
+   *
+   * 2026-09-30 新手机首次同步，中途锁屏 38 秒，这段时间里约 200 条变更的 blob
+   * 一个都没下载下来（请求根本没发出去），引擎却照样把游标推过去了——「日常代办」
+   * 「个人空间」从此再也拉不到。游标问题已修（见 lib/sync 的 pullOnly），但已经
+   * 走过去的游标不会自己倒回来：没有这个字段的账本，第一次同步就做一次全量对账补齐。
+   */
+  reconciledAt?: number;
+  /** v0.11.38：上一轮有变更没应用成功（不是断网那种），要尽快再全量对账一次 */
+  reconcileDue?: boolean;
 }
 
 export interface Account {
@@ -193,7 +204,7 @@ export function mergeLocalIntoCloud(local: VaultMeta, cloud: VaultMeta): VaultMe
  * 覆盖成磁盘真实路径，那条路不受影响。
  */
 /**
- * v0.11.28：把一轮同步改过的账本（六个字段）从引擎用的那个对象搬到 state 里现在这个对象上。
+ * v0.11.28：把一轮同步改过的账本（八个字段）从引擎用的那个对象搬到 state 里现在这个对象上。
  * 两者是同一个对象时什么都不做。引擎只认闭包里的对象；state 里的对象一旦被谁克隆过
  * （启动对齐 relink 曾经这么干），整体替换型的写入（cursor / tombstones / assets…）就落不到
  * state 上——版本号还在、墓碑没了，云端早删掉的文件在这台设备上永远算"本地少了"。
@@ -206,6 +217,8 @@ export function commitLedger(live: VaultMeta, used: VaultMeta): void {
   live.assets = used.assets;
   live.tombstones = used.tombstones;
   live.syncedAt = used.syncedAt;
+  live.reconciledAt = used.reconciledAt;
+  live.reconcileDue = used.reconcileDue;
 }
 
 export function newVaultMeta(id: number, name: string): VaultMeta {

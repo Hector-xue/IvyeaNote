@@ -153,6 +153,8 @@ vi.mock('@codemirror/view', () => ({
     setState() {}
     destroy() {}
     static updateListener = { of: () => ({}) };
+    // v0.11.38：光标避让底部栏（lib/caretInView）用到 scrollMargins
+    static scrollMargins = { of: () => ({}) };
     static theme = () => ({});
     // v0.10.2：软换行扩展与 DOM 事件处理器。桩里缺了 domEventHandlers 会在
     // 建实例时抛「is not a function」，整页渲染直接挂——补齐才对得上真 CM

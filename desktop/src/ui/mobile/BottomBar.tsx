@@ -70,7 +70,8 @@ interface Props {
 
 export function BottomBar(props: Props) {
   return (
-    <div className="m-bottom-wrap">
+    /* data-bottom-obstacle：编辑器滚动到光标时把这块当成"挡住正文"（lib/caretInView.ts） */
+    <div className="m-bottom-wrap" data-bottom-obstacle="">
       {props.formatOpen && props.formatAvailable && (
         <div className="m-format" role="toolbar" aria-label="格式">
           {props.selection && (
