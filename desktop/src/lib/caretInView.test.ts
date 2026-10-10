@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bottomObstruction, keyboardInset } from './caretInView';
+import { bottomObstruction, keyboardInset, keyboardUp } from './caretInView';
 
 function fakeWin(innerHeight: number, vv: { height: number; offsetTop?: number; scale?: number } | null): Window {
   return {
@@ -36,5 +36,18 @@ describe('keyboardInset：键盘盖住布局视口的高度', () => {
   it('几十像素的抖动（地址栏 / 舍入）不算键盘；没有 visualViewport → 0', () => {
     expect(keyboardInset(fakeWin(780, { height: 760 }))).toBe(0);
     expect(keyboardInset(fakeWin(780, null))).toBe(0);
+  });
+});
+
+describe('keyboardUp：键盘是否升起', () => {
+  it('原生顶起 WebView：布局视口比基线矮一大截 → 升起', () => {
+    expect(keyboardUp(430, 780, 0)).toBe(true);
+  });
+  it('WebView 没被顶起：只看 inset', () => {
+    expect(keyboardUp(780, 780, 350)).toBe(true);
+  });
+  it('键盘收起 / 地址栏几十像素的伸缩 → 没升起', () => {
+    expect(keyboardUp(780, 780, 0)).toBe(false);
+    expect(keyboardUp(720, 780, 0)).toBe(false);
   });
 });

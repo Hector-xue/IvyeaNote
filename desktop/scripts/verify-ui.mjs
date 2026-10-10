@@ -3549,11 +3549,14 @@ await new Promise((r) => setTimeout(r, 2600));
         const main = document.querySelector('.m-main').getBoundingClientRect();
         return { caretTop: Math.round(c.top), caretBottom: Math.round(c.bottom), barTop: Math.round(bar.top),
           mainTop: Math.round(main.top), focused: !!document.activeElement?.closest('.cm-content'),
-          formatOpen: !!document.querySelector('.m-format'), vh: innerHeight };
+          formatOpen: !!document.querySelector('.m-format'), vh: innerHeight,
+          navShown: (() => { const n = document.querySelector('.m-bottom'); return !!n && n.getBoundingClientRect().height > 0; })() };
       })()`;
       const k1 = await evaluate(caretGeom);
       check('键盘弹起后光标落在底部栏之上（没被格式条 / 导航栏 / 键盘盖住）',
         !!k1 && k1.focused && k1.vh === 430 && k1.caretBottom <= k1.barTop && k1.caretTop >= k1.mainTop, k1);
+      // v0.11.39：编辑中键盘升起 → 导航栏（搜索 / 新建 / 大纲 / 同步）收起，只留格式条
+      check('编辑中键盘升起时导航栏收起、格式条还在', !!k1 && k1.formatOpen && !k1.navShown, k1);
       await shot('mobile-keyboard-caret.png');
       for (let i = 0; i < 3; i++) {
         await send('Input.insertText', { text: '键盘测试' });
@@ -3565,6 +3568,13 @@ await new Promise((r) => setTimeout(r, 2600));
       check('连打几行之后光标仍在底部栏之上（打字时视野跟着光标走）',
         !!k2 && k2.caretBottom <= k2.barTop && k2.caretTop >= k2.mainTop, k2);
       await shot('mobile-keyboard-typing.png');
+      // 按返回键收了键盘、焦点还在编辑器里：导航栏必须回来，不然搜索 / 同步没入口
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 780, deviceScaleFactor: 2, mobile: true });
+      await new Promise((r) => setTimeout(r, 500));
+      const k3 = await evaluate(caretGeom);
+      check('键盘收起（焦点仍在编辑器）后导航栏回来', !!k3 && k3.focused && k3.navShown, k3);
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 430, deviceScaleFactor: 2, mobile: true });
+      await new Promise((r) => setTimeout(r, 500));
       // 复原：精确退格删掉自己打的 3 ×（4 字 + 换行）。别用 Ctrl+Z——CM 会把相邻输入并成
       // 一个撤销步，按次数撤会撤过头，把前面几段写进这篇笔记的内容也撤掉，后面的段落跟着红
       for (let i = 0; i < 15; i++) {

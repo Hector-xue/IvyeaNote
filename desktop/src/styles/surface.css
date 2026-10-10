@@ -3058,3 +3058,14 @@ button.st-item:hover {
 .m-app .m-main {
   padding-bottom: calc(var(--m-bottom-h) + var(--m-format-h) + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
 }
+
+/* ============================================================ v0.11.39
+   编辑中键盘升起 → 收起导航栏（搜索 / 新建 / 大纲 / 同步），只留格式条。
+   用户原话：「键盘上面的搜索，加号那一栏没必要在编辑文本的时候出现吧，挤的正文显得可视区域太少了」。
+   打字时这四颗键用不上，却和格式条叠成两层压在键盘上。两个条件都要：
+   - format-open = 编辑器有焦点且在编辑态；
+   - data-kb = 键盘真的升着（caretInView.trackKeyboardInset 量）——按返回键收了键盘、
+     焦点却还在编辑器里时，导航栏要回来，不然搜索 / 同步就没入口了。
+   --m-bottom-h 归零，正文底部留白和 toast 位置跟着让出来。 */
+:root[data-kb] .m-app.format-open { --m-bottom-h: 0px; }
+:root[data-kb] .m-app.format-open .m-bottom { display: none; }

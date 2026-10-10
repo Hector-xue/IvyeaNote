@@ -51,6 +51,17 @@ export function keyboardInset(win: Window = window): number {
   return hidden > 40 ? Math.round(hidden) : 0;
 }
 
+/**
+ * 键盘是否升起（v0.11.39）。两种形态都要认：
+ * - 原生把 WebView 顶起（v0.11.37 起的常态）：布局视口整体变矮，`keyboardInset` 恒 0，
+ *   只能拿"同一宽度下见过的最高高度"做基线比——矮下去一大截就是键盘；
+ * - WebView 没被顶起：`inset` > 0。
+ * 150px 以下的变化是地址栏 / 系统条，不算。
+ */
+export function keyboardUp(innerHeight: number, baseline: number, inset: number): boolean {
+  return inset > 0 || baseline - innerHeight > 150;
+}
+
 /** 与 CodeMirror scrollRectIntoView 同一判定：第一个真能滚的祖先；没有就是窗口 */
 function scrollerBottom(view: EditorView): number {
   const win = view.dom.ownerDocument.defaultView ?? window;
@@ -153,8 +164,16 @@ export function caretAboveBars(): Extension[] {
 export function trackKeyboardInset(win: Window = window): () => void {
   const root = win.document.documentElement;
   let last = -1;
+  /* 每个宽度各记一个最高高度：横竖屏切换宽度就变了，不会拿竖屏的高去比横屏 */
+  const tallest = new Map<number, number>();
   const update = () => {
     const v = keyboardInset(win);
+    const h = win.innerHeight;
+    const base = Math.max(tallest.get(win.innerWidth) ?? 0, h);
+    tallest.set(win.innerWidth, base);
+    // 键盘升起时挂 data-kb：编辑中就把导航栏（搜索 / 新建 / 大纲 / 同步）收起来，正文多出一行半
+    if (keyboardUp(h, base, v)) root.setAttribute('data-kb', '');
+    else root.removeAttribute('data-kb');
     if (v === last) return;
     last = v;
     root.style.setProperty('--kb-inset', `${v}px`);
@@ -168,5 +187,6 @@ export function trackKeyboardInset(win: Window = window): () => void {
     win.visualViewport?.removeEventListener('scroll', update);
     win.removeEventListener('resize', update);
     root.style.removeProperty('--kb-inset');
+    root.removeAttribute('data-kb');
   };
 }
