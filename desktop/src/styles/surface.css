@@ -1968,6 +1968,16 @@ button.st-item:hover {
   display: block;
   min-height: 0;
 }
+/*
+ * v0.11.38：`.md-editor` 这一层当时漏了——它还是 `flex:1`，盒子被钉在 .m-main 的剩余高度
+ * （实测 230px），内容却溢出在外（overflow 是 visible）。看着一样，但 CodeMirror 的
+ * scrollIntoView 逐层往上找"能滚的祖先"时只比 scrollHeight > clientHeight、不看 overflow，
+ * 会把光标矩形**裁进这 230px** 再交给 .m-main——于是光标明明在键盘 / 底部栏底下，
+ * 它也判定"看得见"，一像素都不滚。手机上"打字也不跟着走"就是这一条。
+ */
+.m-app .m-main .md-editor {
+  flex: none;
+}
 .m-app .m-main .cm-editor {
   height: auto;
   min-height: 0;
@@ -3036,3 +3046,15 @@ button.st-item:hover {
   color: #b3402f;
 }
 /* 手机端：红条带一颗按钮，和"登录已过期"同一形状 */
+
+/* ============================================================ v0.11.38
+   软键盘兜底：--kb-inset = 键盘盖住布局视口的那一截（lib/caretInView.ts 量）。
+   v0.11.37 的原生修复把 WebView 顶起来时它恒为 0，下面两条什么都不变；
+   某台机器上原生修复没生效（WebView 只缩视觉视口）时，底部栏跟着抬到键盘上方，
+   正文底部也多留出这一截，最后几行才滚得上来。 */
+.m-app .m-bottom-wrap {
+  bottom: var(--kb-inset, 0px);
+}
+.m-app .m-main {
+  padding-bottom: calc(var(--m-bottom-h) + var(--m-format-h) + env(safe-area-inset-bottom) + var(--kb-inset, 0px));
+}

@@ -491,20 +491,41 @@ export async function pullOnly(
    * 这种模式下游标也等应用完再落：中途崩了下次从头再来，不会留一半。
    */
   const replay = report.relocated ? new Map<string, ServerChange>() : null;
-  const apply = async (ch: ServerChange) => {
+  /*
+   * v0.11.38：一条变更没应用成功，**游标不许越过它**。
+   *
+   * 原来 `apply` 失败只记一行错误，游标照样推到页尾。2026-09-30 新手机首次同步，
+   * 中途锁屏 38 秒，那段时间的 blob 请求一个都没发出去，约 200 条变更（「日常代办」
+   * 整个历史都在里面）就这样"失败"着被走过去了——游标不会回头，这些文件从此再也
+   * 拉不到，报告里那几行错误也在下一轮被冲掉。
+   *
+   * - 链路断了（断网 / 登录过期 / 服务端 5xx）：后面的每一条都会一样失败，立刻停下，
+   *   游标停在最后一条成功的位置，下一轮从这里接着拉；
+   * - 只是这一个文件出错（写不进去 / 内容坏了）：别让它挡住其它文件，继续往下走，
+   *   但记一笔 `reconcileDue`，稍后全量对账时再补它。
+   */
+  let halted = false;
+  const apply = async (ch: ServerChange): Promise<boolean> => {
     try {
       await applyRemote(client, meta, io, vaultPath, ch, report);
+      return true;
     } catch (e) {
       markAuthExpired(e, report);
       markOffline(e, report);
       report.errors.push(`应用 ${ch.path} 失败：${msg(e)}`);
+      if (isLinkFailure(e)) {
+        halted = true;
+        return false;
+      }
+      meta.reconcileDue = true;
+      return true;
     }
   };
 
   // ---------- 游标拉取 ----------
   let cursor = meta.cursor;
   let fetchFailed = false;
-  for (let round = 0; round < 100; round++) {
+  pages: for (let round = 0; round < 100; round++) {
     let page;
     try {
       page = await client.pullPage(meta.id, cursor);
@@ -530,21 +551,109 @@ export async function pullOnly(
        * 账本已经知道 ≥ 这个版本 → 才是"已在本地"；否则和别人的变更一视同仁去应用
        * （本地内容和服务端一样时 applyRemote 只记账不落盘）。
        */
-      if (ch.device_id === deviceId && (meta.versions[ch.path] ?? -1) >= ch.version) continue;
-      if (replay) replay.set(ch.path, ch);
-      else await apply(ch);
+      if (ch.device_id === deviceId && (meta.versions[ch.path] ?? -1) >= ch.version) {
+        if (!replay) meta.cursor = ch.seq;
+        continue;
+      }
+      if (replay) {
+        replay.set(ch.path, ch);
+        continue;
+      }
+      if (!(await apply(ch))) break pages;
+      meta.cursor = ch.seq; // 逐条落：崩溃 / 断网都只会从没应用的那条重来
     }
     const next = page.next_cursor;
-    if (!replay) meta.cursor = next; // 每页落盘，崩溃安全
+    if (!replay) meta.cursor = next;
     if (next === cursor) break;
     cursor = next;
   }
   if (replay && !fetchFailed) {
-    for (const ch of replay.values()) await apply(ch);
-    meta.cursor = cursor;
+    for (const ch of replay.values()) {
+      if (!(await apply(ch))) break;
+    }
+    // 回放中途断网：游标留在 0，下一轮整套重来（已应用的会被账本跳过，不重复下载）
+    if (!halted) {
+      meta.cursor = cursor;
+      // 回放本身就是一次全量对账，不必紧接着再扫一遍
+      if (!meta.reconcileDue) meta.reconciledAt = Date.now();
+    }
+  }
+
+  /*
+   * v0.11.38：**全量对账**——游标以外的第二道保险。
+   *
+   * 游标只往前走，任何一次"走过去了却没应用成功"（上面修掉的那种、或者以后别的什么）
+   * 都会让某个文件在这台设备上永远停在旧版本、或者干脆不存在，而且没有任何东西会发现。
+   * 对账从 0 把每个路径的**最新一条**和账本比一遍，账本落后的就照常 applyRemote
+   * （规矩与平时拉取完全一样：3-way 合并 / 冲突副本，不覆盖本地改动）。
+   * 只在三种时候做：老账本第一次（没有 reconciledAt——把 v0.11.37 及以前漏掉的补回来）、
+   * 上一轮有文件没应用成功、以及距上次超过一周。平时一轮同步不多发一个请求。
+   */
+  if (!fetchFailed && !halted && !replay && reconcileWanted(meta)) {
+    await reconcile(client, meta, io, vaultPath, report);
   }
 
   return report;
+}
+
+/** 断网 / 登录过期 / 服务端出错：后面的每一条都会一样失败，不是"这个文件"的问题 */
+function isLinkFailure(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return false;
+  return e.code === 'network_error' || e.code === 'refresh_invalid' || e.status === 401 || e.status === 429 || e.status >= 500;
+}
+
+const RECONCILE_EVERY_MS = 7 * 24 * 3600 * 1000;
+/** 有文件没应用成功时，别每轮（几秒一次）都整库重扫：至少隔这么久 */
+const RECONCILE_RETRY_MS = 5 * 60 * 1000;
+
+export function reconcileWanted(meta: VaultMeta, now = Date.now()): boolean {
+  if (meta.reconciledAt === undefined) return true;
+  if (meta.reconcileDue) return now - meta.reconciledAt >= RECONCILE_RETRY_MS;
+  return now - meta.reconciledAt >= RECONCILE_EVERY_MS;
+}
+
+/**
+ * 从游标 0 把云端变更流收成"每个路径最后一条"，账本落后的逐条补上。
+ * 不动游标、不清账本：账本已经知道的版本 applyRemote 自己会跳过，不重复下载。
+ */
+export async function reconcile(
+  client: SyncClient,
+  meta: VaultMeta,
+  io: FileIO,
+  vaultPath: string,
+  report: SyncReport
+): Promise<void> {
+  const latest = new Map<string, ServerChange>();
+  let cursor = 0;
+  for (let round = 0; round < 1000; round++) {
+    let page;
+    try {
+      page = await client.pullPage(meta.id, cursor);
+    } catch (e) {
+      markAuthExpired(e, report);
+      markOffline(e, report);
+      report.errors.push(`对账失败：${msg(e)}`);
+      return; // 没对完不记 reconciledAt，下一轮再来
+    }
+    for (const ch of page.changes) latest.set(ch.path, ch);
+    if (page.next_cursor === cursor || page.changes.length === 0) break;
+    cursor = page.next_cursor;
+  }
+  let failed = false;
+  for (const ch of latest.values()) {
+    if ((meta.versions[ch.path] ?? -1) >= ch.version) continue;
+    try {
+      await applyRemote(client, meta, io, vaultPath, ch, report);
+    } catch (e) {
+      markAuthExpired(e, report);
+      markOffline(e, report);
+      report.errors.push(`补齐 ${ch.path} 失败：${msg(e)}`);
+      if (isLinkFailure(e)) return;
+      failed = true;
+    }
+  }
+  meta.reconciledAt = Date.now();
+  meta.reconcileDue = failed;
 }
 
 /**

@@ -3513,6 +3513,70 @@ await new Promise((r) => setTimeout(r, 2600));
     check('选区折叠后 复制 / 剪切 收走，「更多」留着（插表格 / 段落设置不需要选区）', collapsed.join(',') === '更多', collapsed);
   }
 
+  /*
+   * v0.11.38：**键盘弹起后光标不许被盖住，打字也要跟着走。**
+   * 用户原话：「光标放在屏幕下半部准备修改，键盘弹出直接把要修改的地方盖住了，
+   * 即使输入内容也不会出现在眼前」。根因是 .m-main 一直延伸到屏幕底、底部栏浮在
+   * 上面，CodeMirror 把被底部栏盖住的那几行当成"看得见"。
+   * 这里照真机的形状来：点屏幕下半部的一行 → 视口高度从 780 缩到 430（原生把 WebView
+   * 顶起来就是这样）→ 光标必须落在底部栏上沿之上；再打几个字，仍然在。
+   */
+  {
+    await evaluate(`(() => { const m = document.querySelector('.m-main'); if (m) m.scrollTop = 0; return true })()`);
+    await new Promise((r) => setTimeout(r, 300));
+    const low = await evaluate(`(() => {
+      const lines = [...document.querySelectorAll('.m-main .cm-content .cm-line')];
+      const l = lines.find((x) => { const r = x.getBoundingClientRect(); return r.top > 560 && r.bottom < 680 && x.textContent.trim().length > 2; });
+      if (!l) return null;
+      const r = l.getBoundingClientRect();
+      return { x: Math.round(r.left + Math.min(40, r.width / 2)), y: Math.round(r.top + r.height / 2) };
+    })()`);
+    check('找得到屏幕下半部的一行正文来点', !!low, low);
+    if (low) {
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await send('Input.dispatchMouseEvent', { type, x: low.x, y: low.y, button: 'left', clickCount: 1, buttons: 1 });
+      }
+      await new Promise((r) => setTimeout(r, 300));
+      // 键盘升起：WebView 变矮
+      await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 430, deviceScaleFactor: 2, mobile: true });
+      await new Promise((r) => setTimeout(r, 900));
+      const caretGeom = `(() => {
+        const sel = getSelection();
+        if (!sel || !sel.rangeCount) return null;
+        const rects = sel.getRangeAt(0).getClientRects();
+        const c = rects.length ? rects[0] : sel.getRangeAt(0).getBoundingClientRect();
+        const bar = document.querySelector('.m-bottom-wrap').getBoundingClientRect();
+        const main = document.querySelector('.m-main').getBoundingClientRect();
+        return { caretTop: Math.round(c.top), caretBottom: Math.round(c.bottom), barTop: Math.round(bar.top),
+          mainTop: Math.round(main.top), focused: !!document.activeElement?.closest('.cm-content'),
+          formatOpen: !!document.querySelector('.m-format'), vh: innerHeight };
+      })()`;
+      const k1 = await evaluate(caretGeom);
+      check('键盘弹起后光标落在底部栏之上（没被格式条 / 导航栏 / 键盘盖住）',
+        !!k1 && k1.focused && k1.vh === 430 && k1.caretBottom <= k1.barTop && k1.caretTop >= k1.mainTop, k1);
+      await shot('mobile-keyboard-caret.png');
+      for (let i = 0; i < 3; i++) {
+        await send('Input.insertText', { text: '键盘测试' });
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+      }
+      await new Promise((r) => setTimeout(r, 400));
+      const k2 = await evaluate(caretGeom);
+      check('连打几行之后光标仍在底部栏之上（打字时视野跟着光标走）',
+        !!k2 && k2.caretBottom <= k2.barTop && k2.caretTop >= k2.mainTop, k2);
+      await shot('mobile-keyboard-typing.png');
+      // 复原：精确退格删掉自己打的 3 ×（4 字 + 换行）。别用 Ctrl+Z——CM 会把相邻输入并成
+      // 一个撤销步，按次数撤会撤过头，把前面几段写进这篇笔记的内容也撤掉，后面的段落跟着红
+      for (let i = 0; i < 15; i++) {
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+      }
+      await evaluate(`(() => { document.activeElement?.blur?.(); return true })()`);
+    }
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 780, deviceScaleFactor: 2, mobile: true });
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
   await send('Emulation.clearDeviceMetricsOverride');
   await send('Page.reload');
   await new Promise((r) => setTimeout(r, 2400));

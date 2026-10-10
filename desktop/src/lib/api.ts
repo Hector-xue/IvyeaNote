@@ -124,6 +124,22 @@ export class SyncClient {
     return fetch(this.baseUrl + path, { ...init, headers });
   }
 
+  /**
+   * v0.11.38：`raw` 的"请求没发出去"统一包成 `network_error`。
+   *
+   * blob 收发原来直接 `await this.raw(...)`，fetch 抛的是原生 `TypeError: Failed to fetch`，
+   * 同步引擎认不出它是"断网"，只当成某一个文件的普通错误——2026-09-30 新手机首次同步
+   * 中途锁屏 38 秒，约 200 条变更就这样一条条"失败"过去，游标却照样往前走了。
+   */
+  private async rawNet(path: string, init: RequestInit = {}): Promise<Response> {
+    try {
+      return await this.raw(path, init);
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      throw new ApiError(0, 'network_error', `连不上服务器（${raw}）。${FETCH_FAIL_HINT}`);
+    }
+  }
+
   /** 带 401 自动 refresh 重试一次的 JSON 请求 */
   /** v0.6.1 H6: generate one-time pairing code (60s) */
   createPairCode(): Promise<{ code: string; expires_in: number }> {
@@ -306,7 +322,7 @@ export class SyncClient {
    */
   // v0.11.11 修
   async getBlob(hash: string, retried = false): Promise<ArrayBuffer> {
-    const res = await this.raw(`/blobs/${hash}`);
+    const res = await this.rawNet(`/blobs/${hash}`);
     if (res.status === 401 && !retried && this.tokens.refresh) {
       await this.ensureRefreshed();
       return this.getBlob(hash, true);
@@ -317,7 +333,7 @@ export class SyncClient {
 
   async putBlob(bytes: Uint8Array, retried = false): Promise<void> {
     const hash = await sha256Hex(bytes);
-    const res = await this.raw(`/blobs/${hash}`, {
+    const res = await this.rawNet(`/blobs/${hash}`, {
       method: 'PUT',
       body: bytes as unknown as BodyInit,
     });
