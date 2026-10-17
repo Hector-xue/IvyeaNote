@@ -318,4 +318,64 @@ suite('端到端：真服务端 + 真目录', () => {
     r = await syncVault(clientQ, metaQ, io, 'device-Q', Q);
     expect((await io.list(Q)).filter((p) => !p.startsWith('.')).sort()).toEqual(qBefore.sort());
   }, 120_000);
+
+  /*
+   * v0.11.40：**2026-10-16 新手机那次原样重演。** 旧手机把同一篇笔记以 `.md.txt` /
+   * `.md (1).txt` 推上去又删掉（9 月 SAF 事故 + 清理）；新手机首次同步——
+   *   - 一张白纸：历史副本一个都不该落盘（连回收站都不该有）；
+   *   - 上一轮已经落了一地、账本没落盘：收拾进回收站，一条 .txt 都不推回云端。
+   * 顺带验登录宽限：轮换过的旧 refresh token 还能再刷一次。
+   */
+  it('新手机首次同步：云端早已删除的历史副本不落盘、不复活', async () => {
+    const io = diskIO();
+    const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.access}` };
+    const v2 = (await (
+      await fetch(`${base}/api/v1/vaults`, { method: 'POST', headers: auth, body: JSON.stringify({ name: 'leftover' }) })
+    ).json()) as { id: number };
+    const NOTE = '# CNC\n加工笔记\n';
+    const O = path.join(workdir, 'O');
+    const N1 = path.join(workdir, 'N1');
+    const N2 = path.join(workdir, 'N2');
+    for (const d of [O, N1, N2]) mkdirSync(path.join(d, 'Ivyea'), { recursive: true });
+
+    // 旧手机：笔记 + 两份改名副本推上去，再删掉副本
+    const clientO = new SyncClient(base, { ...tokens }, (t) => (tokens = t), 'device-O');
+    const metaO = newVaultMeta(v2.id, 'leftover');
+    for (const f of ['CNC.md', 'CNC.md.txt', 'CNC.md (1).txt']) writeFileSync(path.join(O, 'Ivyea', f), NOTE);
+    expect((await syncVault(clientO, metaO, io, 'device-O', O)).errors).toEqual([]);
+    rmSync(path.join(O, 'Ivyea/CNC.md.txt'));
+    rmSync(path.join(O, 'Ivyea/CNC.md (1).txt'));
+    expect((await syncVault(clientO, metaO, io, 'device-O', O)).errors).toEqual([]);
+
+    const live = (dir: string) => readdirSync(path.join(dir, 'Ivyea')).filter((f) => f.endsWith('.txt'));
+
+    // 新手机①：白纸
+    const clientN = new SyncClient(base, { ...tokens }, (t) => (tokens = t), 'device-N');
+    const metaN1 = newVaultMeta(v2.id, 'leftover');
+    expect((await syncVault(clientN, metaN1, io, 'device-N', N1)).errors).toEqual([]);
+    expect(readFileSync(path.join(N1, 'Ivyea/CNC.md'), 'utf8')).toBe(NOTE);
+    expect(live(N1)).toEqual([]);
+    expect((await io.list(N1)).filter((p) => p.endsWith('.txt'))).toEqual([]);
+
+    // 新手机②：上一轮落了一地、账本没落盘
+    for (const f of ['CNC.md', 'CNC.md.txt', 'CNC.md (1).txt']) writeFileSync(path.join(N2, 'Ivyea', f), NOTE);
+    const metaN2 = newVaultMeta(v2.id, 'leftover');
+    expect((await syncVault(clientN, metaN2, io, 'device-N', N2)).errors).toEqual([]);
+    expect(live(N2)).toEqual([]);
+    const stream = (await clientN.pullPage(v2.id, 0)).changes;
+    expect(stream.filter((c) => c.device_id === 'device-N' && c.op === 'upsert')).toEqual([]);
+
+    // 登录宽限：同一个 refresh token 刷两次都成功（第二次模拟"新 token 没存下来"）
+    const refreshWith = (rt: string) =>
+      fetch(`${base}/api/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+    const old = tokens.refresh;
+    const first = await refreshWith(old);
+    expect(first.status).toBe(200);
+    tokens = { access: ((await first.json()) as { access_token: string }).access_token, refresh: old };
+    expect((await refreshWith(old)).status).toBe(200);
+  }, 120_000);
 });

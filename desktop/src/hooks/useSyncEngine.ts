@@ -130,6 +130,8 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
       setSyncing(true);
       try {
         const report = await RUNNERS[mode](client, vault, io, deviceId, vault.localPath ?? '', opts);
+        // v0.11.40：账本一拿到就落盘，别等后面的刷新列表 / 重接——它们抛了账本就白算一轮
+        persist(vault);
         setLastReport(quiet(report, auto));
         if (report.authExpired) onAuthExpired?.();
         if (report.unlinked && onUnlinked && !relinked.current) {
@@ -151,6 +153,16 @@ export function useSyncEngine(deps: SyncEngineDeps): SyncEngine {
         if (mode === 'pull') await afterPull();
         persist(vault);
       } catch (e) {
+        /*
+         * v0.11.40：中途抛出也要把账本落盘。引擎是逐条改账本的（写完文件才记版本），
+         * 半轮的账本是一致的；不落盘的话，已经落到磁盘上的文件下一轮全成了"账本不认识
+         * 的本地文件"——2026-10-16 新手机重放出来的历史 .txt 就是这么被当成新文件往上推的。
+         */
+        try {
+          persist(vault);
+        } catch {
+          // 落盘本身失败就算了，下面照样出报告
+        }
         // 失败也要出一份报告：静默失败会让用户以为同步成功了
         setLastReport(
           quiet(

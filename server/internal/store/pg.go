@@ -166,8 +166,9 @@ func (s *PGStore) GetRefreshTokenUser(ctx context.Context, token string) (int64,
 	return uid, nil
 }
 
-func (s *PGStore) DeleteRefreshToken(ctx context.Context, token string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM refresh_tokens WHERE token=$1`, token)
+func (s *PGStore) RetireRefreshToken(ctx context.Context, token string, until time.Time) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE refresh_tokens SET expires_at=$2 WHERE token=$1 AND expires_at>$2`, token, until)
 	return err
 }
 

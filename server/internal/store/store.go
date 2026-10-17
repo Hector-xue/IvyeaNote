@@ -104,7 +104,8 @@ type Store interface {
 	// ---------- refresh tokens ----------
 	CreateRefreshToken(ctx context.Context, token string, userID int64, expiresAt time.Time) error
 	GetRefreshTokenUser(ctx context.Context, token string) (int64, error) // 过期视为不存在
-	DeleteRefreshToken(ctx context.Context, token string) error
+	// RetireRefreshToken 轮换后旧 token 不立即删除，有效期截短到 until（已经更短的不动）
+	RetireRefreshToken(ctx context.Context, token string, until time.Time) error
 
 	// ---------- devices ----------
 	CreateDevice(ctx context.Context, id string, userID int64) error

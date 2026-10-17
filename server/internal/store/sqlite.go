@@ -200,8 +200,10 @@ func (s *SQLiteStore) GetRefreshTokenUser(ctx context.Context, token string) (in
 	return uid, nil
 }
 
-func (s *SQLiteStore) DeleteRefreshToken(ctx context.Context, token string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE token=?`, token)
+func (s *SQLiteStore) RetireRefreshToken(ctx context.Context, token string, until time.Time) error {
+	u := until.UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE refresh_tokens SET expires_at=? WHERE token=? AND expires_at>?`, u, token, u)
 	return err
 }
 

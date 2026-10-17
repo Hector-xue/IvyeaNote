@@ -144,7 +144,8 @@ describe('syncVault 一致性场景', () => {
     expect(local.get('b.md')).toBe('server-b');
     expect(meta.versions['a.md']).toBe(1);
     expect(meta.versions['b.md']).toBe(1);
-    expect(meta.cursor).toBe(2);
+    // v0.11.40：游标 0 先拉后推，自己刚推的 seq 2 留给下一轮（账本已记 v1，会被跳过）
+    expect(meta.cursor).toBe(1);
   });
 
   it('C3 删改冲突：本地改过、服务端被别人删 → 修改胜出并回推', async () => {

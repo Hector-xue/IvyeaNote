@@ -22,6 +22,9 @@ import (
 
 const maxBlobSize = 50 << 20 // 50MB
 
+// refreshGrace 轮换后旧 refresh token 还能用多久（见 handleRefresh）
+const refreshGrace = 7 * 24 * time.Hour
+
 type Server struct {
 	st               store.Store
 	jwt              *auth.Manager
@@ -299,8 +302,16 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
-	// 轮换：旧的立即作废
-	if err := s.st.DeleteRefreshToken(r.Context(), req.RefreshToken); err != nil {
+	/*
+	 * 轮换：旧的**不立即作废**，只把有效期截短到 refreshGrace（v0.11.40）。
+	 *
+	 * 原来是当场 DELETE。客户端把新 token 写进 localStorage，安卓 WebView 是异步刷盘的，
+	 * 应用在这几秒里被杀（切后台被回收 / 划掉），重开读到的还是旧的那个——已经删了，
+	 * 只能重新登录。2026-10-17 新手机 09:22:43 轮换、09:24:54 拿旧 token 来刷，
+	 * 连吃五个 refresh_invalid。服务端本来就没有"旧 token 被重用 = 被盗"的检测，
+	 * 立即删除换不来安全，只换来掉登录；宽限期仍然比 30 天的正常寿命短得多。
+	 */
+	if err := s.st.RetireRefreshToken(r.Context(), req.RefreshToken, time.Now().Add(refreshGrace)); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db_error", err.Error())
 		return
 	}
