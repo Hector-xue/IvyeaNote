@@ -259,7 +259,12 @@ export async function syncVault(
    * 位置变了就**先拉后推**：账本清零之后先把云端回放到新位置，本地才知道哪些是
    * 云端已有的；反过来先推会把每个文件都当新文件传一遍 blob，还全部 conflict。
    */
-  if (vaultPath && meta.id >= 0 && movedSince(meta, vaultPath)) {
+  /*
+   * v0.11.40：**游标在 0（新设备 / 上一轮回放没走完）也先拉后推**，理由同上：
+   * 账本是空的，先推等于把本地每个文件都当新文件传一遍。2026-10-16 新手机首次
+   * 同步中断后，下一轮就是这样把重放出来的历史 `.txt` 全当新附件往云端推。
+   */
+  if (vaultPath && meta.id >= 0 && (movedSince(meta, vaultPath) || meta.cursor === 0)) {
     // 真正的重置发生在 pullOnly 里（它据此进入"只对账最终状态"的回放模式）
     const b = await pullOnly(client, meta, io, deviceId, vaultPath);
     if (b.unlinked || b.authExpired || b.errors.some((e) => e.startsWith('拉取失败：'))) return b;
@@ -325,7 +330,17 @@ export async function pushOnly(
   const pushAssets = new Map<string, string>(); // path -> 将要上传的 blob sha256
 
   for (const path of localFiles) {
-    const content = await io.read(vaultPath, path);
+    /*
+     * v0.11.40：读不出来的一篇只记错误、跳过。原来这里没接住，一篇读失败整轮同步
+     * 就抛出去——推送没提交、拉取不跑、这一轮的账本也不落盘，下一轮原样再来一遍。
+     */
+    let content: string;
+    try {
+      content = await io.read(vaultPath, path);
+    } catch (e) {
+      report.errors.push(`${path} 读取失败：${msg(e)}`);
+      continue;
+    }
     const known = meta.versions[path] !== undefined;
     const base = meta.bases[path] ?? '';
     if (known && content === base) continue;
@@ -490,7 +505,19 @@ export async function pullOnly(
    * 人看到的是一堆莫名其妙的 `.conflict-` 文件。对账只需要"云端现在是什么"。
    * 这种模式下游标也等应用完再落：中途崩了下次从头再来，不会留一半。
    */
-  const replay = report.relocated ? new Map<string, ServerChange>() : null;
+  /*
+   * v0.11.40：**从游标 0 拉（新设备 / 上一轮回放没走完）也只对账最终状态。**
+   *
+   * 原来只有换位置才回放，新设备照旧逐条重放整段历史。2026-10-16 新手机首次同步：
+   * 云端历史里有 9 月 SAF 事故留下的 183 个 `xxx.md.txt`，先建（3984~6628）后删
+   * （4106~6696）。第 1 页放完时其中 138 个处在"建了还没删"，第 2 页刚开头同步就
+   * 断了——这批早被删掉的副本于是全落在了新手机上。最终状态里它们是 delete，
+   * 根本不该落盘。
+   *
+   * `history` 顺手记下每条路径在云端出现过的全部内容哈希（见 cloudHadContent）。
+   */
+  const replay = report.relocated || meta.cursor === 0 ? new Map<string, ServerChange>() : null;
+  const history: PathHashes | undefined = replay ? new Map() : undefined;
   /*
    * v0.11.38：一条变更没应用成功，**游标不许越过它**。
    *
@@ -507,7 +534,7 @@ export async function pullOnly(
   let halted = false;
   const apply = async (ch: ServerChange): Promise<boolean> => {
     try {
-      await applyRemote(client, meta, io, vaultPath, ch, report);
+      await applyRemote(client, meta, io, vaultPath, ch, report, history);
       return true;
     } catch (e) {
       markAuthExpired(e, report);
@@ -538,6 +565,7 @@ export async function pullOnly(
       break;
     }
     for (const ch of page.changes) {
+      if (history) recordHash(history, ch);
       /*
        * v0.11.33：自己这台设备推上去的变更，**只有账本已经记下了才能跳过**。
        *
@@ -624,6 +652,7 @@ export async function reconcile(
   report: SyncReport
 ): Promise<void> {
   const latest = new Map<string, ServerChange>();
+  const history: PathHashes = new Map();
   let cursor = 0;
   for (let round = 0; round < 1000; round++) {
     let page;
@@ -635,7 +664,10 @@ export async function reconcile(
       report.errors.push(`对账失败：${msg(e)}`);
       return; // 没对完不记 reconciledAt，下一轮再来
     }
-    for (const ch of page.changes) latest.set(ch.path, ch);
+    for (const ch of page.changes) {
+      latest.set(ch.path, ch);
+      recordHash(history, ch);
+    }
     if (page.next_cursor === cursor || page.changes.length === 0) break;
     cursor = page.next_cursor;
   }
@@ -643,7 +675,7 @@ export async function reconcile(
   for (const ch of latest.values()) {
     if ((meta.versions[ch.path] ?? -1) >= ch.version) continue;
     try {
-      await applyRemote(client, meta, io, vaultPath, ch, report);
+      await applyRemote(client, meta, io, vaultPath, ch, report, history);
     } catch (e) {
       markAuthExpired(e, report);
       markOffline(e, report);
@@ -736,7 +768,8 @@ async function applyRemote(
   io: FileIO,
   vaultPath: string,
   ch: ServerChange,
-  report: SyncReport
+  report: SyncReport,
+  history?: PathHashes
 ): Promise<void> {
   const knownVer = meta.versions[ch.path];
   if (knownVer !== undefined && ch.version <= knownVer) return; // 过期变更，跳过
@@ -752,7 +785,7 @@ async function applyRemote(
   }
 
   if (isAsset(ch.path)) {
-    await applyRemoteAsset(client, meta, io, vaultPath, ch, report);
+    await applyRemoteAsset(client, meta, io, vaultPath, ch, report, history);
     return;
   }
 
@@ -765,6 +798,12 @@ async function applyRemote(
      * 版本为 base 把它作为修改推上去（修改胜出，和删改冲突同一条规矩）。
      */
     if (exists && knownVer === undefined) {
+      const local = await io.read(vaultPath, ch.path);
+      const hash = await sha256HexOf(new TextEncoder().encode(local));
+      // v0.11.40：内容和云端这条路径某一版一模一样 → 是云端历史的残留副本，跟着删
+      if (await cloudHadContent(client, meta, ch.path, hash, history)) {
+        await moveToTrash(io, vaultPath, ch.path, local);
+      }
       meta.versions[ch.path] = ch.version;
       (meta.tombstones ??= {})[ch.path] = ch.version;
       return;
@@ -879,7 +918,8 @@ async function applyRemoteAsset(
   io: FileIO,
   vaultPath: string,
   ch: ServerChange,
-  report: SyncReport
+  report: SyncReport,
+  history?: PathHashes
 ): Promise<void> {
   const knownHash = meta.assets?.[ch.path];
   const setHash = (h: string) => {
@@ -890,6 +930,16 @@ async function applyRemoteAsset(
     if (await io.exists(vaultPath, ch.path)) {
       // 同文本那条路（v0.11.25）：这本账没见过它、本地却有 → 是这个位置自己的文件，留着
       if (knownHash === undefined) {
+        const local = await io.readBinary(vaultPath, ch.path);
+        // v0.11.40：同文本那条路——和云端某一版字节相同 = 历史残留，跟着删（先进回收站）
+        if (await cloudHadContent(client, meta, ch.path, await sha256HexOf(local), history)) {
+          try {
+            await io.writeBinary(vaultPath, trashPathFor(ch.path), local);
+          } catch {
+            // 同下：回收站写不进去不挡收敛
+          }
+          await io.remove(vaultPath, ch.path);
+        }
         meta.versions[ch.path] = ch.version;
         (meta.tombstones ??= {})[ch.path] = ch.version;
         return;
@@ -1012,6 +1062,46 @@ async function pushUpsert(
   } else if (r?.status === 'conflict') {
     // 极端并发（拉取到推送之间又被别人写）：留待下一轮同步收敛
     report.errors.push(`${path} 合并回推遇到新冲突，将在下轮同步重试`);
+  }
+}
+
+/** 路径 → 它在云端出现过的全部内容哈希（从游标 0 收全的才算数） */
+type PathHashes = Map<string, Set<string>>;
+
+function recordHash(history: PathHashes, ch: ServerChange): void {
+  if (ch.op !== 'upsert' || !ch.blob_hash) return;
+  let set = history.get(ch.path);
+  if (!set) history.set(ch.path, (set = new Set()));
+  set.add(ch.blob_hash);
+}
+
+/**
+ * v0.11.40：本地这份内容，云端这条路径上**曾经有过**吗？
+ *
+ * 用在"云端删了、本地有、账本却不认识"那条支路上。v0.11.25 的规矩是"那是这个位置
+ * 自己的文件，留着"，下一轮再把它推上去（修改胜出）。可还有另一种来源：上一轮从云端
+ * 拉下来、账本没来得及落盘（同步中途被杀 / 回放没走完）。2026-10-16 新手机就是这样，
+ * 重放出来的 138 个历史 `.txt` 被当成"自己的文件"，差一步就全推回云端复活。
+ *
+ * 分得开：自己的文件内容不会恰好等于云端这条路径的某一版；残留副本一定等于。
+ * 等于 → 跟着删（进回收站，误判也找得回来）；不等于 → 照旧留着。
+ *
+ * `history` 是从游标 0 收全的就直接查；没有（平时增量拉取 / 推送冲突）才问服务端。
+ */
+async function cloudHadContent(
+  client: SyncClient,
+  meta: VaultMeta,
+  path: string,
+  hash: string,
+  history?: PathHashes
+): Promise<boolean> {
+  if (history) return history.get(path)?.has(hash) ?? false;
+  try {
+    const { versions } = await client.history(meta.id, path, 200);
+    return versions.some((v) => v.blob_hash === hash);
+  } catch (e) {
+    if (isLinkFailure(e)) throw e;
+    return false; // 查不到就按老规矩留着：宁可多一个文件，不能删错
   }
 }
 

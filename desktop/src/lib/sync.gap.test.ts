@@ -107,8 +107,10 @@ describe('拉取中途断网（2026-09-30 新手机锁屏 38 秒）', () => {
     const r1 = await syncVault(client, m, memIO(files), 'phone', '/vault');
     expect(r1.offline).toBe(true);
     expect(files.get('杂记.md')).toBe('杂记');
-    // 关键断言：游标停在最后一条成功的位置，没有越过「个人空间.base」
-    expect(m.cursor).toBe(10);
+    // 关键断言：游标没有越过「个人空间.base」。v0.11.40 起首次同步是整段回放，
+    // 没放完游标就留在 0（已落盘的杂记记在账本里，下一轮不重复下载）
+    expect(m.cursor).toBe(0);
+    expect(m.versions['杂记.md']).toBe(1);
 
     locked = false;
     await syncVault(client, m, memIO(files), 'phone', '/vault');
